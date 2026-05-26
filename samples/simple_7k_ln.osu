@@ -1,0 +1,23 @@
+osu file format v14
+
+[General]
+Mode:3
+
+[Metadata]
+Title:Simple 7K LN
+Artist:Test
+Creator:keyconv
+Version:7K
+
+[Difficulty]
+CircleSize:7
+
+[TimingPoints]
+0,500,4,2,1,70,1,0
+
+[HitObjects]
+36,192,1000,128,0,1800:0:0:0:0:
+182,192,1200,1,0,0:0:0:0:
+256,192,1500,128,0,2200:0:0:0:0:
+329,192,1800,1,0,0:0:0:0:
+

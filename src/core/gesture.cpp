@@ -1,0 +1,448 @@
+#include "core/gesture.hpp"
+
+#include "core/mapping.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <numeric>
+#include <set>
+
+namespace keyconv {
+
+namespace {
+
+struct PhraseNote {
+    std::size_t noteIndex = 0;
+    std::string id;
+    int sourceLane = 0;
+};
+
+int signOf(int value) {
+    if (value > 0) {
+        return 1;
+    }
+    if (value < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+double averageLane(const std::vector<PhraseNote>& notes) {
+    if (notes.empty()) {
+        return 0.0;
+    }
+    int total = 0;
+    for (const auto& note : notes) {
+        total += note.sourceLane;
+    }
+    return static_cast<double>(total) / static_cast<double>(notes.size());
+}
+
+std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes, int sourceKeyCount, int targetKeyCount) {
+    if (targetKeyCount <= 1) {
+        return {0, 0};
+    }
+    if (notes.empty()) {
+        return {0, targetKeyCount - 1};
+    }
+
+    const double center = averageLane(notes);
+    const double sourceMid = static_cast<double>(std::max(0, sourceKeyCount - 1)) / 2.0;
+    const double centerSlack = 0.75;
+    if (std::abs(center - sourceMid) <= centerSlack) {
+        return {0, targetKeyCount - 1};
+    }
+
+    const int mid = std::max(1, targetKeyCount / 2);
+    if (center < sourceMid) {
+        return {0, std::max(0, mid - 1)};
+    }
+    return {std::min(mid, targetKeyCount - 1), targetKeyCount - 1};
+}
+
+int laneInZoneBySourcePosition(int sourceLane,
+                               int sourceMin,
+                               int sourceMax,
+                               int zoneStart,
+                               int zoneEnd,
+                               int targetKeyCount) {
+    if (targetKeyCount <= 1) {
+        return 0;
+    }
+    if (zoneStart > zoneEnd) {
+        return mapLaneDirect(sourceLane, sourceMax + 1, targetKeyCount);
+    }
+    if (sourceMax <= sourceMin || zoneEnd <= zoneStart) {
+        return clampInt((zoneStart + zoneEnd) / 2, 0, targetKeyCount - 1);
+    }
+
+    const double t = static_cast<double>(sourceLane - sourceMin) / static_cast<double>(sourceMax - sourceMin);
+    const int lane = static_cast<int>(std::lround(static_cast<double>(zoneStart) +
+                                                  t * static_cast<double>(zoneEnd - zoneStart)));
+    return clampInt(lane, 0, targetKeyCount - 1);
+}
+
+std::vector<PhraseNote> phraseNotesForToken(const Chart& chart,
+                                            const std::vector<TimeSlice>& slices,
+                                            const PatternToken& token) {
+    std::vector<PhraseNote> notes;
+    if (token.startSlice < 0 || token.endSlice < token.startSlice ||
+        token.startSlice >= static_cast<int>(slices.size())) {
+        return notes;
+    }
+
+    const int end = std::min(token.endSlice, static_cast<int>(slices.size()) - 1);
+    for (int sliceIndex = token.startSlice; sliceIndex <= end; ++sliceIndex) {
+        for (const auto noteIndex : slices[static_cast<std::size_t>(sliceIndex)].noteIndices) {
+            if (noteIndex >= chart.notes.size()) {
+                continue;
+            }
+            const auto& note = chart.notes[noteIndex];
+            if (note.id.empty()) {
+                continue;
+            }
+            PhraseNote phraseNote;
+            phraseNote.noteIndex = noteIndex;
+            phraseNote.id = note.id;
+            phraseNote.sourceLane = note.sourceLane.value_or(note.lane);
+            notes.push_back(std::move(phraseNote));
+        }
+    }
+    return notes;
+}
+
+bool isGestureToken(PatternKind kind) {
+    return kind == PatternKind::StairUp || kind == PatternKind::StairDown || kind == PatternKind::Trill ||
+           kind == PatternKind::Jack;
+}
+
+void addStairHints(GestureRail& rail,
+                   const std::vector<PhraseNote>& notes,
+                   const PatternToken& token,
+                   int motifId,
+                   int sourceKeyCount,
+                   int targetKeyCount) {
+    if (notes.empty()) {
+        return;
+    }
+
+    const auto [sourceMinIt, sourceMaxIt] = std::minmax_element(notes.begin(), notes.end(), [](const auto& a, const auto& b) {
+        return a.sourceLane < b.sourceLane;
+    });
+    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
+    for (const auto& note : notes) {
+        GestureHint hint;
+        hint.motifId = motifId;
+        hint.kind = token.kind;
+        hint.preferredLane = laneInZoneBySourcePosition(note.sourceLane,
+                                                        sourceMinIt->sourceLane,
+                                                        sourceMaxIt->sourceLane,
+                                                        zoneStart,
+                                                        zoneEnd,
+                                                        targetKeyCount);
+        hint.zoneStart = zoneStart;
+        hint.zoneEnd = zoneEnd;
+        hint.direction = token.direction;
+        rail.hintsByNoteId[note.id] = hint;
+    }
+}
+
+void addTrillHints(GestureRail& rail,
+                   const std::vector<PhraseNote>& notes,
+                   int motifId,
+                   int sourceKeyCount,
+                   int targetKeyCount) {
+    if (notes.size() < 2 || targetKeyCount <= 1) {
+        return;
+    }
+
+    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
+    std::vector<int> sourceLanes;
+    for (const auto& note : notes) {
+        if (std::find(sourceLanes.begin(), sourceLanes.end(), note.sourceLane) == sourceLanes.end()) {
+            sourceLanes.push_back(note.sourceLane);
+        }
+    }
+    std::sort(sourceLanes.begin(), sourceLanes.end());
+    if (sourceLanes.size() < 2) {
+        return;
+    }
+
+    int first = clampInt(mapLaneDirect(sourceLanes.front(), sourceKeyCount, targetKeyCount), 0, targetKeyCount - 1);
+    int second = clampInt(mapLaneDirect(sourceLanes.back(), sourceKeyCount, targetKeyCount), 0, targetKeyCount - 1);
+    if (zoneStart <= zoneEnd) {
+        first = clampInt(first, zoneStart, zoneEnd);
+        second = clampInt(second, zoneStart, zoneEnd);
+    }
+    if (std::abs(second - first) > 2 || first == second) {
+        const int center = clampInt(static_cast<int>(std::lround((static_cast<double>(first) + second) / 2.0)),
+                                    0,
+                                    targetKeyCount - 1);
+        first = clampInt(center - 1, zoneStart, zoneEnd);
+        second = clampInt(first + 1, zoneStart, zoneEnd);
+        if (first == second) {
+            first = clampInt(second - 1, 0, targetKeyCount - 1);
+        }
+    }
+    if (first > second) {
+        std::swap(first, second);
+    }
+
+    for (const auto& note : notes) {
+        GestureHint hint;
+        hint.motifId = motifId;
+        hint.kind = PatternKind::Trill;
+        hint.preferredLane = note.sourceLane == sourceLanes.front() ? first : second;
+        hint.zoneStart = std::min(first, second);
+        hint.zoneEnd = std::max(first, second);
+        rail.hintsByNoteId[note.id] = hint;
+    }
+}
+
+void addJackHints(GestureRail& rail,
+                  const std::vector<PhraseNote>& notes,
+                  int motifId,
+                  int sourceKeyCount,
+                  int targetKeyCount) {
+    if (notes.empty()) {
+        return;
+    }
+
+    const int sourceLane = notes.front().sourceLane;
+    const int preferred = mapLaneDirect(sourceLane, sourceKeyCount, targetKeyCount);
+    for (const auto& note : notes) {
+        GestureHint hint;
+        hint.motifId = motifId;
+        hint.kind = PatternKind::Jack;
+        hint.preferredLane = clampInt(preferred, 0, targetKeyCount - 1);
+        hint.zoneStart = clampInt(preferred - 1, 0, targetKeyCount - 1);
+        hint.zoneEnd = clampInt(preferred + 1, 0, targetKeyCount - 1);
+        rail.hintsByNoteId[note.id] = hint;
+    }
+}
+
+std::map<std::string, Note> notesById(const std::vector<Note>& notes) {
+    std::map<std::string, Note> result;
+    for (const auto& note : notes) {
+        if (!note.id.empty()) {
+            result[note.id] = note;
+        }
+    }
+    return result;
+}
+
+std::vector<Note> convertedNotesForToken(const Chart& original,
+                                         const Chart& converted,
+                                         const std::vector<TimeSlice>& slices,
+                                         const PatternToken& token) {
+    const auto convertedById = notesById(converted.notes);
+    std::vector<Note> result;
+    for (const auto& phraseNote : phraseNotesForToken(original, slices, token)) {
+        const auto found = convertedById.find(phraseNote.id);
+        if (found != convertedById.end()) {
+            result.push_back(found->second);
+        }
+    }
+    std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        if (a.time != b.time) {
+            return a.time < b.time;
+        }
+        return a.id < b.id;
+    });
+    return result;
+}
+
+bool targetZoneMatchesSource(const std::vector<PhraseNote>& sourceNotes,
+                             const std::vector<Note>& targetNotes,
+                             int sourceKeyCount,
+                             int targetKeyCount) {
+    if (sourceNotes.empty() || targetNotes.empty() || targetKeyCount <= 1) {
+        return true;
+    }
+    const auto [zoneStart, zoneEnd] = targetZoneFor(sourceNotes, sourceKeyCount, targetKeyCount);
+    if (zoneStart == 0 && zoneEnd == targetKeyCount - 1) {
+        return true;
+    }
+    const double averageTarget =
+        std::accumulate(targetNotes.begin(), targetNotes.end(), 0.0, [](double total, const Note& note) {
+            return total + static_cast<double>(note.lane);
+        }) /
+        static_cast<double>(targetNotes.size());
+    return averageTarget >= static_cast<double>(zoneStart) && averageTarget <= static_cast<double>(zoneEnd);
+}
+
+bool stairPreserved(const std::vector<Note>& targetNotes, int sourceDirection, int* directionFlips) {
+    if (targetNotes.size() < 2) {
+        return true;
+    }
+    int flips = 0;
+    int flatSteps = 0;
+    for (std::size_t i = 1; i < targetNotes.size(); ++i) {
+        const int targetSign = signOf(targetNotes[i].lane - targetNotes[i - 1].lane);
+        if (targetSign == 0) {
+            ++flatSteps;
+        } else if (sourceDirection != 0 && targetSign != sourceDirection) {
+            ++flips;
+        }
+    }
+    if (directionFlips != nullptr) {
+        *directionFlips += flips;
+    }
+    return flips == 0 && flatSteps <= 1;
+}
+
+bool trillPreserved(const std::vector<Note>& targetNotes) {
+    if (targetNotes.size() < 4) {
+        return true;
+    }
+    std::set<int> unique;
+    for (const auto& note : targetNotes) {
+        unique.insert(note.lane);
+    }
+    if (unique.size() > 2) {
+        return false;
+    }
+    if (unique.size() == 2 && (*unique.rbegin() - *unique.begin()) > 3) {
+        return false;
+    }
+    for (std::size_t i = 2; i < targetNotes.size(); ++i) {
+        if (targetNotes[i].lane != targetNotes[i - 2].lane) {
+            return false;
+        }
+    }
+    return targetNotes[0].lane != targetNotes[1].lane;
+}
+
+bool jackPreserved(const std::vector<Note>& targetNotes) {
+    if (targetNotes.size() < 2) {
+        return true;
+    }
+    std::set<int> unique;
+    for (const auto& note : targetNotes) {
+        unique.insert(note.lane);
+    }
+    return unique.size() <= 2 && (*unique.rbegin() - *unique.begin()) <= 1;
+}
+
+bool laneScattered(PatternKind kind, const std::vector<Note>& targetNotes) {
+    if (targetNotes.empty()) {
+        return false;
+    }
+    std::set<int> unique;
+    for (const auto& note : targetNotes) {
+        unique.insert(note.lane);
+    }
+    const int span = *unique.rbegin() - *unique.begin();
+    if (kind == PatternKind::Trill) {
+        return unique.size() > 2 || span > 3;
+    }
+    if (kind == PatternKind::Jack) {
+        return unique.size() > 2 || span > 1;
+    }
+    return span > std::max(3, static_cast<int>(targetNotes.size()));
+}
+
+}  // namespace
+
+GestureRail buildGestureRail(const Chart& chart,
+                             int sourceKeyCount,
+                             int targetKeyCount,
+                             int sameTimeEpsilonMs,
+                             bool enabled) {
+    GestureRail rail;
+    rail.enabled = enabled;
+    if (!enabled || chart.notes.empty() || sourceKeyCount <= 0 || targetKeyCount <= 0) {
+        return rail;
+    }
+
+    const auto slices = buildTimeSlices(chart, sourceKeyCount, sameTimeEpsilonMs);
+    const auto tokens = detectPatternTokens(slices);
+    int motifId = 0;
+    for (const auto& token : tokens) {
+        if (!isGestureToken(token.kind)) {
+            continue;
+        }
+        const auto notes = phraseNotesForToken(chart, slices, token);
+        if (notes.size() < 2) {
+            continue;
+        }
+        if (token.kind == PatternKind::StairUp || token.kind == PatternKind::StairDown) {
+            addStairHints(rail, notes, token, motifId, sourceKeyCount, targetKeyCount);
+        } else if (token.kind == PatternKind::Trill) {
+            addTrillHints(rail, notes, motifId, sourceKeyCount, targetKeyCount);
+        } else if (token.kind == PatternKind::Jack) {
+            addJackHints(rail, notes, motifId, sourceKeyCount, targetKeyCount);
+        }
+        ++motifId;
+    }
+
+    return rail;
+}
+
+const GestureHint* findGestureHint(const GestureRail* rail, const std::string& noteId) {
+    if (rail == nullptr || !rail->enabled || noteId.empty()) {
+        return nullptr;
+    }
+    const auto found = rail->hintsByNoteId.find(noteId);
+    return found == rail->hintsByNoteId.end() ? nullptr : &found->second;
+}
+
+GestureReport evaluateGesturePreservation(const Chart& original,
+                                          const Chart& converted,
+                                          int sourceKeyCount,
+                                          int targetKeyCount,
+                                          int sameTimeEpsilonMs,
+                                          bool gestureRailEnabled) {
+    GestureReport report;
+    report.gestureRailEnabled = gestureRailEnabled;
+
+    const auto slices = buildTimeSlices(original, sourceKeyCount, sameTimeEpsilonMs);
+    const auto tokens = detectPatternTokens(slices);
+    int preserved = 0;
+    int detected = 0;
+
+    for (const auto& token : tokens) {
+        if (!isGestureToken(token.kind)) {
+            continue;
+        }
+        const auto sourceNotes = phraseNotesForToken(original, slices, token);
+        const auto targetNotes = convertedNotesForToken(original, converted, slices, token);
+        if (sourceNotes.size() < 2 || targetNotes.size() < 2) {
+            continue;
+        }
+
+        if (!targetZoneMatchesSource(sourceNotes, targetNotes, sourceKeyCount, targetKeyCount)) {
+            ++report.handZoneBreaks;
+        }
+        if (laneScattered(token.kind, targetNotes)) {
+            ++report.motifLaneScatterCount;
+        }
+
+        bool ok = true;
+        if (token.kind == PatternKind::StairUp || token.kind == PatternKind::StairDown) {
+            ++report.detectedStairs;
+            ok = stairPreserved(targetNotes, token.direction, &report.motifDirectionFlips);
+            ok ? ++report.preservedStairs : ++report.brokenStairs;
+        } else if (token.kind == PatternKind::Trill) {
+            ++report.detectedTrills;
+            ok = trillPreserved(targetNotes);
+            ok ? ++report.preservedTrills : ++report.brokenTrills;
+        } else if (token.kind == PatternKind::Jack) {
+            ++report.detectedJacks;
+            ok = jackPreserved(targetNotes);
+            ok ? ++report.preservedJacks : ++report.brokenJacks;
+        }
+
+        ++detected;
+        if (ok) {
+            ++preserved;
+        }
+    }
+
+    report.gesturePreservationScore =
+        detected == 0 ? 1.0 : static_cast<double>(preserved) / static_cast<double>(detected);
+    return report;
+}
+
+}  // namespace keyconv

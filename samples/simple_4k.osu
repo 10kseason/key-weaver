@@ -1,0 +1,24 @@
+osu file format v14
+
+[General]
+Mode:3
+
+[Metadata]
+Title:Simple 4K
+Artist:Test
+Creator:keyconv
+Version:4K
+
+[Difficulty]
+CircleSize:4
+
+[TimingPoints]
+0,500,4,2,1,70,1,0
+
+[HitObjects]
+64,192,1000,1,0,0:0:0:0:
+192,192,1000,1,0,0:0:0:0:
+320,192,1500,1,0,0:0:0:0:
+448,192,2000,128,0,2500:0:0:0:0:
+64,192,3000,1,0,0:0:0:0:
+

@@ -162,14 +162,16 @@ BMS inputs must write BMS-family outputs (`.bms`, `.bme`, `.bml`, or `.pms`). If
 GUI scope:
 
 ```text
-- select input .osu
-- output beside the input `.osu` by default, with optional folder override
+- select input .osu or BMS-family chart
+- output beside the input chart by default, with optional folder override
 - optional source-key override and target key
 - choose expansion/compress/profile options
 - run one conversion and parse report JSON
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
 - open output/report and copy the generated CLI command
 ```
+
+BMS-family inputs selected in the GUI write BMS-family outputs with the same extension family as the input. The GUI does not convert BMS to osu!mania `.osu`.
 
 ## Known Limitations
 

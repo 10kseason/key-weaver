@@ -57,7 +57,7 @@ struct ToolOptions {
 };
 
 struct OutputPaths {
-    std::filesystem::path outputOsu;
+    std::filesystem::path outputChart;
     std::filesystem::path reportJson;
     std::filesystem::path reportCsv;
 };
@@ -253,9 +253,32 @@ std::wstring sanitizeToken(std::wstring value) {
     return value.empty() ? L"policy" : value;
 }
 
+std::wstring lowerAscii(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        if (ch >= L'A' && ch <= L'Z') {
+            return static_cast<wchar_t>(ch - L'A' + L'a');
+        }
+        return ch;
+    });
+    return value;
+}
+
+bool isBmsFamilyPath(const std::filesystem::path& path) {
+    const auto extension = lowerAscii(path.extension().wstring());
+    return extension == L".bms" || extension == L".bme" || extension == L".bml" || extension == L".pms";
+}
+
+std::wstring chartOutputExtension(const ToolOptions& options) {
+    if (isBmsFamilyPath(options.inputFile) && options.inputFile.has_extension()) {
+        return options.inputFile.extension().wstring();
+    }
+    return L".osu";
+}
+
 std::filesystem::path makeOutputBase(const ToolOptions& options, const std::wstring& suffix) {
     const std::wstring stem = options.inputFile.stem().wstring();
     const auto outputDir = options.outputDir.empty() ? options.inputFile.parent_path() : options.outputDir;
+    const auto chartExtension = chartOutputExtension(options);
     for (int index = 1;; ++index) {
         std::wstring name = stem + L" KeyWeaver" + options.targetKeys + L"K";
         if (!suffix.empty()) {
@@ -267,13 +290,13 @@ std::filesystem::path makeOutputBase(const ToolOptions& options, const std::wstr
             name += std::to_wstring(index);
         }
         const auto base = outputDir / name;
-        std::filesystem::path osu = base;
-        osu += L".osu";
+        std::filesystem::path chart = base;
+        chart += chartExtension;
         std::filesystem::path json = base;
         json += L".json";
         std::filesystem::path csv = base;
         csv += L".csv";
-        if (!std::filesystem::exists(osu) && !std::filesystem::exists(json) && !std::filesystem::exists(csv)) {
+        if (!std::filesystem::exists(chart) && !std::filesystem::exists(json) && !std::filesystem::exists(csv)) {
             return base;
         }
     }
@@ -286,8 +309,8 @@ void appendArg(std::wstring& command, const std::wstring& arg) {
 
 std::wstring buildSingleCommand(const ToolOptions& options, OutputPaths& paths) {
     const auto base = makeOutputBase(options, L"");
-    paths.outputOsu = base;
-    paths.outputOsu += L".osu";
+    paths.outputChart = base;
+    paths.outputChart += chartOutputExtension(options);
     paths.reportJson = base;
     paths.reportJson += L".json";
 
@@ -312,7 +335,7 @@ std::wstring buildSingleCommand(const ToolOptions& options, OutputPaths& paths) 
         appendArg(command, options.streamEchoProfile);
     }
     appendArg(command, L"--out");
-    appendArg(command, quoteArg(paths.outputOsu));
+    appendArg(command, quoteArg(paths.outputChart));
     appendArg(command, L"--report");
     appendArg(command, quoteArg(paths.reportJson));
     return command;
@@ -669,7 +692,7 @@ bool validateToolOptions(const ToolOptions& options, HWND owner) {
         return false;
     }
     if (options.inputFile.empty() || !std::filesystem::exists(options.inputFile)) {
-        MessageBoxW(owner, L"Input .osu path is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
+        MessageBoxW(owner, L"Input chart path is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     if (options.targetKeys.empty()) {
@@ -774,10 +797,10 @@ void executeSingleConvert(AppState& state) {
         MessageBoxW(state.hwnd, L"Convert failed. See log output.", L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
-    state.lastOutputPath = paths.outputOsu;
+    state.lastOutputPath = paths.outputChart;
     state.lastReportPath = paths.reportJson;
     showReportSummary(state, parseReportSummary(paths.reportJson));
-    appendLog(state, L"Output: " + paths.outputOsu.wstring() + L"\r\n");
+    appendLog(state, L"Output: " + paths.outputChart.wstring() + L"\r\n");
 }
 
 void executeMatrix(AppState& state) {
@@ -917,8 +940,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 case kButtonBrowseInput: {
-                    const auto path = browseOpenFile(hwnd, L"Select osu!mania chart",
-                                                     L"osu! chart\0*.osu\0All files\0*.*\0",
+                    const auto path = browseOpenFile(hwnd, L"Select chart",
+                                                     L"Supported charts\0*.osu;*.bms;*.bme;*.bml;*.pms\0osu! chart\0*.osu\0BMS family\0*.bms;*.bme;*.bml;*.pms\0All files\0*.*\0",
                                                      std::filesystem::path(getWindowText(state->inputEdit)));
                     if (path.has_value()) {
                         setWindowText(state->inputEdit, path->wstring());

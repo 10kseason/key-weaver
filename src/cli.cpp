@@ -1,4 +1,6 @@
 #include <keyconv/converter.hpp>
+#include <keyconv/format/bms_exporter.hpp>
+#include <keyconv/format/bms_parser.hpp>
 #include <keyconv/format/osu_exporter.hpp>
 #include <keyconv/format/osu_parser.hpp>
 #include <keyconv/quality_report.hpp>
@@ -30,7 +32,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.5.2";
+constexpr const char* kToolVersion = "v0.5.3";
 
 #if defined(_WIN32)
 std::string utf8FromWide(std::wstring_view value) {
@@ -198,11 +200,11 @@ struct CliOptions {
 
 void printHelp(std::ostream& out) {
     out << kToolName << " " << kToolVersion << "\n";
-    out << "Usage: KeyWeaver <input.osu> --target <number> [options]\n\n";
+    out << "Usage: KeyWeaver <input.osu|input.bms> --target <number> [options]\n\n";
     out << "Options:\n";
-    out << "  --source <number>       Source key count. Overrides CircleSize.\n";
+    out << "  --source <number>       Source key count. Overrides CircleSize/BMS key-count inference.\n";
     out << "  --target <number>       Target key count. Required.\n";
-    out << "  --out <path>            Output .osu path. Defaults beside input as '<stem> KeyWeaverNK.osu'.\n";
+    out << "  --out <path>            Output path. Defaults beside input as '<stem> KeyWeaverNK.<ext>'.\n";
     out << "  --style <style>         direct | expand | compress | playable | faithful | training | dp.\n";
     out << "  --collision <policy>    keep | shift-nearest | merge | drop. Default: shift-nearest.\n";
     out << "  --compress-policy <p>   auto | preserve-strict | no-overlap-drop | no-overlap-roll | no-overlap-hybrid | training-simplify.\n";
@@ -247,7 +249,7 @@ void printHelp(std::ostream& out) {
     out << "  --dp                    Reserve DP mode; this version reports fallback to SP PPG.\n";
     out << "  --dry-run               Convert in memory and report only; do not write output.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
-    out << "  --compare-policies <list> Compare comma-separated policies without writing .osu output.\n";
+    out << "  --compare-policies <list> Compare comma-separated policies without writing chart output.\n";
     out << "  --emit-feel-report      Include feel metrics in policy comparison console output.\n";
     out << "  --emit-diff-report      Include before/after diff metrics in policy comparison console output.\n";
     out << "  --report-csv <path>     Write policy comparison CSV.\n";
@@ -291,6 +293,18 @@ std::string requireValue(int& index, const std::vector<std::string>& args, const
 
 std::string keyWeaverDifficultyMarker(int targetKeys) {
     return std::string(kToolName) + std::to_string(targetKeys) + "K";
+}
+
+std::string lowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+bool isBmsPath(const std::filesystem::path& path) {
+    const auto extension = lowerAscii(path.extension().string());
+    return extension == ".bms" || extension == ".bme" || extension == ".bml" || extension == ".pms";
 }
 
 std::filesystem::path defaultOutputPath(const std::filesystem::path& input, int targetKeys) {
@@ -547,6 +561,9 @@ void validateOptions(const CliOptions& options) {
     }
     if (options.comparePolicies.has_value() && options.comparePolicies->empty()) {
         throw std::runtime_error("--compare-policies must not be empty");
+    }
+    if (isBmsPath(options.input) && options.out.has_value() && !isBmsPath(*options.out)) {
+        throw std::runtime_error("BMS input can only write BMS-family output (.bms, .bme, .bml, .pms)");
     }
     if (options.beamWidth < 1) {
         throw std::runtime_error("--beam-width must be at least 1");
@@ -1034,8 +1051,10 @@ int main(int argc, char** argv) {
         }
 
         const auto inputText = readFile(cli.input);
+        const bool bmsInput = isBmsPath(cli.input);
         const keyconv::ParseOptions parseOptions{cli.source};
-        auto chart = keyconv::parseOsu(inputText, parseOptions);
+        auto chart = bmsInput ? keyconv::parseBms(inputText, parseOptions)
+                              : keyconv::parseOsu(inputText, parseOptions);
 
         keyconv::ConvertOptions convertOptions;
         convertOptions.sourceKeyCount = cli.source.value_or(chart.meta.sourceKeyCount);
@@ -1091,7 +1110,7 @@ int main(int argc, char** argv) {
             const auto rows = runPolicyComparison(chart, convertOptions, *cli.comparePolicies);
             std::cout << kToolName << " " << kToolVersion << "\n";
             std::cout << "Input: " << displayPath(cli.input) << "\n";
-            std::cout << "Mode: osu!mania policy comparison\n";
+            std::cout << "Mode: " << (bmsInput ? "BMS policy comparison" : "osu!mania policy comparison") << "\n";
             std::cout << "Source keys: " << convertOptions.sourceKeyCount << "\n";
             std::cout << "Target keys: " << convertOptions.targetKeyCount << "\n\n";
             printPolicyComparison(rows, cli.emitFeelReport, cli.emitDiffReport, std::cout);
@@ -1130,7 +1149,7 @@ int main(int argc, char** argv) {
 
         std::cout << kToolName << " " << kToolVersion << "\n";
         std::cout << "Input: " << displayPath(cli.input) << "\n";
-        std::cout << "Mode: osu!mania\n";
+        std::cout << "Mode: " << (bmsInput ? "BMS" : "osu!mania") << "\n";
         std::cout << "Source keys: " << convertOptions.sourceKeyCount << "\n";
         std::cout << "Target keys: " << convertOptions.targetKeyCount << "\n";
         std::cout << "Style: " << keyconv::toString(convertOptions.style) << "\n";
@@ -1179,7 +1198,8 @@ int main(int argc, char** argv) {
         }
 
         if (!cli.dryRun) {
-            const auto outputText = keyconv::exportOsu(result.chart, convertOptions.targetKeyCount);
+            const auto outputText = bmsInput ? keyconv::exportBms(result.chart, convertOptions.targetKeyCount)
+                                             : keyconv::exportOsu(result.chart, convertOptions.targetKeyCount);
             writeFile(*outputPath, outputText);
             std::cout << "Output written: " << displayPath(*outputPath) << "\n";
         } else {

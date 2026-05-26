@@ -1,10 +1,12 @@
-# KeyWeaver v0.5.2
+# KeyWeaver v0.5.3
 
-C++ CLI for converting osu!mania `.osu` charts between key counts.
+C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
 Current scope:
 
 - osu!mania `.osu` input and output
+- BMS/BME/BML/PMS input and output MVP for playable key channels
+- BMS-family input stays BMS-family output; KeyWeaver does not convert BMS to osu!mania `.osu`
 - 4K to 10K-oriented SP conversion
 - tap and hold note support
 - direct, expand, compress, and playable lane mapping
@@ -28,8 +30,9 @@ Current scope:
 - v0.5.1 no-created-jack invariant across assignment, repair, expansion, and final sanitization
 - v0.5.1 auto expansion default: preserve on same/lower key counts, preserve-tap-plus on higher key counts
 - v0.5.2 Gesture Rail assignment for preserving detected stair, trill, and jack motifs during lane mapping
+- v0.5.3 BMS parser/exporter MVP for `#BPM`, `#xxx03` BPM changes, visible key channels, and `#LNTYPE 1` long-note channels
 
-Not included: full chart editor, waveform/audio playback, BMS, DP conversion, difficulty balancing, random remix, burst echo synthesis, or DP stream splitting.
+Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, random remix, burst echo synthesis, or DP stream splitting.
 
 ## Build
 
@@ -81,10 +84,10 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --report dist/r
 Options:
 
 ```text
-KeyWeaver <input.osu>
+KeyWeaver <input.osu|input.bms>
   --source <number>       source key count, optional
   --target <number>       target key count, required
-  --out <path>            output file path, defaults beside input as '<stem> KeyWeaverNK.osu'
+  --out <path>            output file path, defaults beside input as '<stem> KeyWeaverNK.<ext>'
   --style <style>         direct | expand | compress | playable | faithful | training | dp
   --collision <policy>    keep | shift-nearest | merge | drop, default shift-nearest
   --compress-policy <p>   auto | preserve-strict | no-overlap-drop | no-overlap-roll | no-overlap-hybrid | training-simplify
@@ -127,7 +130,7 @@ KeyWeaver <input.osu>
   --dp                    reserve DP mode, reports SP fallback in v0.1
   --dry-run               convert in memory and report only
   --report <path>         write conversion report json
-  --compare-policies <list> compare comma-separated policies without writing .osu output
+  --compare-policies <list> compare comma-separated policies without writing chart output
   --emit-feel-report      include feel metrics in comparison console output
   --emit-diff-report      include before/after diff metrics in comparison console output
   --report-csv <path>     write policy comparison csv
@@ -147,7 +150,10 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --expansion-pol
 build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --compare-policies preserve,preserve-tap-plus,echo-balanced,training-scaffold,harder-balanced --emit-feel-report --emit-diff-report --report dist/compare.json --report-csv dist/compare.csv
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 4 --report dist/report_7k_4k.json
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --dry-run
+build/KeyWeaver.exe path/to/chart.bms --target 4 --dry-run
 ```
+
+BMS inputs must write BMS-family outputs (`.bms`, `.bme`, `.bml`, or `.pms`). If `--out` is omitted, the original extension is kept.
 
 ## GUI Playtest Tool
 
@@ -167,7 +173,7 @@ GUI scope:
 
 ## Known Limitations
 
-- BMS is not supported.
+- BMS support is an MVP. It parses standard visible key channels, double-play key channels, `#BPM`, inline `#xxx03` BPM changes, and `#LNTYPE 1` long-note channels. It preserves non-playable BMS header/media lines during export, but does not yet evaluate STOP timing, random/control-flow directives, LNOBJ-style long notes, or every niche BMS extension.
 - DP split mode is not supported.
 - The playable mapper uses greedy slice scoring, not beam search or full-song optimization yet.
 - PPG-Greedy detects basic chord, jack, trill, stair, stream, burst, and LN anchor context.

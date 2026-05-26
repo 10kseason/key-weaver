@@ -10,7 +10,9 @@
 #include "core/quality.hpp"
 #include "core/repeat.hpp"
 #include "core/slice.hpp"
+#include "exporter/bms.hpp"
 #include "exporter/osu.hpp"
+#include "parser/bms.hpp"
 #include "parser/osu.hpp"
 
 #include <algorithm>
@@ -66,6 +68,24 @@ CircleSize:7
 36,192,1000,128,0,1800:0:0:0:0:
 182,192,1200,1,0,0:0:0:0:
 256,192,1500,128,0,2200:0:0:0:0:
+)";
+
+const char* simpleBms = R"(*---------------------- HEADER FIELD
+
+#PLAYER 1
+#TITLE Simple BMS
+#ARTIST Test
+#BPM 120
+#PLAYLEVEL 1
+#LNTYPE 1
+#WAV01 tap.wav
+#WAV02 hold.wav
+
+*---------------------- MAIN DATA FIELD
+
+#00011:0100
+#00012:0001
+#00151:0202
 )";
 
 void require(bool condition, const std::string& message) {
@@ -206,6 +226,27 @@ void testExporterRoundtrip() {
     require(reparsed.notes.size() == chart.notes.size(), "roundtrip should keep note count");
     require(reparsed.notes[3].type == keyconv::NoteType::Hold, "roundtrip should keep hold note");
     require(reparsed.notes[3].endTime == 2500, "roundtrip should keep hold endTime");
+}
+
+void testBmsParserExporterRoundtrip() {
+    const auto chart = keyconv::parseBms(simpleBms);
+    require(chart.meta.format == "bms", "BMS parser should set chart format");
+    require(chart.meta.sourceKeyCount == 2, "BMS parser should infer used key count");
+    require(chart.notes.size() == 3, "BMS parser should read taps and LNTYPE 1 holds");
+    require(chart.notes[2].type == keyconv::NoteType::Hold, "BMS parser should pair long-note channel objects");
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = chart.meta.sourceKeyCount;
+    options.targetKeyCount = 4;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    const auto text = keyconv::exportBms(result.chart, 4);
+    require(text.find("KeyWeaver4K") != std::string::npos, "BMS exporter should mark converted key count");
+
+    const auto reparsed = keyconv::parseBms(text);
+    require(!reparsed.notes.empty(), "exported BMS should reparse playable notes");
+    require(reparsed.meta.sourceKeyCount >= 1, "exported BMS should infer playable keys");
 }
 
 void testConvert() {
@@ -2228,6 +2269,7 @@ int main() {
         {"invalid hit object warning", testInvalidHitObjectWarning},
         {"mapping", testMapping},
         {"exporter roundtrip", testExporterRoundtrip},
+        {"BMS parser exporter roundtrip", testBmsParserExporterRoundtrip},
         {"convert", testConvert},
         {"compression keeps holds", testCompressionKeepsHolds},
         {"collision policies", testCollisionPolicies},

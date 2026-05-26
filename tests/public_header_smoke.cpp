@@ -3,6 +3,8 @@
 #include <keyconv/convert_options.hpp>
 #include <keyconv/convert_result.hpp>
 #include <keyconv/converter.hpp>
+#include <keyconv/format/bms_exporter.hpp>
+#include <keyconv/format/bms_parser.hpp>
 #include <keyconv/format/osu_exporter.hpp>
 #include <keyconv/format/osu_parser.hpp>
 #include <keyconv/note.hpp>
@@ -43,5 +45,10 @@ int main() {
     if (reparsed.notes.empty()) {
         return 3;
     }
-    return reparsed.meta.version == "KeyWeaver10K" ? 0 : 4;
+    const auto bms = keyconv::exportBms(result.chart, 10);
+    const auto parsedBms = keyconv::parseBms(bms);
+    if (parsedBms.notes.empty()) {
+        return 4;
+    }
+    return reparsed.meta.version == "KeyWeaver10K" ? 0 : 5;
 }

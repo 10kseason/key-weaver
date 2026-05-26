@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3
+
+- Added a basic BMS-family parser/exporter path for `.bms`, `.bme`, `.bml`, and `.pms` inputs.
+- Parses playable BMS key channels, double-play key channels, `#BPM`, inline `#xxx03` BPM changes, and `#LNTYPE 1` long-note channel pairs into the shared `keyconv::Chart` model.
+- Exports converted BMS notes back to BMS key channels while preserving non-playable header and media lines.
+- Rejects non-BMS output paths for BMS-family inputs so BMS conversion stays BMS-to-BMS.
+- Added BMS public headers, CLI extension dispatch, synthetic roundtrip tests, and public-header smoke coverage.
+- STOP timing, random/control-flow directives, LNOBJ-style long notes, and full BMS extension coverage remain future work.
+
 ## 0.5.2
 
 - Added Gesture Rail assignment hints for detected stair, trill, and jack motifs so 7K-to-10K style expansion preserves phrase direction, two-lane trill shape, and source jack identity more consistently.

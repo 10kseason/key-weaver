@@ -991,7 +991,7 @@ int runGui() {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.5.2 Playtest Tool",
+                                L"KeyWeaver v0.5.3 Playtest Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,

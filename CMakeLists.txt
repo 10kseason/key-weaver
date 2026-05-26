@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(KeyWeaver VERSION 0.5.2 LANGUAGES CXX)
+project(KeyWeaver VERSION 0.5.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,7 +22,9 @@ add_library(keyconv_core
     src/core/repeat.cpp
     src/core/report.cpp
     src/core/slice.cpp
+    src/exporter/bms.cpp
     src/exporter/osu.cpp
+    src/parser/bms.cpp
     src/parser/osu.cpp
 )
 

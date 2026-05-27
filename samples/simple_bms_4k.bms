@@ -1,0 +1,16 @@
+*---------------------- HEADER FIELD
+
+#PLAYER 1
+#TITLE Simple BMS
+#ARTIST KeyWeaver
+#BPM 120
+#PLAYLEVEL 1
+#LNTYPE 1
+#WAV01 key.wav
+#WAV02 hold.wav
+
+*---------------------- MAIN DATA FIELD
+
+#00011:0100
+#00012:0001
+#00151:0202

@@ -573,7 +573,7 @@ def build_profile(root,
 
 def main():
     parser = argparse.ArgumentParser(description="Build a Target-K profile from osu!mania reference charts.")
-    parser.add_argument("--songs-root", default=r"D:\osu!\Songs")
+    parser.add_argument("--songs-root", default=".")
     parser.add_argument("--author", action="append", help="Creator/version token to accept. May be repeated.")
     parser.add_argument("--exclude-style-token",
                         action="append",

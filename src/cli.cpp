@@ -252,6 +252,7 @@ void printHelp(std::ostream& out) {
     out << "  --dry-run               Convert in memory and report only; do not write output.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
+    out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
     out << "  --compare-policies <list> Compare comma-separated policies without writing chart output.\n";
     out << "  --emit-feel-report      Include feel metrics in policy comparison console output.\n";
     out << "  --emit-diff-report      Include before/after diff metrics in policy comparison console output.\n";
@@ -680,6 +681,35 @@ keyconv::TargetKProfile loadTargetKProfile(const std::filesystem::path& path) {
                                  displayPath(path));
     }
     return profile;
+}
+
+std::optional<std::filesystem::path> bundledTargetProfilePath(int targetKeyCount) {
+    if (targetKeyCount != 10) {
+        return std::nullopt;
+    }
+
+    const auto relativePath = std::filesystem::path("profiles") / "keyweaver_10k_broad_style_v1.json";
+    std::vector<std::filesystem::path> roots;
+#if defined(_WIN32)
+    const auto exePath = currentExecutablePath();
+    if (!exePath.empty()) {
+        roots.push_back(exePath.parent_path());
+    }
+#endif
+    std::error_code currentPathError;
+    const auto cwd = std::filesystem::current_path(currentPathError);
+    if (!currentPathError) {
+        roots.push_back(cwd);
+    }
+
+    for (const auto& root : roots) {
+        const auto candidate = root / relativePath;
+        std::error_code existsError;
+        if (std::filesystem::is_regular_file(candidate, existsError)) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
 }
 
 void validateOptions(const CliOptions& options) {
@@ -1278,8 +1308,12 @@ int main(int argc, char** argv) {
         convertOptions.echoAvoidHighDensity = cli.echoAvoidHighDensity;
         convertOptions.echoHighDensityWindowMs = cli.echoHighDensityWindowMs;
         convertOptions.echoMaxLocalNps = cli.echoMaxLocalNps;
-        if (cli.targetProfile.has_value()) {
-            auto profile = loadTargetKProfile(*cli.targetProfile);
+        auto profilePath = cli.targetProfile;
+        if (!profilePath.has_value()) {
+            profilePath = bundledTargetProfilePath(convertOptions.targetKeyCount);
+        }
+        if (profilePath.has_value()) {
+            auto profile = loadTargetKProfile(*profilePath);
             if (profile.targetKeys != convertOptions.targetKeyCount) {
                 throw std::runtime_error("Target profile key count does not match --target");
             }

@@ -38,9 +38,10 @@ Current scope:
 - v0.5.3 role voice-leading for 7K-to-10K dual-5K phrases so each hand panel keeps compact local motion
 - v0.5.3 low-key recreation default: high-to-low `auto` compression drops overflow objects instead of retiming every object
 - v0.5.3 Target-K likeness reporting with a `kLikenessScore` / WeaveScore-style diagnostic for lane coverage, lane entropy, edge use, active-lane windows, spatial span, adjacent expansion, anchor preservation, added-ratio fit, and safety
-- v0.5.3 Target-K profile builder script for KeyWeaver style profiles from curated u_e 10K osu!mania references under `D:\osu!\Songs`, with broad reference scans able to include multiple authors such as `u_e` and `CircusGalop` while excluding converted charts such as `7to10C` and key-conversion tags such as `4K10C` / `5K7C`
+- v0.5.3 Target-K profile builder script for KeyWeaver style profiles from curated u_e 10K osu!mania references, with broad reference scans able to include multiple authors such as `u_e` and `CircusGalop` while excluding converted charts such as `7to10C` and key-conversion tags such as `4K10C` / `5K7C`
 - v0.5.5 profile-guided Adaptive Growth Budget for `preserve-tap-plus`, using Target-K profile windows to throttle dense/LN-heavy/chord-heavy sections while keeping a global added-note cap
 - v0.5.5 broad style-profile workflow validated on a 628-chart u_e + CircusGalop 10K reference set, with a sanitized reusable profile committed at `profiles/keyweaver_10k_broad_style_v1.json`
+- v0.5.5 automatically loads the bundled broad 10K style profile for target-10 conversions when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; `--target-profile` overrides it
 
 Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, random remix, burst echo synthesis, or DP stream splitting.
 
@@ -56,6 +57,14 @@ On Windows this also builds the lightweight playtest GUI:
 ```bash
 cmake --build build --target keyconv_gui
 ```
+
+Release package:
+
+```powershell
+.\scripts\package_release.ps1 -Version 0.5.5
+```
+
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, and profiles, then writes `dist/release/KeyWeaver-v0.5.5-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -141,6 +150,7 @@ KeyWeaver <input.osu|input.bms>
   --dry-run               convert in memory and report only
   --report <path>         write conversion report json
   --target-profile <json> use a Target-K reference profile JSON for K-likeness scoring
+                          target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled
   --compare-policies <list> compare comma-separated policies without writing chart output
   --emit-feel-report      include feel metrics in comparison console output
   --emit-diff-report      include before/after diff metrics in comparison console output
@@ -175,14 +185,14 @@ The JSON/text reports include `kLikenessScore` as a 0-100 Target-K diagnostic. F
 Style-profile workflow:
 
 ```bash
-python scripts/build_target_k_profile.py --songs-root "D:\osu!\Songs" --author u_e --author CircusGalop --author-path-prefilter --target-key-path-prefilter --target-keys 10 --out build/u_e_circusgalop_10k_profile.json
-python scripts/build_target_k_profile.py --songs-root "D:\osu!\Songs" --target-keys 10 --profile-name keyweaver_10k_style_v1 --profile-kind style --window-ms 1000 --curated-list scripts/u_e_10k_curated_patterns.txt --out build/keyweaver_10k_style_v1.json
+python scripts/build_target_k_profile.py --songs-root "<osu Songs folder>" --author u_e --author CircusGalop --author-path-prefilter --target-key-path-prefilter --target-keys 10 --out build/u_e_circusgalop_10k_profile.json
+python scripts/build_target_k_profile.py --songs-root "<osu Songs folder>" --target-keys 10 --profile-name keyweaver_10k_style_v1 --profile-kind style --window-ms 1000 --curated-list scripts/u_e_10k_curated_patterns.txt --out build/keyweaver_10k_style_v1.json
 build/KeyWeaver.exe path/to/source.osu --source 7 --target 10 --target-profile profiles/keyweaver_10k_broad_style_v1.json --report dist/report_7k10k_profiled.json
 ```
 
 The broad profile scanner accepts osu!mania `CircleSize:10` charts whose `Creator` or `Version` contains any supplied author token and excludes converted/reference-pack markers such as `7to10`, `7to10C`, `convert`, and `KeyWeaver`. Add `--author-path-prefilter` and `--target-key-path-prefilter` for large osu! Songs folders to skip files whose path does not contain one of the author tokens or the target key token before opening metadata; when `rg` is installed, this uses `rg --files` internally for faster candidate discovery. It also rejects compact key-conversion labels like `4K10C`, `5K7C`, `7K10C`, or `4to8C` by default so those CircusGalop/u_e variants do not enter the reference set; add more `--exclude-style-token` values for similar tags. When `--curated-list` is supplied, the list entries are matched against `Title [Version]` / filename text instead, still with the same 10K and excluded-token filters. Curated profiles are style profiles, not universal 10K averages: `keyweaver_10k_style_v1` represents the selected u_e/KeyWeaver 10K hand-feel baseline.
 
-`profiles/keyweaver_10k_broad_style_v1.json` is the sanitized committed broad profile. It keeps aggregate feature statistics and removes local Songs-folder paths.
+`profiles/keyweaver_10k_broad_style_v1.json` is the sanitized committed broad profile. It keeps aggregate feature statistics and removes local Songs-folder paths. Target-10 conversions auto-load this bundled profile when it is next to the executable or in the current working folder; pass `--target-profile` to override it with a different profile.
 
 Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables a first adaptive-growth-budget pass: the global added-note cap stays in place, but each profile window gets its own local ratio based on density, active lanes, LN/chord pressure, and adjacent-growth need.
 

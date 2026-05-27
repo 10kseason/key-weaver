@@ -117,6 +117,8 @@ std::string toString(ExpansionPolicy policy) {
             return "preserve";
         case ExpansionPolicy::PreserveTapPlus:
             return "preserve-tap-plus";
+        case ExpansionPolicy::PreserveTapPlusLow:
+            return "preserve-tap-plus-low";
         case ExpansionPolicy::DeterministicChordFill:
             return "chord-fill";
         case ExpansionPolicy::DeterministicEcho:
@@ -272,8 +274,11 @@ std::optional<ExpansionPolicy> parseExpansionPolicy(const std::string& value) {
     if (value == "preserve" || value == "preserve-note-count") {
         return ExpansionPolicy::PreserveNoteCount;
     }
-    if (value == "preserve-tap-plus" || value == "tap-plus") {
+    if (value == "preserve-tap-plus" || value == "tap-plus" || value == "auto-normal") {
         return ExpansionPolicy::PreserveTapPlus;
+    }
+    if (value == "preserve-tap-plus-low" || value == "tap-plus-low" || value == "auto-low") {
+        return ExpansionPolicy::PreserveTapPlusLow;
     }
     if (value == "chord-fill") {
         return ExpansionPolicy::DeterministicChordFill;

@@ -1,4 +1,4 @@
-# KeyWeaver v0.5.5
+# KeyWeaver v0.5.6
 
 C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
@@ -28,6 +28,8 @@ Current scope:
 - v0.5.1 GUI output/report defaults beside the selected input `.osu`
 - v0.5.5 drag-and-drop GUI loading plus batch conversion: dropped files use the GUI Target field, and blank Output writes each chart beside its original file
 - v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
+- v0.5.6 `auto-low` expansion for conservative high-key conversion capped at 12.5% generated notes
+- v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
 - v0.5.2 Preserve Tap Plus policy with key-growth budgets, hand-zone balance, and LN-heavy window additions
 - v0.5.1 no-created-jack invariant across assignment, repair, expansion, and final sanitization
 - v0.5.1 auto expansion default: preserve on same/lower key counts, preserve-tap-plus on higher key counts
@@ -64,10 +66,10 @@ cmake --build build --target keyconv_gui
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.5.5
+.\scripts\package_release.ps1 -Version 0.5.6
 ```
 
-The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.5.5-win64-<timestamp>.zip` plus a `.sha256` file.
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.5.6-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -125,10 +127,11 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --no-snap-roll          allow raw-ms roll candidates and report unsnapped rolled notes
   --snap-tolerance <ms>   snap validation tolerance, default 2
   --max-roll-ms <ms>      maximum roll distance from original time, default 64
-  --expansion-policy <p>  auto | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random
+  --expansion-policy <p>  auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random
   --max-added-ratio <n>   max added notes as source-note ratio, default 0.45
   --max-added-per-slice <n> max added notes per source slice, default 2
   --max-added-per-measure <n> max added notes per approximate measure, default 16
+  --preserve-convert     faithful mapping, strict source-jack preservation, and no generated notes
   --expansion-min-gap <ms> minimum positive object gap for added notes, default 16
   --expansion-same-lane-min-gap <ms> minimum same-lane gap for added notes, default 20
   --snap-added-notes      require added notes to be timing-grid snapped, default
@@ -175,6 +178,8 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --expansion-pol
 build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --compare-policies preserve,preserve-tap-plus,echo-balanced,training-scaffold,harder-balanced --emit-feel-report --emit-diff-report --report dist/compare.json --report-csv dist/compare.csv
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 4 --report dist/report_7k_4k.json
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --dry-run
+build/KeyWeaver.exe samples/simple_4k.osu --target 10 --expansion-policy auto-low --dry-run
+build/KeyWeaver.exe samples/simple_4k.osu --target 10 --preserve-convert --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch
 build/KeyWeaver.exe path/to/chart.bms --target 4 --dry-run
 ```
@@ -211,7 +216,7 @@ GUI scope:
 - drag one or more chart files onto an already-open GUI window to convert with the current Target field
 - drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads them so Target can be set before conversion
 - optional source-key override and target key; drag-and-drop and batch conversion use this Target field instead of assuming 10K
-- choose expansion/compress/profile options
+- choose expansion/compress/profile options, including auto-normal, auto-low, and Preserve Convert
 - run one conversion and parse report JSON
 - run batch conversion for dropped/loaded files
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
@@ -233,8 +238,9 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. When multiple files are dropped, Output is blank by default and each chart writes beside its own source file; set Output to force every batch item into one folder.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
-- If `--expansion-policy` is omitted or set to `auto`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. Use explicit `--expansion-policy preserve` to disable deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
+- If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. Use `--expansion-policy auto-low` for the same auto routing with a conservative 12.5% high-key generation cap, or explicit `--expansion-policy preserve` to disable deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
 - `--expansion-policy preserve-tap-plus` preserves original taps/LNs and adds deterministic notes. On high-key 8K/10K conversion its default global budget scales with key growth from 18.75% up to 37.5% of source objects, so 7K-to-10K targets at most about 1.375x total note count before safety rejects. With `--target-profile`, adaptive growth budgeting redistributes that cap per 500-4000 ms profile window: low-density/under-expanded windows can spend more, while dense, chord-heavy, or LN-heavy windows spend less.
+- `--preserve-convert` is the strict preservation preset: faithful lane mapping, source-jack strict reporting, no playable jack split accounting, and `preserve` expansion. Use it when generated notes or jack smoothing are more harmful than a thinner high-key output.
 - Tap-plus scans 2000 ms local windows. Tap-heavy slices still add taps, while LN-heavy windows only add holds on slices that already contain a source LN. Source taps are never converted into LNs, and generated holds stay near a same-time LN anchor with collision, LN-conflict, and no-created-jack guards still taking priority.
 - Higher-key `preserve-tap-plus` also balances target hand zones. For 10K, lanes 0-4 are treated as left hand and lanes 5-9 as right hand; reports include `leftHandNotes`, `rightHandNotes`, and `handBalanceRatio`.
 - Generated LNs are normalized to the nearest same-time adjacent LN duration so duplicated or tap-plus long notes keep matching lengths.

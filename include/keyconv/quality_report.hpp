@@ -47,6 +47,7 @@ enum class DistancePolicy {
 enum class ExpansionPolicy {
     PreserveNoteCount,
     PreserveTapPlus,
+    PreserveTapPlusLow,
     DeterministicChordFill,
     DeterministicEcho,
     TrainingScaffold,
@@ -205,7 +206,7 @@ struct ConversionReport {
         int droppedByDistanceGuard = 0;
         int rerolledByDistanceGuard = 0;
         bool deterministic = true;
-        std::string algorithmVersion = "v0.5.5";
+        std::string algorithmVersion = "v0.5.6";
         std::string expansionPolicy = "preserve";
         std::string streamEchoProfile = "conservative";
         std::string expansionComposerProfile = "preserve";

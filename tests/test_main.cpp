@@ -1797,6 +1797,48 @@ void testPreserveTapPlusIncludesHoldsBudgetAndAddsOnlyTaps() {
     require(generatedTaps == 6, "tap plus should generate the expected tracked tap notes");
 }
 
+void testPreserveTapPlusLowCapsHighKeyGrowth() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 0, keyconv::NoteType::Hold, 1600},
+                                     {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1375, 3, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1625, 2, keyconv::NoteType::Hold, 2200},
+                                     {1750, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1875, 3, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2125, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {2250, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {2375, 3, keyconv::NoteType::Tap, std::nullopt},
+                                     {2500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2625, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {2750, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {2875, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusLow;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    const auto& quality = result.report.quality;
+
+    require(quality.expansionPolicy == "preserve-tap-plus-low",
+            "low tap-plus policy should be reported");
+    require(quality.expansionComposerProfile == "tap-plus-low",
+            "low tap-plus composer profile should be reported");
+    require(quality.targetAddedNoteRatio == 0.125,
+            "auto-low should cap high-key generated notes at 12.5 percent");
+    require(quality.addedNotes <= 2,
+            "auto-low should add no more than 12.5 percent of the 16 source objects");
+    require(quality.createdJacks == 0, "auto-low should keep the no-created-jack invariant");
+}
+
 void testPreserveTapPlusAddsHoldsInLnHeavyWindow() {
     const auto chart = makeChart(7,
                                  {
@@ -2828,6 +2870,7 @@ int main() {
         {"training scaffold deterministic lane", testTrainingScaffoldDeterministicLane},
         {"expanded output collapses source near-time pair", testExpandedOutputCollapsesSourceNearTimePair},
         {"preserve tap plus includes holds budget and adds only taps", testPreserveTapPlusIncludesHoldsBudgetAndAddsOnlyTaps},
+        {"preserve tap plus low caps high-key growth", testPreserveTapPlusLowCapsHighKeyGrowth},
         {"preserve tap plus adds holds in LN-heavy window", testPreserveTapPlusAddsHoldsInLnHeavyWindow},
         {"preserve tap plus does not turn tap-only slice into hold", testPreserveTapPlusDoesNotTurnTapOnlySliceIntoHold},
         {"generated hold clone matches adjacent hold length", testGeneratedHoldCloneMatchesAdjacentHoldLength},

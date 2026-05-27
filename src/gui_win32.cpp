@@ -40,6 +40,7 @@ constexpr int kListSummary = 116;
 constexpr int kEditLog = 117;
 constexpr int kStaticDetected = 118;
 constexpr int kButtonBatch = 119;
+constexpr int kCheckPreserveConvert = 120;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -52,9 +53,10 @@ struct ToolOptions {
     std::filesystem::path outputDir;
     std::wstring sourceOverride;
     std::wstring targetKeys = L"10";
-    std::wstring expansionPolicy = L"auto";
+    std::wstring expansionPolicy = L"auto-normal";
     std::wstring compressPolicy = L"auto";
     std::wstring streamEchoProfile = L"conservative";
+    bool preserveConvert = false;
 };
 
 struct OutputPaths {
@@ -86,6 +88,7 @@ struct AppState {
     HWND expansionCombo = nullptr;
     HWND compressCombo = nullptr;
     HWND streamProfileCombo = nullptr;
+    HWND preserveConvertCheck = nullptr;
     HWND detectedLabel = nullptr;
     HWND summaryList = nullptr;
     HWND logEdit = nullptr;
@@ -342,11 +345,14 @@ std::wstring buildSingleCommand(const ToolOptions& options, OutputPaths& paths) 
     appendArg(command, options.targetKeys);
     appendArg(command, L"--compress-policy");
     appendArg(command, options.compressPolicy);
-    if (options.expansionPolicy != L"auto") {
+    if (options.preserveConvert) {
+        appendArg(command, L"--preserve-convert");
+    } else if (options.expansionPolicy != L"auto" && options.expansionPolicy != L"auto-normal") {
         appendArg(command, L"--expansion-policy");
         appendArg(command, options.expansionPolicy);
     }
-    if (options.expansionPolicy == L"echo" || options.expansionPolicy == L"harder-remix") {
+    if (!options.preserveConvert &&
+        (options.expansionPolicy == L"echo" || options.expansionPolicy == L"harder-remix")) {
         appendArg(command, L"--echo-policy");
         appendArg(command, L"stair-trill-stream");
         appendArg(command, L"--stream-echo-profile");
@@ -701,6 +707,8 @@ ToolOptions readToolOptions(const AppState& state) {
     options.expansionPolicy = comboText(state.expansionCombo);
     options.compressPolicy = comboText(state.compressCombo);
     options.streamEchoProfile = comboText(state.streamProfileCombo);
+    options.preserveConvert =
+        SendMessageW(state.preserveConvertCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
     return options;
 }
 
@@ -1028,10 +1036,11 @@ void createUi(AppState& state) {
     state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, editX, y, 180, 160,
                                        kComboExpansion);
     for (const auto* item :
-         {L"auto", L"preserve", L"preserve-tap-plus", L"chord-fill", L"training-scaffold", L"echo", L"harder-remix"}) {
+         {L"auto-normal", L"auto-low", L"preserve", L"preserve-tap-plus", L"chord-fill", L"training-scaffold",
+          L"echo", L"harder-remix"}) {
         addComboItem(state.expansionCombo, item);
     }
-    setComboSelection(state.expansionCombo, L"auto");
+    setComboSelection(state.expansionCombo, L"auto-normal");
 
     makeControl(state, L"STATIC", L"Compress", 0, 320, y + 4, 70, 20, -1);
     state.compressCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 392, y, 180, 180,
@@ -1049,7 +1058,20 @@ void createUi(AppState& state) {
         addComboItem(state.streamProfileCombo, item);
     }
     setComboSelection(state.streamProfileCombo, L"conservative");
-    y += 40;
+    y += 38;
+
+    state.preserveConvertCheck = makeControl(state,
+                                             L"BUTTON",
+                                             L"Preserve Convert",
+                                             BS_AUTOCHECKBOX,
+                                             editX,
+                                             y,
+                                             180,
+                                             22,
+                                             kCheckPreserveConvert);
+    makeControl(state, L"STATIC", L"faithful mapping, strict source jacks, no generated notes", 0,
+                editX + 190, y + 2, 420, 20, -1);
+    y += 32;
 
     makeControl(state, L"BUTTON", L"Convert", BS_PUSHBUTTON, editX, y, 96, 28, kButtonConvert);
     makeControl(state, L"BUTTON", L"Batch", BS_PUSHBUTTON, editX + 104, y, 96, 28, kButtonBatch);
@@ -1194,12 +1216,12 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.5.5 Playtest Tool",
+                                L"KeyWeaver v0.5.6 Playtest Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,
                                 810,
-                                650,
+                                680,
                                 nullptr,
                                 nullptr,
                                 wc.hInstance,

@@ -33,7 +33,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.5.5";
+constexpr const char* kToolVersion = "v0.5.6";
 
 #if defined(_WIN32)
 std::string utf8FromWide(std::wstring_view value) {
@@ -240,6 +240,7 @@ struct CliOptions {
     bool emitDiffReport = false;
     std::optional<std::filesystem::path> reportCsv;
     bool batchMode = false;
+    bool preserveConvert = false;
     bool verbose = false;
     bool help = false;
 };
@@ -268,11 +269,13 @@ void printHelp(std::ostream& out) {
     out << "  --no-snap-roll          Allow raw-ms roll candidates and report unsnapped rolled notes.\n";
     out << "  --snap-tolerance <ms>   Snap validation tolerance. Default: 2.\n";
     out << "  --max-roll-ms <ms>      Maximum roll distance from original time. Default: 64.\n";
-    out << "  --expansion-policy <p>  auto | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random.\n";
-    out << "                          Default auto: preserve when target <= source, preserve-tap-plus when target > source.\n";
+    out << "  --expansion-policy <p>  auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random.\n";
+    out << "                          Default auto-normal: preserve when target <= source, preserve-tap-plus when target > source.\n";
+    out << "                          auto-low keeps the same preserve behavior but caps high-key generation at 12.5%.\n";
     out << "  --max-added-ratio <n>   Max added notes as source-note ratio. Default: 0.45.\n";
     out << "  --max-added-per-slice <n> Max added notes per source slice. Default: 2.\n";
     out << "  --max-added-per-measure <n> Max added notes per approximate measure. Default: 16.\n";
+    out << "  --preserve-convert     Faithful mapping, strict source-jack preservation, and no generated notes.\n";
     out << "  --expansion-min-gap <ms> Minimum positive object gap for added notes. Default: 16.\n";
     out << "  --expansion-same-lane-min-gap <ms> Minimum same-lane gap for added notes. Default: 20.\n";
     out << "  --snap-added-notes      Require added notes to be timing-grid snapped. Default.\n";
@@ -468,7 +471,7 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.maxRollMs = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--expansion-policy") {
             const auto value = requireValue(i, args, arg);
-            if (value == "auto") {
+            if (value == "auto" || value == "auto-normal") {
                 options.expansionPolicyProvided = false;
                 continue;
             }
@@ -500,6 +503,14 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.maxAddedPerSlice = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--max-added-per-measure") {
             options.maxAddedPerMeasure = parseInt(requireValue(i, args, arg), arg);
+        } else if (arg == "--preserve-convert") {
+            options.preserveConvert = true;
+            options.style = keyconv::ConversionStyle::Faithful;
+            options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+            options.expansionPolicyProvided = true;
+            options.jackPreservePolicy = keyconv::JackPreservePolicy::PreserveStrict;
+            options.allowPlayableJackSplit = false;
+            options.maxAddedNoteRatio = 0.0;
         } else if (arg == "--deterministic-expansion") {
             options.deterministicExpansion = true;
         } else if (arg == "--expansion-min-gap") {
@@ -1229,6 +1240,13 @@ keyconv::ConvertOptions optionsForPolicyToken(const std::string& token,
         options.streamEchoProfile = keyconv::StreamEchoProfile::Conservative;
         return options;
     }
+    if (normalized == "auto-low" || normalized == "tap-plus-low" ||
+        normalized == "preserve-tap-plus-low") {
+        options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusLow;
+        options.echoPolicy = keyconv::EchoPolicy::Off;
+        options.streamEchoProfile = keyconv::StreamEchoProfile::Conservative;
+        return options;
+    }
 
     if (normalized == "echo" || normalized == "echo-conservative") {
         options.expansionPolicy = keyconv::ExpansionPolicy::DeterministicEcho;
@@ -1652,6 +1670,7 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     std::cout << "Echo min gap: " << convertOptions.echoMinGapMs << " ms\n";
     std::cout << "Echo same-lane min gap: " << convertOptions.echoSameLaneMinGapMs << " ms\n";
     std::cout << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
+    std::cout << "Preserve convert: " << (cli.preserveConvert ? "yes" : "no") << "\n";
     if (convertOptions.targetKProfile.has_value()) {
         std::cout << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
                   << convertOptions.targetKProfile->sourceName << " ("

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.6
+
+- Promoted the current KeyWeaver surface to `v0.5.6`.
+- Added `auto-low` / `preserve-tap-plus-low` expansion for conservative high-key conversion: same/lower target counts still preserve note count, while higher-key generation is capped at 12.5% of source objects.
+- Added `--preserve-convert` as a strict preservation preset: faithful mapping, strict source-jack preservation, no playable jack split accounting, and no generated notes.
+- Updated the GUI with `auto-normal`, `auto-low`, and a Preserve Convert checkbox so users are not forced into 10K-style normal generation when source jack identity matters more.
+
 ## 0.5.5
 
 - Promoted the current KeyWeaver surface to `v0.5.5`.

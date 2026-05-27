@@ -149,6 +149,13 @@ double preserveTapPlusTargetRatio(int sourceKeyCount, int targetKeyCount) {
     return std::min(maxRatio, baseRatio + growthRatio);
 }
 
+double preserveTapPlusLowTargetRatio(int sourceKeyCount, int targetKeyCount) {
+    if (targetKeyCount <= sourceKeyCount || sourceKeyCount <= 0) {
+        return 0.0;
+    }
+    return 0.125;
+}
+
 StreamEchoProfileSettings streamEchoProfileSettings(StreamEchoProfile profile) {
     switch (profile) {
         case StreamEchoProfile::Conservative:
@@ -179,6 +186,9 @@ ExpansionComposerSettings composerSettingsForPolicy(ExpansionPolicy policy,
     }
     if (policy == ExpansionPolicy::PreserveTapPlus) {
         return {"tap-plus", preserveTapPlusTargetRatio(sourceKeyCount, targetKeyCount)};
+    }
+    if (policy == ExpansionPolicy::PreserveTapPlusLow) {
+        return {"tap-plus-low", preserveTapPlusLowTargetRatio(sourceKeyCount, targetKeyCount)};
     }
     if (policy == ExpansionPolicy::HarderRemix) {
         return {"harder", 0.12};
@@ -319,7 +329,8 @@ int maxAddedTotal(const Chart& original, const ConvertOptions& options) {
     if (targetRatio <= 0.0 || original.notes.empty()) {
         return 0;
     }
-    if (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus) {
+    if (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
+        effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow) {
         return static_cast<int>(std::floor(static_cast<double>(original.notes.size()) * targetRatio));
     }
     return std::max(1, static_cast<int>(std::floor(static_cast<double>(original.notes.size()) *
@@ -336,7 +347,8 @@ int adaptiveBudgetWindowMs(const ConvertOptions& options) {
 
 bool adaptiveBudgetEnabledFor(const ConvertOptions& options) {
     return options.targetKProfile.has_value() &&
-           effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus &&
+           (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
+            effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow) &&
            options.targetKeyCount > options.sourceKeyCount;
 }
 
@@ -554,7 +566,9 @@ double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
         patternSafety = adaptivePatternSafety(holdRate, chordRate);
         adjacentPressure = std::clamp(0.85 + profile.desiredAdjacentExpansion, 0.85, 1.25);
     }
-    const double hardMax = std::min(options.maxAddedNoteRatio, 0.45);
+    const bool lowGrowth = effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow;
+    const double hardMax = lowGrowth ? std::min(options.maxAddedNoteRatio, globalTargetRatio)
+                                     : std::min(options.maxAddedNoteRatio, 0.45);
     return std::clamp(globalTargetRatio *
                           densityRoom *
                           patternSafety *
@@ -1902,7 +1916,8 @@ ExpansionPolicy resolveExpansionPolicy(const ConvertOptions& options) {
 }
 
 void applyExpansionComposer(ExpansionContext& context, ExpansionPolicy policy) {
-    if (policy == ExpansionPolicy::PreserveTapPlus) {
+    if (policy == ExpansionPolicy::PreserveTapPlus ||
+        policy == ExpansionPolicy::PreserveTapPlusLow) {
         applyPreserveTapPlus(context);
         return;
     }

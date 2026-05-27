@@ -47,13 +47,23 @@ std::string keyWeaverDifficultyName(const std::optional<std::string>& existing, 
     if (!existing.has_value() || existing->empty()) {
         return marker;
     }
-    if (existing->find(marker) != std::string::npos) {
+    if (existing->find("KeyWeaver") != std::string::npos) {
         return *existing;
     }
     return *existing + " " + marker;
 }
 
-void writeDefaultHeader(std::ostringstream& out, int keyCount) {
+std::string exportedDifficultyName(const Chart& chart,
+                                   const std::optional<std::string>& fallback,
+                                   int keyCount) {
+    if (chart.meta.version.has_value() &&
+        chart.meta.version->find("KeyWeaver") != std::string::npos) {
+        return *chart.meta.version;
+    }
+    return keyWeaverDifficultyName(fallback, keyCount);
+}
+
+void writeDefaultHeader(std::ostringstream& out, const Chart& chart, int keyCount) {
     out << "osu file format v14\n\n";
     out << "[General]\n";
     out << "Mode:3\n\n";
@@ -61,7 +71,7 @@ void writeDefaultHeader(std::ostringstream& out, int keyCount) {
     out << "Title:Converted\n";
     out << "Artist:Unknown\n";
     out << "Creator:KeyWeaver\n";
-    out << "Version:" << keyWeaverDifficultyMarker(keyCount) << "\n\n";
+    out << "Version:" << exportedDifficultyName(chart, std::nullopt, keyCount) << "\n\n";
     out << "[Difficulty]\n";
     out << "CircleSize:" << keyCount << "\n\n";
     out << "[HitObjects]\n";
@@ -74,7 +84,7 @@ std::string exportOsu(const Chart& chart, std::optional<int> targetKeyCount) {
     std::ostringstream out;
 
     if (chart.raw.sectionOrder.empty()) {
-        writeDefaultHeader(out, keyCount);
+        writeDefaultHeader(out, chart, keyCount);
         writeHitObjects(out, chart, keyCount);
         return out.str();
     }
@@ -112,7 +122,7 @@ std::string exportOsu(const Chart& chart, std::optional<int> targetKeyCount) {
                     out << line << "\n";
                     wroteCreator = true;
                 } else if (pair.has_value() && pair->first == "Version") {
-                    out << "Version:" << keyWeaverDifficultyName(pair->second, keyCount) << "\n";
+                    out << "Version:" << exportedDifficultyName(chart, pair->second, keyCount) << "\n";
                     wroteVersion = true;
                 } else {
                     out << line << "\n";
@@ -122,7 +132,7 @@ std::string exportOsu(const Chart& chart, std::optional<int> targetKeyCount) {
                 out << "Creator:" << *chart.meta.creator << "\n";
             }
             if (!wroteVersion) {
-                out << "Version:" << keyWeaverDifficultyName(chart.meta.version, keyCount) << "\n";
+                out << "Version:" << exportedDifficultyName(chart, chart.meta.version, keyCount) << "\n";
             }
             wroteMetadata = true;
         } else if (section == "Difficulty") {
@@ -155,7 +165,7 @@ std::string exportOsu(const Chart& chart, std::optional<int> targetKeyCount) {
         out << "Title:" << (chart.meta.title.has_value() ? *chart.meta.title : std::string("Converted")) << "\n";
         out << "Artist:" << (chart.meta.artist.has_value() ? *chart.meta.artist : std::string("Unknown")) << "\n";
         out << "Creator:" << (chart.meta.creator.has_value() ? *chart.meta.creator : std::string("KeyWeaver")) << "\n";
-        out << "Version:" << keyWeaverDifficultyName(chart.meta.version, keyCount) << "\n";
+        out << "Version:" << exportedDifficultyName(chart, chart.meta.version, keyCount) << "\n";
     }
     if (!wroteDifficulty) {
         out << "\n[Difficulty]\n";

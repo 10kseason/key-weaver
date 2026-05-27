@@ -112,7 +112,7 @@ Options:
 KeyWeaver <input.osu|input.bms> [more inputs...]
   --source <number>       source key count, optional
   --target <number>       target key count, required
-  --out <path>            output file path, defaults beside input as '<stem> KeyWeaverNK.<ext>'
+  --out <path>            output file path, defaults beside input using the KeyWeaver mode marker
   --style <style>         direct | expand | compress | playable | faithful | training | dp
   --collision <policy>    keep | shift-nearest | merge | drop, default shift-nearest
   --compress-policy <p>   auto | preserve-strict | no-overlap-drop | no-overlap-roll | no-overlap-hybrid | training-simplify
@@ -143,6 +143,7 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --echo-policy <p>       off | stair | trill | stream | stair-trill | stair-trill-stream | auto
   --stream-echo-profile <p> conservative | balanced | training | experimental, default conservative
   --stream-transform <p>  off | superrandom | full-jitter
+  --seed <n>              deterministic random seed for stream transforms, default 0
   --echo-diagnostics      print StreamEcho reject breakdown without changing conversion output
   --max-echo-ratio <n>    max echo notes as source-note ratio, default 0.08
   --max-echo-per-pattern <n> max echo notes per pattern, default 4
@@ -238,7 +239,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - Beam search and DP-specific optimization are planned after v0.1.
 - `--optimizer beam`, `--style dp`, and `--dp` are accepted as reserved options and report a fallback warning.
 - Strong compression can drop or roll notes under no-overlap policies. Default high-to-low `auto` compression uses `no-overlap-drop`, so overflow taps or holds are omitted when the target key count cannot represent the source chord/LN occupancy cleanly. This prioritizes low-key recreation over preserving every object. Use explicit `--compress-policy no-overlap-hybrid` to roll overflow holds when possible, or `--compress-policy no-overlap-roll` when tap overflow should also be rolled instead of deleted.
-- Converted osu!mania difficulty names append `KeyWeaverNK`, where `N` is the target key count, for example `KeyWeaver10K`. If `--out` is omitted, the `.osu` is written beside the input using the same marker and a numeric suffix when needed.
+- Converted osu!mania difficulty names append a KeyWeaver mode marker. The base is `KeyWeaverNK`, where `N` is the target key count, and high-key auto expansion adds `(more)`, `(normal)`, or `(low)`. Stream transforms add `-sRan` or `-jitter`, for example `KeyWeaver10K-sRan (more)` or `KeyWeaver10K-jitter (low)`. If `--out` is omitted, the `.osu` is written beside the input using the same marker and a numeric suffix when needed.
 - The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. When multiple files are dropped, Output is blank by default and each chart writes beside its own source file; set Output to force every batch item into one folder.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
@@ -259,7 +260,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - The GUI playtest tool is a Windows harness around `KeyWeaver.exe`; it is not a realtime renderer, editor, audio player, BMS frontend, DP splitter, or beam-search UI.
 - Feel metrics include `densityDelta`, `chordRateBefore`, `chordRateAfter`, `laneCoverageBefore`, `laneCoverageAfter`, `laneEntropyBefore`, `laneEntropyAfter`, `lnAnchorPressureBefore`, `lnAnchorPressureAfter`, `handSpreadAfter`, and `feelTags`.
 - `--expansion-policy echo` implements same-slice stair/trill reinforcement and density-gated stream echo; check `streamEchoProfile`, `streamEchoCandidates`, `streamRawPatternCandidates`, `streamEligiblePatternCandidates`, `streamRawLaneCandidates`, `streamSafeLaneCandidates`, `streamAcceptedCandidates`, primary reject counters such as `rejectedStreamPrimaryByLocalNps`, any-reason counters such as `rejectedStreamEchoByLocalNps`, `streamEchoAddedRatio`, and `maxObservedLocalNpsAfterEcho`.
-- `--stream-transform superrandom` deterministically relanes detected stream/burst runs across safe target lanes without adding notes. `--stream-transform full-jitter` offsets every note by a deterministic 1-15 ms amount for full-chart zure-style timing spread; reports expose `streamTransformPolicy`, `streamTransformedNotes`, and `streamJitteredNotes`.
+- `--stream-transform superrandom` deterministically randomizes every note to a safe target lane without adding notes; same-time chords are assigned distinct lanes when possible, `--seed` changes the generated lane order, and osu difficulty/file markers include `-sRan`. `--stream-transform full-jitter` offsets every note by a deterministic 1-15 ms amount for full-chart zure-style timing spread and marks output with `-jitter`; reports expose `streamTransformPolicy`, `streamTransformedNotes`, and `streamJitteredNotes`.
 - `streamEchoCandidates` is kept for compatibility and equals `streamRawPatternCandidates`. Primary reject counts are mutually exclusive first-fail counters for accounting; any-reason counters are diagnostic counters and are not guaranteed to sum to the candidate count.
 - `--expansion-policy seeded-random` is accepted as a reserved policy but does not synthesize random notes.
 - The exporter regenerates `HitObjects` and preserves other sections where practical.

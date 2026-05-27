@@ -296,12 +296,55 @@ std::wstring chartOutputExtension(const ToolOptions& options) {
     return L".osu";
 }
 
+std::wstring expansionDifficultyTag(const ToolOptions& options) {
+    if (options.preserveConvert) {
+        return {};
+    }
+    if (options.expansionPolicy == L"auto (more)") {
+        return L"more";
+    }
+    if (options.expansionPolicy == L"auto (normal)") {
+        return L"normal";
+    }
+    if (options.expansionPolicy == L"auto (low)") {
+        return L"low";
+    }
+    return {};
+}
+
+std::wstring streamDifficultyTag(const ToolOptions& options) {
+    if (options.streamTransform == L"superrandom") {
+        return L"sRan";
+    }
+    if (options.streamTransform == L"full-jitter") {
+        return L"jitter";
+    }
+    return {};
+}
+
+std::wstring keyWeaverConversionMarker(const ToolOptions& options) {
+    std::wstring marker = L"KeyWeaver" + options.targetKeys + L"K";
+    const auto streamTag = streamDifficultyTag(options);
+    if (!streamTag.empty()) {
+        marker += L"-";
+        marker += streamTag;
+    }
+    const auto expansionTag = expansionDifficultyTag(options);
+    if (!expansionTag.empty()) {
+        marker += L" (";
+        marker += expansionTag;
+        marker += L")";
+    }
+    return marker;
+}
+
 std::filesystem::path makeOutputBase(const ToolOptions& options, const std::wstring& suffix) {
     const std::wstring stem = options.inputFile.stem().wstring();
     const auto outputDir = options.outputDir.empty() ? options.inputFile.parent_path() : options.outputDir;
     const auto chartExtension = chartOutputExtension(options);
+    const auto marker = keyWeaverConversionMarker(options);
     for (int index = 1;; ++index) {
-        std::wstring name = stem + L" KeyWeaver" + options.targetKeys + L"K";
+        std::wstring name = stem + L" " + marker;
         if (!suffix.empty()) {
             name += L" ";
             name += suffix;

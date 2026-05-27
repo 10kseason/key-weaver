@@ -198,6 +198,7 @@ struct CliOptions {
     keyconv::EchoPolicy echoPolicy = keyconv::EchoPolicy::Off;
     keyconv::StreamEchoProfile streamEchoProfile = keyconv::StreamEchoProfile::Conservative;
     keyconv::StreamTransformPolicy streamTransformPolicy = keyconv::StreamTransformPolicy::Off;
+    unsigned int seed = 0;
     keyconv::JackPreservePolicy jackPreservePolicy = keyconv::JackPreservePolicy::PreservePlayable;
     bool gestureRailEnabled = true;
     bool preserveLaneDrift = false;
@@ -254,7 +255,7 @@ void printHelp(std::ostream& out) {
     out << "Options:\n";
     out << "  --source <number>       Source key count. Overrides CircleSize/BMS key-count inference.\n";
     out << "  --target <number>       Target key count. Required.\n";
-    out << "  --out <path>            Output path. Defaults beside input as '<stem> KeyWeaverNK.<ext>'.\n";
+    out << "  --out <path>            Output path. Defaults beside input with the KeyWeaver mode marker.\n";
     out << "  --style <style>         direct | expand | compress | playable | faithful | training | dp.\n";
     out << "  --collision <policy>    keep | shift-nearest | merge | drop. Default: shift-nearest.\n";
     out << "  --compress-policy <p>   auto | preserve-strict | no-overlap-drop | no-overlap-roll | no-overlap-hybrid | training-simplify.\n";
@@ -288,7 +289,8 @@ void printHelp(std::ostream& out) {
     out << "  --expansion-snap-tolerance <ms> Snap validation tolerance for added notes. Default: 2.\n";
     out << "  --echo-policy <p>       off | stair | trill | stream | stair-trill | stair-trill-stream | auto.\n";
     out << "  --stream-echo-profile <p> conservative | balanced | training | experimental. Default: conservative.\n";
-    out << "  --stream-transform <p>  off | superrandom | full-jitter. Superrandom relanes stream runs; full-jitter offsets simultaneous notes by a few ms.\n";
+    out << "  --stream-transform <p>  off | superrandom | full-jitter. Superrandom relanes each note; full-jitter offsets every note by 1-15 ms.\n";
+    out << "  --seed <n>              Deterministic random seed for stream transforms. Default: 0.\n";
     out << "  --echo-diagnostics      Print StreamEcho reject breakdown; does not alter conversion output.\n";
     out << "  --max-echo-ratio <n>    Max echo notes as source-note ratio. Default: 0.08.\n";
     out << "  --max-echo-per-pattern <n> Max echo notes per pattern. Default: 4.\n";
@@ -354,6 +356,50 @@ std::string keyWeaverDifficultyMarker(int targetKeys) {
     return std::string(kToolName) + std::to_string(targetKeys) + "K";
 }
 
+std::string difficultyExpansionTag(const keyconv::ConvertOptions& options) {
+    if (options.targetKeyCount <= options.sourceKeyCount) {
+        return {};
+    }
+    switch (options.expansionPolicy) {
+        case keyconv::ExpansionPolicy::PreserveTapPlusMore:
+            return "more";
+        case keyconv::ExpansionPolicy::PreserveTapPlus:
+            return "normal";
+        case keyconv::ExpansionPolicy::PreserveTapPlusLow:
+            return "low";
+        default:
+            return {};
+    }
+}
+
+std::string difficultyStreamTag(keyconv::StreamTransformPolicy policy) {
+    switch (policy) {
+        case keyconv::StreamTransformPolicy::SuperRandom:
+            return "sRan";
+        case keyconv::StreamTransformPolicy::FullJitter:
+            return "jitter";
+        case keyconv::StreamTransformPolicy::Off:
+            return {};
+    }
+    return {};
+}
+
+std::string keyWeaverConversionMarker(const keyconv::ConvertOptions& options) {
+    std::string marker = keyWeaverDifficultyMarker(options.targetKeyCount);
+    const auto streamTag = difficultyStreamTag(options.streamTransformPolicy);
+    if (!streamTag.empty()) {
+        marker += "-";
+        marker += streamTag;
+    }
+    const auto expansionTag = difficultyExpansionTag(options);
+    if (!expansionTag.empty()) {
+        marker += " (";
+        marker += expansionTag;
+        marker += ")";
+    }
+    return marker;
+}
+
 std::string lowerAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
@@ -373,10 +419,11 @@ std::filesystem::path defaultChartExtension(const std::filesystem::path& input, 
     return input.has_extension() ? input.extension() : std::filesystem::path(".osu");
 }
 
-std::filesystem::path defaultOutputPath(const std::filesystem::path& input, int targetKeys) {
+std::filesystem::path defaultOutputPath(const std::filesystem::path& input,
+                                       const keyconv::ConvertOptions& options) {
     const auto parent = input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
-    const auto extension = defaultChartExtension(input, targetKeys);
-    const auto marker = keyWeaverDifficultyMarker(targetKeys);
+    const auto extension = defaultChartExtension(input, options.targetKeyCount);
+    const auto marker = keyWeaverConversionMarker(options);
 
     for (int suffix = 1;; ++suffix) {
         std::filesystem::path filename = input.stem();
@@ -508,6 +555,12 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
                 throw std::runtime_error("Invalid stream transform: " + value);
             }
             options.streamTransformPolicy = *policy;
+        } else if (arg == "--seed") {
+            const int value = parseInt(requireValue(i, args, arg), arg);
+            if (value < 0) {
+                throw std::runtime_error("Invalid seed: seed must be non-negative");
+            }
+            options.seed = static_cast<unsigned int>(value);
         } else if (arg == "--echo-diagnostics") {
             options.echoDiagnostics = true;
         } else if (arg == "--max-added-ratio") {
@@ -1564,6 +1617,7 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     convertOptions.echoPolicy = cli.echoPolicy;
     convertOptions.streamEchoProfile = cli.streamEchoProfile;
     convertOptions.streamTransformPolicy = cli.streamTransformPolicy;
+    convertOptions.seed = cli.seed;
     convertOptions.jackPreservePolicy = cli.jackPreservePolicy;
     convertOptions.gestureRailEnabled = cli.gestureRailEnabled;
     convertOptions.preserveLaneDrift = cli.preserveLaneDrift;
@@ -1655,7 +1709,7 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     const auto result = converter.convert(chart, convertOptions);
     auto outputPath = cli.out;
     if (!cli.dryRun && !outputPath.has_value()) {
-        outputPath = defaultOutputPath(input, convertOptions.targetKeyCount);
+        outputPath = defaultOutputPath(input, convertOptions);
     }
 
     std::cout << kToolName << " " << kToolVersion << "\n";
@@ -1671,6 +1725,7 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     std::cout << "Echo policy: " << keyconv::toString(convertOptions.echoPolicy) << "\n";
     std::cout << "Stream echo profile: " << keyconv::toString(convertOptions.streamEchoProfile) << "\n";
     std::cout << "Stream transform: " << keyconv::toString(convertOptions.streamTransformPolicy) << "\n";
+    std::cout << "Seed: " << convertOptions.seed << "\n";
     std::cout << "Echo diagnostics: " << (convertOptions.echoDiagnostics ? "yes" : "no") << "\n";
     std::cout << "Optimizer: " << keyconv::toString(convertOptions.optimizer) << "\n";
     std::cout << "Same-time epsilon: " << convertOptions.sameTimeEpsilonMs << " ms\n";

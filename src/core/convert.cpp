@@ -16,7 +16,10 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
+#include <set>
 #include <sstream>
+#include <string>
 
 namespace keyconv {
 
@@ -533,54 +536,82 @@ std::uint32_t mixHash(std::uint32_t value) {
     return value;
 }
 
-bool isStreamLikeToken(const PatternToken& token) {
-    return token.kind == PatternKind::Stream || token.kind == PatternKind::Burst;
-}
-
-Chart streamDetectionChart(std::vector<Note> notes, int keyCount) {
-    Chart chart;
-    chart.meta.sourceKeyCount = keyCount;
-    chart.meta.targetKeyCount = keyCount;
-    for (auto& note : notes) {
-        note.sourceLane = note.lane;
+std::uint32_t stableStringHash(const std::string& value) {
+    std::uint32_t hash = 2166136261U;
+    for (const char ch : value) {
+        hash ^= static_cast<unsigned char>(ch);
+        hash *= 16777619U;
     }
-    chart.notes = std::move(notes);
-    return chart;
+    return hash;
 }
 
-std::vector<int> streamLaneOrder(int preferredLane, int keyCount) {
+std::uint32_t superRandomNoteSeed(const Note& note,
+                                  int noteIndex,
+                                  int rankInGroup,
+                                  const ConvertOptions& options) {
+    std::uint32_t hash = options.seed == 0 ? 0x6d2b79f5U : options.seed;
+    hash ^= static_cast<std::uint32_t>(note.time) * 0x9e3779b9U;
+    hash ^= static_cast<std::uint32_t>(note.lane + 1) * 0x85ebca6bU;
+    hash ^= static_cast<std::uint32_t>(noteIndex + 17) * 0xc2b2ae35U;
+    hash ^= static_cast<std::uint32_t>(rankInGroup + 31) * 0x27d4eb2fU;
+    hash ^= stableStringHash(note.id);
+    return mixHash(hash);
+}
+
+std::vector<int> randomLaneOrder(std::uint32_t seed, int keyCount, int originalLane) {
     std::vector<int> lanes;
     if (keyCount <= 0) {
         return lanes;
     }
-    auto addUnique = [&](int lane) {
-        lane = clampInt(lane, 0, keyCount - 1);
-        if (std::find(lanes.begin(), lanes.end(), lane) == lanes.end()) {
-            lanes.push_back(lane);
-        }
-    };
 
-    addUnique(preferredLane);
-    for (int distance = 1; distance < keyCount; ++distance) {
-        addUnique(preferredLane + distance);
-        addUnique(preferredLane - distance);
+    lanes.reserve(static_cast<std::size_t>(keyCount));
+    for (int lane = 0; lane < keyCount; ++lane) {
+        lanes.push_back(lane);
+    }
+    std::stable_sort(lanes.begin(), lanes.end(), [&](int lhs, int rhs) {
+        const std::uint32_t left = mixHash(seed ^ (static_cast<std::uint32_t>(lhs + 1) * 0x9e3779b9U));
+        const std::uint32_t right = mixHash(seed ^ (static_cast<std::uint32_t>(rhs + 1) * 0x9e3779b9U));
+        if (left != right) {
+            return left < right;
+        }
+        return lhs < rhs;
+    });
+    if (lanes.size() > 1) {
+        const auto original = std::find(lanes.begin(), lanes.end(), originalLane);
+        if (original != lanes.end() && original == lanes.begin()) {
+            std::iter_swap(lanes.begin(), std::next(lanes.begin()));
+        }
     }
     return lanes;
 }
 
-std::optional<int> safeStreamLaneForNote(const std::vector<Note>& notes,
-                                         int noteIndex,
-                                         int preferredLane,
-                                         const ConvertOptions& options) {
+std::vector<Note> notesExceptGroup(const std::vector<Note>& notes, const std::vector<int>& group) {
+    std::vector<Note> others;
+    others.reserve(notes.size() > group.size() ? notes.size() - group.size() : 0);
+    for (int index = 0; index < static_cast<int>(notes.size()); ++index) {
+        if (std::find(group.begin(), group.end(), index) == group.end()) {
+            others.push_back(notes[static_cast<std::size_t>(index)]);
+        }
+    }
+    return others;
+}
+
+std::optional<int> safeSuperRandomLaneForNote(const std::vector<Note>& notes,
+                                              const std::vector<Note>& notesOutsideGroup,
+                                              int noteIndex,
+                                              const std::vector<int>& laneOrder,
+                                              const std::set<int>& usedLanes) {
     if (noteIndex < 0 || noteIndex >= static_cast<int>(notes.size())) {
         return std::nullopt;
     }
 
-    const auto others = notesExcept(notes, noteIndex);
-    for (const int lane : streamLaneOrder(preferredLane, options.targetKeyCount)) {
+    for (const int lane : laneOrder) {
+        if (usedLanes.count(lane) > 0) {
+            continue;
+        }
         Note moved = notes[static_cast<std::size_t>(noteIndex)];
         moved.lane = lane;
-        if (!hasSameTimeNote(others, moved.time, lane) && !hasLongNoteConflict(others, moved, lane)) {
+        if (!hasLongNoteConflict(notesOutsideGroup, moved, lane)) {
             return lane;
         }
     }
@@ -592,47 +623,50 @@ int applyStreamSuperRandom(std::vector<Note>& notes, const ConvertOptions& optio
         return 0;
     }
 
-    const auto detectionChart = streamDetectionChart(notes, options.targetKeyCount);
-    const auto slices = buildTimeSlices(detectionChart, options.targetKeyCount, options.sameTimeEpsilonMs);
-    const auto tokens = detectPatternTokens(slices);
-    int moved = 0;
+    std::map<int, std::vector<int>> groups;
+    for (int index = 0; index < static_cast<int>(notes.size()); ++index) {
+        groups[notes[static_cast<std::size_t>(index)].time].push_back(index);
+    }
 
-    for (const auto& token : tokens) {
-        if (!isStreamLikeToken(token)) {
-            continue;
-        }
-        for (int sliceIndex = token.startSlice; sliceIndex <= token.endSlice &&
-                                                sliceIndex < static_cast<int>(slices.size());
-             ++sliceIndex) {
-            if (sliceIndex < 0) {
-                continue;
+    int transformed = 0;
+    for (auto& [time, indices] : groups) {
+        (void)time;
+        std::stable_sort(indices.begin(), indices.end(), [&](int lhs, int rhs) {
+            const auto& left = notes[static_cast<std::size_t>(lhs)];
+            const auto& right = notes[static_cast<std::size_t>(rhs)];
+            if (left.lane != right.lane) {
+                return left.lane < right.lane;
             }
-            const auto& slice = slices[static_cast<std::size_t>(sliceIndex)];
-            if (slice.noteIndices.size() != 1) {
-                continue;
-            }
-            const int noteIndex = static_cast<int>(slice.noteIndices.front());
-            if (noteIndex < 0 || noteIndex >= static_cast<int>(notes.size()) ||
-                notes[static_cast<std::size_t>(noteIndex)].type == NoteType::Hold) {
-                continue;
-            }
+            return lhs < rhs;
+        });
 
+        const auto outsideGroup = notesExceptGroup(notes, indices);
+        std::set<int> usedLanes;
+        for (std::size_t rank = 0; rank < indices.size(); ++rank) {
+            const int noteIndex = indices[rank];
             const auto& note = notes[static_cast<std::size_t>(noteIndex)];
-            std::uint32_t hash = static_cast<std::uint32_t>(note.time);
-            hash ^= static_cast<std::uint32_t>(note.lane + 1) * 0x9e3779b9U;
-            hash ^= static_cast<std::uint32_t>(sliceIndex + 17) * 0x85ebca6bU;
-            hash ^= options.seed == 0 ? 0x6d2b79f5U : options.seed;
-            const int preferredLane =
-                static_cast<int>(mixHash(hash) % static_cast<std::uint32_t>(options.targetKeyCount));
-            const auto lane = safeStreamLaneForNote(notes, noteIndex, preferredLane, options);
-            if (lane.has_value() && *lane != note.lane) {
+            const auto lanes = randomLaneOrder(superRandomNoteSeed(note,
+                                                                   noteIndex,
+                                                                   static_cast<int>(rank),
+                                                                   options),
+                                               options.targetKeyCount,
+                                               note.lane);
+            const auto lane = safeSuperRandomLaneForNote(notes,
+                                                         outsideGroup,
+                                                         noteIndex,
+                                                         lanes,
+                                                         usedLanes);
+            if (lane.has_value()) {
+                usedLanes.insert(*lane);
                 notes[static_cast<std::size_t>(noteIndex)].lane = *lane;
-                ++moved;
+                ++transformed;
+            } else {
+                usedLanes.insert(note.lane);
             }
         }
     }
 
-    return moved;
+    return transformed;
 }
 
 std::vector<int> jitterOffsetPool(int time) {
@@ -688,7 +722,7 @@ StreamTransformStats applyStreamTransform(std::vector<Note>& notes,
                                            const ConvertOptions& options,
                                            bool allowJitter) {
     StreamTransformStats stats;
-    if (options.streamTransformPolicy == StreamTransformPolicy::SuperRandom) {
+    if (options.streamTransformPolicy == StreamTransformPolicy::SuperRandom && !allowJitter) {
         stats.transformedNotes = applyStreamSuperRandom(notes, options);
         if (stats.transformedNotes > 0) {
             notes = sortedNotes(std::move(notes));
@@ -700,6 +734,80 @@ StreamTransformStats applyStreamTransform(std::vector<Note>& notes,
         }
     }
     return stats;
+}
+
+std::string trimString(std::string value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::string stripExistingKeyWeaverMarker(std::string value) {
+    const auto markerPos = value.find("KeyWeaver");
+    if (markerPos == std::string::npos) {
+        return trimString(value);
+    }
+    return trimString(value.substr(0, markerPos));
+}
+
+std::string difficultyExpansionTag(const ConvertOptions& options) {
+    if (options.targetKeyCount <= options.sourceKeyCount) {
+        return {};
+    }
+    switch (options.expansionPolicy) {
+        case ExpansionPolicy::PreserveTapPlusMore:
+            return "more";
+        case ExpansionPolicy::PreserveTapPlus:
+            return "normal";
+        case ExpansionPolicy::PreserveTapPlusLow:
+            return "low";
+        default:
+            return {};
+    }
+}
+
+std::string difficultyStreamTag(StreamTransformPolicy policy) {
+    switch (policy) {
+        case StreamTransformPolicy::SuperRandom:
+            return "sRan";
+        case StreamTransformPolicy::FullJitter:
+            return "jitter";
+        case StreamTransformPolicy::Off:
+            return {};
+    }
+    return {};
+}
+
+std::string conversionDifficultyMarker(const ConvertOptions& options) {
+    std::string marker = "KeyWeaver" + std::to_string(options.targetKeyCount) + "K";
+    const auto streamTag = difficultyStreamTag(options.streamTransformPolicy);
+    if (!streamTag.empty()) {
+        marker += "-";
+        marker += streamTag;
+    }
+    const auto expansionTag = difficultyExpansionTag(options);
+    if (!expansionTag.empty()) {
+        marker += " (";
+        marker += expansionTag;
+        marker += ")";
+    }
+    return marker;
+}
+
+std::string convertedDifficultyName(const std::optional<std::string>& existing,
+                                    const ConvertOptions& options) {
+    const auto marker = conversionDifficultyMarker(options);
+    if (!existing.has_value() || existing->empty()) {
+        return marker;
+    }
+    const auto baseName = stripExistingKeyWeaverMarker(*existing);
+    if (baseName.empty()) {
+        return marker;
+    }
+    return baseName + " " + marker;
 }
 
 std::optional<std::pair<int, int>> firstNearTimePair(const std::vector<Note>& notes, const ConvertOptions& options) {
@@ -908,6 +1016,7 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     }
 
     result.chart.notes = std::move(placed);
+    result.chart.meta.version = convertedDifficultyName(chart.meta.version, options);
     fillReportCounts(result.report, result.chart.notes, options.targetKeyCount);
     result.report.quality = computeQualityReport(chart, result.chart, options.sourceKeyCount, options.targetKeyCount);
     const auto finalNoOverlap = validateNoOverlap(result.chart.notes, options.targetKeyCount);

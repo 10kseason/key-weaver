@@ -5,6 +5,8 @@
 - Added Preserve Convert lane drift: strict source-jack/no-generated-note conversion can now move non-jack phrases through adjacent safe lanes instead of staying locked to one fixed skeleton.
 - Added `auto-more` / `preserve-tap-plus-more` expansion for a larger high-key preserve-tap-plus growth budget.
 - Added `--stream-transform superrandom` and `--stream-transform full-jitter` for deterministic stream relaning and full-chart 1-15 ms per-note jitter.
+- Changed `superrandom` to randomize every note to a safe lane instead of only detected stream runs; `--seed` can vary the deterministic lane order.
+- Converted osu!mania difficulty names and default output filenames now distinguish expansion intensity and stream transforms, for example `KeyWeaver10K-sRan (more)` and `KeyWeaver10K-jitter (low)`.
 - Streamlined the GUI choices to expansion `auto-more` / `auto-normal` / `auto-low`, compress `auto`, and stream `off` / `superrandom` / `full-jitter`.
 
 ## 0.5.6

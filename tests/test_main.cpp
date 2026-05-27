@@ -2895,7 +2895,7 @@ void testAutoMoreExpansionReportsLargerBudget() {
             "auto-more should use the larger high-key generated-note budget");
 }
 
-void testStreamSuperRandomRelanesStreamRuns() {
+void testStreamSuperRandomRelanesEveryNote() {
     auto chart = makeChart(10, {});
     for (int i = 0; i < 10; ++i) {
         keyconv::Note note;
@@ -2917,18 +2917,51 @@ void testStreamSuperRandomRelanesStreamRuns() {
     const keyconv::Converter converter;
     const auto first = converter.convert(chart, options);
     const auto second = converter.convert(chart, options);
+    auto seededOptions = options;
+    seededOptions.seed = 12345;
+    const auto seeded = converter.convert(chart, seededOptions);
     auto lanes = lanesOf(first.chart);
     std::sort(lanes.begin(), lanes.end());
     const auto uniqueEnd = std::unique(lanes.begin(), lanes.end());
 
     require(first.report.quality.streamTransformPolicy == "superrandom",
             "superrandom stream transform should be reported");
-    require(first.report.quality.streamTransformedNotes > 0,
-            "superrandom stream transform should move stream notes");
+    require(first.report.quality.streamTransformedNotes == static_cast<int>(chart.notes.size()),
+            "superrandom stream transform should touch every note");
     require(std::distance(lanes.begin(), uniqueEnd) > 1,
-            "superrandom stream transform should spread a stream across lanes");
+            "superrandom stream transform should spread notes across lanes");
     require(keyconv::exportOsu(first.chart, 10) == keyconv::exportOsu(second.chart, 10),
             "superrandom stream transform should be deterministic");
+    require(keyconv::exportOsu(first.chart, 10) != keyconv::exportOsu(seeded.chart, 10),
+            "superrandom stream transform should change when the seed changes");
+}
+
+void testStreamSuperRandomKeepsChordDistinct() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1750, 1, keyconv::NoteType::Hold, 2250},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 4;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.streamTransformPolicy = keyconv::StreamTransformPolicy::SuperRandom;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    const auto validation = keyconv::validateNoOverlap(result.chart.notes, 4);
+
+    require(result.report.quality.streamTransformedNotes == static_cast<int>(chart.notes.size()),
+            "superrandom should touch chord and hold notes");
+    require(validation.sameTimeCollisions == 0, "superrandom should keep same-time chord lanes distinct");
+    require(validation.longNoteConflicts == 0, "superrandom should avoid LN conflicts");
 }
 
 void testFullJitterOffsetsSameTimeChords() {
@@ -2970,6 +3003,43 @@ void testFullJitterOffsetsSameTimeChords() {
             "full-jitter should offset every note");
     require(chordTimes.size() == 3 && std::distance(chordTimes.begin(), uniqueEnd) > 1,
             "full-jitter should split a same-time chord into close ms offsets");
+}
+
+void testDifficultyNameMarksExpansionAndStreamTransform() {
+    auto chart = makeChart(4,
+                           {
+                               {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1250, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1750, 3, keyconv::NoteType::Tap, std::nullopt},
+                           });
+    chart.meta.version = "4K";
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+
+    const keyconv::Converter converter;
+    auto result = converter.convert(chart, options);
+    auto reparsed = keyconv::parseOsu(keyconv::exportOsu(result.chart, 10), {});
+    require(reparsed.meta.version == "4K KeyWeaver10K (normal)",
+            "normal expansion should be visible in osu difficulty name");
+
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+    options.streamTransformPolicy = keyconv::StreamTransformPolicy::SuperRandom;
+    result = converter.convert(chart, options);
+    reparsed = keyconv::parseOsu(keyconv::exportOsu(result.chart, 10), {});
+    require(reparsed.meta.version == "4K KeyWeaver10K-sRan (more)",
+            "superrandom more conversion should be visible in osu difficulty name");
+
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusLow;
+    options.streamTransformPolicy = keyconv::StreamTransformPolicy::FullJitter;
+    result = converter.convert(chart, options);
+    reparsed = keyconv::parseOsu(keyconv::exportOsu(result.chart, 10), {});
+    require(reparsed.meta.version == "4K KeyWeaver10K-jitter (low)",
+            "jitter low conversion should be visible in osu difficulty name");
 }
 
 }  // namespace
@@ -3074,8 +3144,11 @@ int main() {
         {"preserve convert lane drift keeps source jack together",
          testPreserveConvertLaneDriftKeepsSourceJackTogether},
         {"auto-more expansion reports larger budget", testAutoMoreExpansionReportsLargerBudget},
-        {"stream superrandom relanes stream runs", testStreamSuperRandomRelanesStreamRuns},
+        {"stream superrandom relanes every note", testStreamSuperRandomRelanesEveryNote},
+        {"stream superrandom keeps chord distinct", testStreamSuperRandomKeepsChordDistinct},
         {"full jitter offsets same-time chords", testFullJitterOffsetsSameTimeChords},
+        {"difficulty name marks expansion and stream transform",
+         testDifficultyNameMarksExpansionAndStreamTransform},
     };
 
     try {

@@ -126,7 +126,8 @@ With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mi
 Use --expansion-policy auto-low for conservative high-key generation capped at 12.5%.
 Use --expansion-policy auto-more for the larger high-key preserve-tap-plus growth budget.
 Use --preserve-convert for faithful mapping, strict source-jack preservation, no generated notes, and adjacent safe-lane drift.
-Use --stream-transform superrandom for deterministic stream relaning, or full-jitter for 1-15 ms per-note zure-style timing spread.
+Use --stream-transform superrandom for deterministic per-note random lane assignment, or full-jitter for 1-15 ms per-note zure-style timing spread.
+Use --seed to vary deterministic stream-transform output.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
 Normal-mode algorithm contract: docs/algorithm-lock-v0.5.5.md
@@ -134,7 +135,7 @@ Normal-mode algorithm contract: docs/algorithm-lock-v0.5.5.md
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -168,6 +169,17 @@ $($RuntimeDlls -join "`n")
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 4 --stream-transform full-jitter --dry-run *> (Join-Path $SmokeDir "stream_full_jitter.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "stream full-jitter dry-run smoke failed" }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 4 --stream-transform superrandom --seed 7 --dry-run *> (Join-Path $SmokeDir "stream_superrandom.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "stream superrandom dry-run smoke failed" }
+
+    $DifficultyMarkerOut = Join-Path $SmokeDir "difficulty_marker.osu"
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --expansion-policy auto-more --stream-transform superrandom --seed 7 --out $DifficultyMarkerOut *> (Join-Path $SmokeDir "difficulty_marker.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "difficulty marker smoke failed" }
+    $DifficultyMarkerText = Get-Content -LiteralPath $DifficultyMarkerOut -Raw
+    if ($DifficultyMarkerText -notmatch "Version:4K KeyWeaver10K-sRan \(more\)") {
+        throw "difficulty marker smoke failed without the expected Version marker"
+    }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --expansion-policy preserve-tap-plus --dry-run --report (Join-Path $SmokeDir "profile_4k_to_10k.report.json") *> (Join-Path $SmokeDir "profile_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "auto-profile sample smoke failed" }

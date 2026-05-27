@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.6",
+    [string]$Version = "0.5.7",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -124,7 +124,9 @@ Gesture Rail is on by default; use --gesture-rail off to compare older lane scor
 Preserve Tap Plus uses key-growth budgets and 10K hand-zone balancing.
 With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mid/high/chordHeavy/jackRisk windows for Composer pressure.
 Use --expansion-policy auto-low for conservative high-key generation capped at 12.5%.
-Use --preserve-convert for faithful mapping, strict source-jack preservation, and no generated notes.
+Use --expansion-policy auto-more for the larger high-key preserve-tap-plus growth budget.
+Use --preserve-convert for faithful mapping, strict source-jack preservation, no generated notes, and adjacent safe-lane drift.
+Use --stream-transform superrandom for deterministic stream relaning, or full-jitter for 1-15 ms per-note zure-style timing spread.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
 Normal-mode algorithm contract: docs/algorithm-lock-v0.5.5.md
@@ -132,7 +134,7 @@ Normal-mode algorithm contract: docs/algorithm-lock-v0.5.5.md
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/preserve-convert dry-run smokes, osu!mania sample conversion/report, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -158,8 +160,14 @@ $($RuntimeDlls -join "`n")
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 10 --expansion-policy auto-low --dry-run *> (Join-Path $SmokeDir "auto_low.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "auto-low dry-run smoke failed" }
 
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 10 --expansion-policy auto-more --dry-run *> (Join-Path $SmokeDir "auto_more.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "auto-more dry-run smoke failed" }
+
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 10 --preserve-convert --dry-run *> (Join-Path $SmokeDir "preserve_convert.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "preserve-convert dry-run smoke failed" }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 4 --stream-transform full-jitter --dry-run *> (Join-Path $SmokeDir "stream_full_jitter.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "stream full-jitter dry-run smoke failed" }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --expansion-policy preserve-tap-plus --dry-run --report (Join-Path $SmokeDir "profile_4k_to_10k.report.json") *> (Join-Path $SmokeDir "profile_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "auto-profile sample smoke failed" }

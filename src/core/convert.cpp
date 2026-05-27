@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <sstream>
 
@@ -517,6 +519,189 @@ void retimeNotePreserveDuration(Note& note, int newTime) {
     }
 }
 
+struct StreamTransformStats {
+    int transformedNotes = 0;
+    int jitteredNotes = 0;
+};
+
+std::uint32_t mixHash(std::uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7feb352dU;
+    value ^= value >> 15;
+    value *= 0x846ca68bU;
+    value ^= value >> 16;
+    return value;
+}
+
+bool isStreamLikeToken(const PatternToken& token) {
+    return token.kind == PatternKind::Stream || token.kind == PatternKind::Burst;
+}
+
+Chart streamDetectionChart(std::vector<Note> notes, int keyCount) {
+    Chart chart;
+    chart.meta.sourceKeyCount = keyCount;
+    chart.meta.targetKeyCount = keyCount;
+    for (auto& note : notes) {
+        note.sourceLane = note.lane;
+    }
+    chart.notes = std::move(notes);
+    return chart;
+}
+
+std::vector<int> streamLaneOrder(int preferredLane, int keyCount) {
+    std::vector<int> lanes;
+    if (keyCount <= 0) {
+        return lanes;
+    }
+    auto addUnique = [&](int lane) {
+        lane = clampInt(lane, 0, keyCount - 1);
+        if (std::find(lanes.begin(), lanes.end(), lane) == lanes.end()) {
+            lanes.push_back(lane);
+        }
+    };
+
+    addUnique(preferredLane);
+    for (int distance = 1; distance < keyCount; ++distance) {
+        addUnique(preferredLane + distance);
+        addUnique(preferredLane - distance);
+    }
+    return lanes;
+}
+
+std::optional<int> safeStreamLaneForNote(const std::vector<Note>& notes,
+                                         int noteIndex,
+                                         int preferredLane,
+                                         const ConvertOptions& options) {
+    if (noteIndex < 0 || noteIndex >= static_cast<int>(notes.size())) {
+        return std::nullopt;
+    }
+
+    const auto others = notesExcept(notes, noteIndex);
+    for (const int lane : streamLaneOrder(preferredLane, options.targetKeyCount)) {
+        Note moved = notes[static_cast<std::size_t>(noteIndex)];
+        moved.lane = lane;
+        if (!hasSameTimeNote(others, moved.time, lane) && !hasLongNoteConflict(others, moved, lane)) {
+            return lane;
+        }
+    }
+    return std::nullopt;
+}
+
+int applyStreamSuperRandom(std::vector<Note>& notes, const ConvertOptions& options) {
+    if (options.targetKeyCount <= 1 || notes.empty()) {
+        return 0;
+    }
+
+    const auto detectionChart = streamDetectionChart(notes, options.targetKeyCount);
+    const auto slices = buildTimeSlices(detectionChart, options.targetKeyCount, options.sameTimeEpsilonMs);
+    const auto tokens = detectPatternTokens(slices);
+    int moved = 0;
+
+    for (const auto& token : tokens) {
+        if (!isStreamLikeToken(token)) {
+            continue;
+        }
+        for (int sliceIndex = token.startSlice; sliceIndex <= token.endSlice &&
+                                                sliceIndex < static_cast<int>(slices.size());
+             ++sliceIndex) {
+            if (sliceIndex < 0) {
+                continue;
+            }
+            const auto& slice = slices[static_cast<std::size_t>(sliceIndex)];
+            if (slice.noteIndices.size() != 1) {
+                continue;
+            }
+            const int noteIndex = static_cast<int>(slice.noteIndices.front());
+            if (noteIndex < 0 || noteIndex >= static_cast<int>(notes.size()) ||
+                notes[static_cast<std::size_t>(noteIndex)].type == NoteType::Hold) {
+                continue;
+            }
+
+            const auto& note = notes[static_cast<std::size_t>(noteIndex)];
+            std::uint32_t hash = static_cast<std::uint32_t>(note.time);
+            hash ^= static_cast<std::uint32_t>(note.lane + 1) * 0x9e3779b9U;
+            hash ^= static_cast<std::uint32_t>(sliceIndex + 17) * 0x85ebca6bU;
+            hash ^= options.seed == 0 ? 0x6d2b79f5U : options.seed;
+            const int preferredLane =
+                static_cast<int>(mixHash(hash) % static_cast<std::uint32_t>(options.targetKeyCount));
+            const auto lane = safeStreamLaneForNote(notes, noteIndex, preferredLane, options);
+            if (lane.has_value() && *lane != note.lane) {
+                notes[static_cast<std::size_t>(noteIndex)].lane = *lane;
+                ++moved;
+            }
+        }
+    }
+
+    return moved;
+}
+
+std::vector<int> jitterOffsetPool(int time) {
+    std::vector<int> offsets;
+    offsets.reserve(30);
+    const int direction = ((std::max(0, time) / 500) % 2 == 0) ? 1 : -1;
+    for (int magnitude = 1; magnitude <= 15; ++magnitude) {
+        offsets.push_back(direction * magnitude);
+        offsets.push_back(-direction * magnitude);
+    }
+    return offsets;
+}
+
+int applyFullJitter(std::vector<Note>& notes) {
+    std::map<int, std::vector<int>> groups;
+    for (int index = 0; index < static_cast<int>(notes.size()); ++index) {
+        groups[notes[static_cast<std::size_t>(index)].time].push_back(index);
+    }
+
+    int jittered = 0;
+    for (auto& [time, indices] : groups) {
+        std::stable_sort(indices.begin(), indices.end(), [&](int lhs, int rhs) {
+            const auto& left = notes[static_cast<std::size_t>(lhs)];
+            const auto& right = notes[static_cast<std::size_t>(rhs)];
+            if (left.lane != right.lane) {
+                return left.lane < right.lane;
+            }
+            return lhs < rhs;
+        });
+
+        const auto offsets = jitterOffsetPool(time);
+        std::uint32_t hash = static_cast<std::uint32_t>(time);
+        hash ^= static_cast<std::uint32_t>(indices.size() + 1) * 0x9e3779b9U;
+        const int rotation = static_cast<int>(mixHash(hash) % static_cast<std::uint32_t>(offsets.size()));
+        for (std::size_t rank = 0; rank < indices.size(); ++rank) {
+            int offset = offsets[(rank + static_cast<std::size_t>(rotation)) % offsets.size()];
+            if (time + offset < 0) {
+                offset = std::abs(offset);
+            }
+            const int noteIndex = indices[rank];
+            const int newTime = time + offset;
+            if (newTime != notes[static_cast<std::size_t>(noteIndex)].time) {
+                retimeNotePreserveDuration(notes[static_cast<std::size_t>(noteIndex)], newTime);
+                ++jittered;
+            }
+        }
+    }
+
+    return jittered;
+}
+
+StreamTransformStats applyStreamTransform(std::vector<Note>& notes,
+                                           const ConvertOptions& options,
+                                           bool allowJitter) {
+    StreamTransformStats stats;
+    if (options.streamTransformPolicy == StreamTransformPolicy::SuperRandom) {
+        stats.transformedNotes = applyStreamSuperRandom(notes, options);
+        if (stats.transformedNotes > 0) {
+            notes = sortedNotes(std::move(notes));
+        }
+    } else if (options.streamTransformPolicy == StreamTransformPolicy::FullJitter && allowJitter) {
+        stats.jitteredNotes = applyFullJitter(notes);
+        if (stats.jitteredNotes > 0) {
+            notes = sortedNotes(std::move(notes));
+        }
+    }
+    return stats;
+}
+
 std::optional<std::pair<int, int>> firstNearTimePair(const std::vector<Note>& notes, const ConvertOptions& options) {
     if (!distancePolicyRejects(options.distancePolicy)) {
         return std::nullopt;
@@ -633,6 +818,7 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     result.chart = chart;
     result.chart.meta.targetKeyCount = options.targetKeyCount;
     CompressionPlanStats compressionStats;
+    StreamTransformStats streamTransformStats;
     int preventedJacksByAssignment = 0;
     int preventedJacksByRepair = 0;
     int createdJacksFromBaseMapping = 0;
@@ -684,6 +870,12 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
                                   compressionStats.warnings.begin(),
                                   compressionStats.warnings.end());
 
+    {
+        const auto stats = applyStreamTransform(placed, options, false);
+        streamTransformStats.transformedNotes += stats.transformedNotes;
+        streamTransformStats.jitteredNotes += stats.jitteredNotes;
+    }
+
     applyCollisionPolicy(placed,
                          options.targetKeyCount,
                          options.collisionPolicy,
@@ -708,6 +900,11 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     const auto distanceSanitizerStats = sanitizeNearTimeOverlaps(chart, placed, options);
     if (distanceSanitizerStats.collapsedNearTimePairs > 0) {
         placed = sortedNotes(std::move(placed));
+    }
+    {
+        const auto stats = applyStreamTransform(placed, options, true);
+        streamTransformStats.transformedNotes += stats.transformedNotes;
+        streamTransformStats.jitteredNotes += stats.jitteredNotes;
     }
 
     result.chart.notes = std::move(placed);
@@ -778,6 +975,9 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     result.report.quality.algorithmVersion = expansionStats.algorithmVersion;
     result.report.quality.expansionPolicy = toString(expansionStats.policy);
     result.report.quality.streamEchoProfile = toString(expansionStats.streamEchoProfile);
+    result.report.quality.streamTransformPolicy = toString(options.streamTransformPolicy);
+    result.report.quality.streamTransformedNotes = streamTransformStats.transformedNotes;
+    result.report.quality.streamJitteredNotes = streamTransformStats.jitteredNotes;
     result.report.quality.addedNotes = expansionStats.addedNotes;
     result.report.quality.addedByTapPlus = expansionStats.addedByTapPlus;
     result.report.quality.addedByChordFill = expansionStats.addedByChordFill;

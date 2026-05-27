@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.7
+
+- Added Preserve Convert lane drift: strict source-jack/no-generated-note conversion can now move non-jack phrases through adjacent safe lanes instead of staying locked to one fixed skeleton.
+- Added `auto-more` / `preserve-tap-plus-more` expansion for a larger high-key preserve-tap-plus growth budget.
+- Added `--stream-transform superrandom` and `--stream-transform full-jitter` for deterministic stream relaning and full-chart 1-15 ms per-note jitter.
+- Streamlined the GUI choices to expansion `auto-more` / `auto-normal` / `auto-low`, compress `auto`, and stream `off` / `superrandom` / `full-jitter`.
+
 ## 0.5.6
 
 - Promoted the current KeyWeaver surface to `v0.5.6`.

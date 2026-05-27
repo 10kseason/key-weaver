@@ -53,9 +53,9 @@ struct ToolOptions {
     std::filesystem::path outputDir;
     std::wstring sourceOverride;
     std::wstring targetKeys = L"10";
-    std::wstring expansionPolicy = L"auto-normal";
+    std::wstring expansionPolicy = L"auto (normal)";
     std::wstring compressPolicy = L"auto";
-    std::wstring streamEchoProfile = L"conservative";
+    std::wstring streamTransform = L"off";
     bool preserveConvert = false;
 };
 
@@ -328,6 +328,19 @@ void appendArg(std::wstring& command, const std::wstring& arg) {
     command += arg;
 }
 
+std::wstring expansionPolicyCliValue(const std::wstring& value) {
+    if (value == L"auto (more)") {
+        return L"auto-more";
+    }
+    if (value == L"auto (normal)") {
+        return L"auto-normal";
+    }
+    if (value == L"auto (low)") {
+        return L"auto-low";
+    }
+    return value;
+}
+
 std::wstring buildSingleCommand(const ToolOptions& options, OutputPaths& paths) {
     const auto base = makeOutputBase(options, L"");
     paths.outputChart = base;
@@ -345,18 +358,16 @@ std::wstring buildSingleCommand(const ToolOptions& options, OutputPaths& paths) 
     appendArg(command, options.targetKeys);
     appendArg(command, L"--compress-policy");
     appendArg(command, options.compressPolicy);
+    const auto expansionPolicy = expansionPolicyCliValue(options.expansionPolicy);
     if (options.preserveConvert) {
         appendArg(command, L"--preserve-convert");
-    } else if (options.expansionPolicy != L"auto" && options.expansionPolicy != L"auto-normal") {
+    } else if (expansionPolicy != L"auto" && expansionPolicy != L"auto-normal") {
         appendArg(command, L"--expansion-policy");
-        appendArg(command, options.expansionPolicy);
+        appendArg(command, expansionPolicy);
     }
-    if (!options.preserveConvert &&
-        (options.expansionPolicy == L"echo" || options.expansionPolicy == L"harder-remix")) {
-        appendArg(command, L"--echo-policy");
-        appendArg(command, L"stair-trill-stream");
-        appendArg(command, L"--stream-echo-profile");
-        appendArg(command, options.streamEchoProfile);
+    if (!options.preserveConvert && options.streamTransform != L"off") {
+        appendArg(command, L"--stream-transform");
+        appendArg(command, options.streamTransform);
     }
     appendArg(command, L"--out");
     appendArg(command, quoteArg(paths.outputChart));
@@ -706,7 +717,7 @@ ToolOptions readToolOptions(const AppState& state) {
     options.targetKeys = trim(getWindowText(state.targetEdit));
     options.expansionPolicy = comboText(state.expansionCombo);
     options.compressPolicy = comboText(state.compressCombo);
-    options.streamEchoProfile = comboText(state.streamProfileCombo);
+    options.streamTransform = comboText(state.streamProfileCombo);
     options.preserveConvert =
         SendMessageW(state.preserveConvertCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
     return options;
@@ -1035,18 +1046,15 @@ void createUi(AppState& state) {
     makeControl(state, L"STATIC", L"Expansion", 0, labelX, y + 4, 96, 20, -1);
     state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, editX, y, 180, 160,
                                        kComboExpansion);
-    for (const auto* item :
-         {L"auto-normal", L"auto-low", L"preserve", L"preserve-tap-plus", L"chord-fill", L"training-scaffold",
-          L"echo", L"harder-remix"}) {
+    for (const auto* item : {L"auto (more)", L"auto (normal)", L"auto (low)"}) {
         addComboItem(state.expansionCombo, item);
     }
-    setComboSelection(state.expansionCombo, L"auto-normal");
+    setComboSelection(state.expansionCombo, L"auto (normal)");
 
     makeControl(state, L"STATIC", L"Compress", 0, 320, y + 4, 70, 20, -1);
     state.compressCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 392, y, 180, 180,
                                       kComboCompress);
-    for (const auto* item : {L"auto", L"preserve-strict", L"no-overlap-drop", L"no-overlap-roll",
-                            L"no-overlap-hybrid", L"training-simplify"}) {
+    for (const auto* item : {L"auto"}) {
         addComboItem(state.compressCombo, item);
     }
     setComboSelection(state.compressCombo, L"auto");
@@ -1054,10 +1062,10 @@ void createUi(AppState& state) {
     makeControl(state, L"STATIC", L"Stream", 0, 584, y + 4, 58, 20, -1);
     state.streamProfileCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
                                            642, y, 120, 140, kComboStreamProfile);
-    for (const auto* item : {L"conservative", L"balanced", L"training", L"experimental"}) {
+    for (const auto* item : {L"off", L"superrandom", L"full-jitter"}) {
         addComboItem(state.streamProfileCombo, item);
     }
-    setComboSelection(state.streamProfileCombo, L"conservative");
+    setComboSelection(state.streamProfileCombo, L"off");
     y += 38;
 
     state.preserveConvertCheck = makeControl(state,
@@ -1216,7 +1224,7 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.5.6 Playtest Tool",
+                                L"KeyWeaver v0.5.7 Playtest Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,

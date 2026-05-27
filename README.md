@@ -1,4 +1,4 @@
-# KeyWeaver v0.5.6
+# KeyWeaver v0.5.7
 
 C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
@@ -30,6 +30,7 @@ Current scope:
 - v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
 - v0.5.6 `auto-low` expansion for conservative high-key conversion capped at 12.5% generated notes
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
+- v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus `auto-more` expansion and deterministic stream transforms (`superrandom`, `full-jitter`)
 - v0.5.2 Preserve Tap Plus policy with key-growth budgets, hand-zone balance, and LN-heavy window additions
 - v0.5.1 no-created-jack invariant across assignment, repair, expansion, and final sanitization
 - v0.5.1 auto expansion default: preserve on same/lower key counts, preserve-tap-plus on higher key counts
@@ -48,7 +49,7 @@ Current scope:
 - v0.5.5 automatically loads the bundled broad 10K style profile for target-10 conversions when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; `--target-profile` overrides it
 - v0.5.5 algorithm lock is documented at `docs/algorithm-lock-v0.5.5.md`; Composer/Repair local pressure is fixed to density-bucket window features, not `chartSummary`
 
-Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, random remix, burst echo synthesis, or DP stream splitting.
+Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, seeded random remix, burst echo synthesis, or DP stream splitting.
 
 ## Build
 
@@ -66,10 +67,10 @@ cmake --build build --target keyconv_gui
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.5.6
+.\scripts\package_release.ps1 -Version 0.5.7
 ```
 
-The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.5.6-win64-<timestamp>.zip` plus a `.sha256` file.
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.5.7-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -127,11 +128,13 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --no-snap-roll          allow raw-ms roll candidates and report unsnapped rolled notes
   --snap-tolerance <ms>   snap validation tolerance, default 2
   --max-roll-ms <ms>      maximum roll distance from original time, default 64
-  --expansion-policy <p>  auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random
+  --expansion-policy <p>  auto-more | auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random
   --max-added-ratio <n>   max added notes as source-note ratio, default 0.45
   --max-added-per-slice <n> max added notes per source slice, default 2
   --max-added-per-measure <n> max added notes per approximate measure, default 16
-  --preserve-convert     faithful mapping, strict source-jack preservation, and no generated notes
+  --preserve-convert     faithful mapping, strict source-jack preservation, no generated notes, adjacent safe-lane drift
+  --preserve-lane-drift  allow Preserve Convert lane drift without the full preset
+  --no-preserve-lane-drift disable Preserve Convert lane drift
   --expansion-min-gap <ms> minimum positive object gap for added notes, default 16
   --expansion-same-lane-min-gap <ms> minimum same-lane gap for added notes, default 20
   --snap-added-notes      require added notes to be timing-grid snapped, default
@@ -139,6 +142,7 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --expansion-snap-tolerance <ms> snap validation tolerance for added notes, default 2
   --echo-policy <p>       off | stair | trill | stream | stair-trill | stair-trill-stream | auto
   --stream-echo-profile <p> conservative | balanced | training | experimental, default conservative
+  --stream-transform <p>  off | superrandom | full-jitter
   --echo-diagnostics      print StreamEcho reject breakdown without changing conversion output
   --max-echo-ratio <n>    max echo notes as source-note ratio, default 0.08
   --max-echo-per-pattern <n> max echo notes per pattern, default 4
@@ -216,7 +220,7 @@ GUI scope:
 - drag one or more chart files onto an already-open GUI window to convert with the current Target field
 - drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads them so Target can be set before conversion
 - optional source-key override and target key; drag-and-drop and batch conversion use this Target field instead of assuming 10K
-- choose expansion/compress/profile options, including auto-normal, auto-low, and Preserve Convert
+- choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
 - run one conversion and parse report JSON
 - run batch conversion for dropped/loaded files
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
@@ -238,9 +242,9 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. When multiple files are dropped, Output is blank by default and each chart writes beside its own source file; set Output to force every batch item into one folder.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
-- If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. Use `--expansion-policy auto-low` for the same auto routing with a conservative 12.5% high-key generation cap, or explicit `--expansion-policy preserve` to disable deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
+- If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. Use `--expansion-policy auto-more` for the larger 45% high-key growth budget, `--expansion-policy auto-low` for the conservative 12.5% cap, or explicit `--expansion-policy preserve` to disable deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
 - `--expansion-policy preserve-tap-plus` preserves original taps/LNs and adds deterministic notes. On high-key 8K/10K conversion its default global budget scales with key growth from 18.75% up to 37.5% of source objects, so 7K-to-10K targets at most about 1.375x total note count before safety rejects. With `--target-profile`, adaptive growth budgeting redistributes that cap per 500-4000 ms profile window: low-density/under-expanded windows can spend more, while dense, chord-heavy, or LN-heavy windows spend less.
-- `--preserve-convert` is the strict preservation preset: faithful lane mapping, source-jack strict reporting, no playable jack split accounting, and `preserve` expansion. Use it when generated notes or jack smoothing are more harmful than a thinner high-key output.
+- `--preserve-convert` is the strict preservation preset: faithful lane mapping, source-jack strict reporting, no playable jack split accounting, and `preserve` expansion. It now enables safe adjacent-lane drift for non-jack phrases so the output is not locked to one fixed lane skeleton. Use `--no-preserve-lane-drift` to restore the older fixed feel.
 - Tap-plus scans 2000 ms local windows. Tap-heavy slices still add taps, while LN-heavy windows only add holds on slices that already contain a source LN. Source taps are never converted into LNs, and generated holds stay near a same-time LN anchor with collision, LN-conflict, and no-created-jack guards still taking priority.
 - Higher-key `preserve-tap-plus` also balances target hand zones. For 10K, lanes 0-4 are treated as left hand and lanes 5-9 as right hand; reports include `leftHandNotes`, `rightHandNotes`, and `handBalanceRatio`.
 - Generated LNs are normalized to the nearest same-time adjacent LN duration so duplicated or tap-plus long notes keep matching lengths.
@@ -255,6 +259,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - The GUI playtest tool is a Windows harness around `KeyWeaver.exe`; it is not a realtime renderer, editor, audio player, BMS frontend, DP splitter, or beam-search UI.
 - Feel metrics include `densityDelta`, `chordRateBefore`, `chordRateAfter`, `laneCoverageBefore`, `laneCoverageAfter`, `laneEntropyBefore`, `laneEntropyAfter`, `lnAnchorPressureBefore`, `lnAnchorPressureAfter`, `handSpreadAfter`, and `feelTags`.
 - `--expansion-policy echo` implements same-slice stair/trill reinforcement and density-gated stream echo; check `streamEchoProfile`, `streamEchoCandidates`, `streamRawPatternCandidates`, `streamEligiblePatternCandidates`, `streamRawLaneCandidates`, `streamSafeLaneCandidates`, `streamAcceptedCandidates`, primary reject counters such as `rejectedStreamPrimaryByLocalNps`, any-reason counters such as `rejectedStreamEchoByLocalNps`, `streamEchoAddedRatio`, and `maxObservedLocalNpsAfterEcho`.
+- `--stream-transform superrandom` deterministically relanes detected stream/burst runs across safe target lanes without adding notes. `--stream-transform full-jitter` offsets every note by a deterministic 1-15 ms amount for full-chart zure-style timing spread; reports expose `streamTransformPolicy`, `streamTransformedNotes`, and `streamJitteredNotes`.
 - `streamEchoCandidates` is kept for compatibility and equals `streamRawPatternCandidates`. Primary reject counts are mutually exclusive first-fail counters for accounting; any-reason counters are diagnostic counters and are not guaranteed to sum to the candidate count.
 - `--expansion-policy seeded-random` is accepted as a reserved policy but does not synthesize random notes.
 - The exporter regenerates `HitObjects` and preserves other sections where practical.

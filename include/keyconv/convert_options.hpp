@@ -16,8 +16,10 @@ struct ConvertOptions {
     ExpansionPolicy expansionPolicy = ExpansionPolicy::PreserveNoteCount;
     EchoPolicy echoPolicy = EchoPolicy::Off;
     StreamEchoProfile streamEchoProfile = StreamEchoProfile::Conservative;
+    StreamTransformPolicy streamTransformPolicy = StreamTransformPolicy::Off;
     JackPreservePolicy jackPreservePolicy = JackPreservePolicy::PreservePlayable;
     bool gestureRailEnabled = true;
+    bool preserveLaneDrift = false;
     bool echoDiagnostics = false;
     bool dpMode = false;
     int beamWidth = 16;

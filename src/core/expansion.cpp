@@ -149,6 +149,13 @@ double preserveTapPlusTargetRatio(int sourceKeyCount, int targetKeyCount) {
     return std::min(maxRatio, baseRatio + growthRatio);
 }
 
+double preserveTapPlusMoreTargetRatio(int sourceKeyCount, int targetKeyCount) {
+    if (targetKeyCount <= sourceKeyCount || sourceKeyCount <= 0) {
+        return 0.0;
+    }
+    return 0.45;
+}
+
 double preserveTapPlusLowTargetRatio(int sourceKeyCount, int targetKeyCount) {
     if (targetKeyCount <= sourceKeyCount || sourceKeyCount <= 0) {
         return 0.0;
@@ -183,6 +190,9 @@ ExpansionComposerSettings composerSettingsForPolicy(ExpansionPolicy policy,
                                                     int targetKeyCount) {
     if (policy == ExpansionPolicy::PreserveNoteCount || policy == ExpansionPolicy::SeededRandomRemix) {
         return {"preserve", 0.0};
+    }
+    if (policy == ExpansionPolicy::PreserveTapPlusMore) {
+        return {"tap-plus-more", preserveTapPlusMoreTargetRatio(sourceKeyCount, targetKeyCount)};
     }
     if (policy == ExpansionPolicy::PreserveTapPlus) {
         return {"tap-plus", preserveTapPlusTargetRatio(sourceKeyCount, targetKeyCount)};
@@ -329,7 +339,8 @@ int maxAddedTotal(const Chart& original, const ConvertOptions& options) {
     if (targetRatio <= 0.0 || original.notes.empty()) {
         return 0;
     }
-    if (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
+    if (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusMore ||
+        effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
         effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow) {
         return static_cast<int>(std::floor(static_cast<double>(original.notes.size()) * targetRatio));
     }
@@ -347,7 +358,8 @@ int adaptiveBudgetWindowMs(const ConvertOptions& options) {
 
 bool adaptiveBudgetEnabledFor(const ConvertOptions& options) {
     return options.targetKProfile.has_value() &&
-           (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
+           (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusMore ||
+            effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
             effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow) &&
            options.targetKeyCount > options.sourceKeyCount;
 }
@@ -1916,7 +1928,8 @@ ExpansionPolicy resolveExpansionPolicy(const ConvertOptions& options) {
 }
 
 void applyExpansionComposer(ExpansionContext& context, ExpansionPolicy policy) {
-    if (policy == ExpansionPolicy::PreserveTapPlus ||
+    if (policy == ExpansionPolicy::PreserveTapPlusMore ||
+        policy == ExpansionPolicy::PreserveTapPlus ||
         policy == ExpansionPolicy::PreserveTapPlusLow) {
         applyPreserveTapPlus(context);
         return;

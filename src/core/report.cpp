@@ -115,6 +115,8 @@ std::string toString(ExpansionPolicy policy) {
     switch (policy) {
         case ExpansionPolicy::PreserveNoteCount:
             return "preserve";
+        case ExpansionPolicy::PreserveTapPlusMore:
+            return "preserve-tap-plus-more";
         case ExpansionPolicy::PreserveTapPlus:
             return "preserve-tap-plus";
         case ExpansionPolicy::PreserveTapPlusLow:
@@ -165,6 +167,18 @@ std::string toString(StreamEchoProfile profile) {
             return "experimental";
     }
     return "conservative";
+}
+
+std::string toString(StreamTransformPolicy policy) {
+    switch (policy) {
+        case StreamTransformPolicy::Off:
+            return "off";
+        case StreamTransformPolicy::SuperRandom:
+            return "superrandom";
+        case StreamTransformPolicy::FullJitter:
+            return "full-jitter";
+    }
+    return "off";
 }
 
 std::string toString(JackPreservePolicy policy) {
@@ -274,6 +288,9 @@ std::optional<ExpansionPolicy> parseExpansionPolicy(const std::string& value) {
     if (value == "preserve" || value == "preserve-note-count") {
         return ExpansionPolicy::PreserveNoteCount;
     }
+    if (value == "preserve-tap-plus-more" || value == "tap-plus-more" || value == "auto-more") {
+        return ExpansionPolicy::PreserveTapPlusMore;
+    }
     if (value == "preserve-tap-plus" || value == "tap-plus" || value == "auto-normal") {
         return ExpansionPolicy::PreserveTapPlus;
     }
@@ -335,6 +352,19 @@ std::optional<StreamEchoProfile> parseStreamEchoProfile(const std::string& value
     }
     if (value == "experimental") {
         return StreamEchoProfile::Experimental;
+    }
+    return std::nullopt;
+}
+
+std::optional<StreamTransformPolicy> parseStreamTransformPolicy(const std::string& value) {
+    if (value == "off" || value == "none") {
+        return StreamTransformPolicy::Off;
+    }
+    if (value == "superrandom" || value == "super-random") {
+        return StreamTransformPolicy::SuperRandom;
+    }
+    if (value == "full-jitter" || value == "all-jitter" || value == "zure" || value == "jitter") {
+        return StreamTransformPolicy::FullJitter;
     }
     return std::nullopt;
 }
@@ -454,6 +484,7 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"algorithmVersion\": \"" << jsonEscape(report.quality.algorithmVersion) << "\",\n";
     out << "    \"expansionPolicy\": \"" << jsonEscape(report.quality.expansionPolicy) << "\",\n";
     out << "    \"streamEchoProfile\": \"" << jsonEscape(report.quality.streamEchoProfile) << "\",\n";
+    out << "    \"streamTransformPolicy\": \"" << jsonEscape(report.quality.streamTransformPolicy) << "\",\n";
     out << "    \"expansionComposerProfile\": \"" << jsonEscape(report.quality.expansionComposerProfile) << "\",\n";
     out << "    \"targetAddedNoteRatio\": " << report.quality.targetAddedNoteRatio << ",\n";
     out << "    \"budgetUsedRatio\": " << report.quality.budgetUsedRatio << ",\n";
@@ -561,7 +592,9 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"rejectedStreamPrimaryBySnap\": " << report.quality.rejectedStreamPrimaryBySnap << ",\n";
     out << "    \"rejectedStreamPrimaryByBudget\": " << report.quality.rejectedStreamPrimaryByBudget << ",\n";
     out << "    \"streamEchoAddedRatio\": " << report.quality.streamEchoAddedRatio << ",\n";
-    out << "    \"maxObservedLocalNpsAfterEcho\": " << report.quality.maxObservedLocalNpsAfterEcho << "\n";
+    out << "    \"maxObservedLocalNpsAfterEcho\": " << report.quality.maxObservedLocalNpsAfterEcho << ",\n";
+    out << "    \"streamTransformedNotes\": " << report.quality.streamTransformedNotes << ",\n";
+    out << "    \"streamJitteredNotes\": " << report.quality.streamJitteredNotes << "\n";
     out << "  },\n";
     out << "  \"warnings\": [";
     for (std::size_t i = 0; i < report.warnings.size(); ++i) {
@@ -655,6 +688,7 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Algorithm version: " << report.quality.algorithmVersion << "\n";
     out << "- Expansion policy: " << report.quality.expansionPolicy << "\n";
     out << "- Stream echo profile: " << report.quality.streamEchoProfile << "\n";
+    out << "- Stream transform policy: " << report.quality.streamTransformPolicy << "\n";
     out << "- Expansion composer profile: " << report.quality.expansionComposerProfile << "\n";
     out << "- Target added note ratio: " << report.quality.targetAddedNoteRatio << "\n";
     out << "- Budget used ratio: " << report.quality.budgetUsedRatio << "\n";
@@ -759,6 +793,8 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Rejected stream primary by budget: " << report.quality.rejectedStreamPrimaryByBudget << "\n";
     out << "- Stream echo added ratio: " << report.quality.streamEchoAddedRatio << "\n";
     out << "- Max observed local NPS after echo: " << report.quality.maxObservedLocalNpsAfterEcho << "\n";
+    out << "- Stream transformed notes: " << report.quality.streamTransformedNotes << "\n";
+    out << "- Stream jittered notes: " << report.quality.streamJitteredNotes << "\n";
     if (!report.warnings.empty()) {
         out << "Warnings:\n";
         constexpr std::size_t maxTextWarnings = 20;

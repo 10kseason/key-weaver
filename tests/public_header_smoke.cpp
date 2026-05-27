@@ -32,13 +32,15 @@ int main() {
     const auto distancePolicy = keyconv::parseDistancePolicy("aimod-safe");
     const auto expansionPolicy = keyconv::parseExpansionPolicy("preserve-tap-plus");
     const auto lowExpansionPolicy = keyconv::parseExpansionPolicy("auto-low");
+    const auto moreExpansionPolicy = keyconv::parseExpansionPolicy("auto-more");
     const auto echoPolicy = keyconv::parseEchoPolicy("stair-trill");
     const auto streamEchoProfile = keyconv::parseStreamEchoProfile("balanced");
+    const auto streamTransformPolicy = keyconv::parseStreamTransformPolicy("superrandom");
     const auto jackPreservePolicy = keyconv::parseJackPreservePolicy("preserve-playable");
     if (!style.has_value() || !optimizer.has_value() || !compressPolicy.has_value() ||
         !distancePolicy.has_value() || !expansionPolicy.has_value() ||
-        !lowExpansionPolicy.has_value() || !echoPolicy.has_value() || !streamEchoProfile.has_value() ||
-        !jackPreservePolicy.has_value()) {
+        !lowExpansionPolicy.has_value() || !moreExpansionPolicy.has_value() || !echoPolicy.has_value() ||
+        !streamEchoProfile.has_value() || !streamTransformPolicy.has_value() || !jackPreservePolicy.has_value()) {
         return 2;
     }
 

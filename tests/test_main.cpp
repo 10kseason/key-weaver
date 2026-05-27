@@ -2806,6 +2806,172 @@ void testPolicyComparisonCoreMatrixStable() {
     require(harderAdded >= trainingAdded, "harder comparison should be at least as dense as training sample");
 }
 
+void testPreserveConvertLaneDriftMovesStablePhrases() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {3000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {5000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {7000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {9000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Faithful;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.jackPreservePolicy = keyconv::JackPreservePolicy::PreserveStrict;
+    options.allowPlayableJackSplit = false;
+    options.maxAddedNoteRatio = 0.0;
+    options.preserveLaneDrift = true;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    auto lanes = lanesOf(result.chart);
+    std::sort(lanes.begin(), lanes.end());
+    const auto uniqueEnd = std::unique(lanes.begin(), lanes.end());
+
+    require(result.report.quality.addedNotes == 0, "preserve lane drift should not add notes");
+    require(std::distance(lanes.begin(), uniqueEnd) > 1,
+            "preserve lane drift should move stable phrases across adjacent lanes");
+}
+
+void testPreserveConvertLaneDriftKeepsSourceJackTogether() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1080, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1160, 1, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Faithful;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.jackPreservePolicy = keyconv::JackPreservePolicy::PreserveStrict;
+    options.allowPlayableJackSplit = false;
+    options.maxAddedNoteRatio = 0.0;
+    options.preserveLaneDrift = true;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    const auto lanes = lanesOf(result.chart);
+
+    require(lanes.size() == 3, "source jack sample should keep all notes");
+    require(lanes[0] == lanes[1] && lanes[1] == lanes[2],
+            "preserve lane drift should not split strict source jacks");
+}
+
+void testAutoMoreExpansionReportsLargerBudget() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1375, 3, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1625, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1750, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1875, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    const auto& quality = result.report.quality;
+
+    require(quality.expansionPolicy == "preserve-tap-plus-more",
+            "auto-more should report the more tap-plus policy");
+    require(quality.expansionComposerProfile == "tap-plus-more",
+            "auto-more should report the more composer profile");
+    require(quality.targetAddedNoteRatio == 0.45,
+            "auto-more should use the larger high-key generated-note budget");
+}
+
+void testStreamSuperRandomRelanesStreamRuns() {
+    auto chart = makeChart(10, {});
+    for (int i = 0; i < 10; ++i) {
+        keyconv::Note note;
+        note.id = "r" + std::to_string(i);
+        note.time = 1000 + i * 120;
+        note.lane = 0;
+        note.sourceLane = 0;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 10;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.streamTransformPolicy = keyconv::StreamTransformPolicy::SuperRandom;
+
+    const keyconv::Converter converter;
+    const auto first = converter.convert(chart, options);
+    const auto second = converter.convert(chart, options);
+    auto lanes = lanesOf(first.chart);
+    std::sort(lanes.begin(), lanes.end());
+    const auto uniqueEnd = std::unique(lanes.begin(), lanes.end());
+
+    require(first.report.quality.streamTransformPolicy == "superrandom",
+            "superrandom stream transform should be reported");
+    require(first.report.quality.streamTransformedNotes > 0,
+            "superrandom stream transform should move stream notes");
+    require(std::distance(lanes.begin(), uniqueEnd) > 1,
+            "superrandom stream transform should spread a stream across lanes");
+    require(keyconv::exportOsu(first.chart, 10) == keyconv::exportOsu(second.chart, 10),
+            "superrandom stream transform should be deterministic");
+}
+
+void testFullJitterOffsetsSameTimeChords() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 4;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.streamTransformPolicy = keyconv::StreamTransformPolicy::FullJitter;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    std::vector<int> chordTimes;
+    int checkedNotes = 0;
+    for (const auto& note : result.chart.notes) {
+        const int originalIndex = std::stoi(note.id.substr(1));
+        const int originalTime = originalIndex < 3 ? 1000 : 1500;
+        const int offset = std::abs(note.time - originalTime);
+        require(offset >= 1 && offset <= 15, "full-jitter should offset every note by 1 to 15 ms");
+        ++checkedNotes;
+        if (std::abs(note.time - 1000) <= 15) {
+            chordTimes.push_back(note.time);
+        }
+    }
+    std::sort(chordTimes.begin(), chordTimes.end());
+    const auto uniqueEnd = std::unique(chordTimes.begin(), chordTimes.end());
+
+    require(result.report.quality.streamTransformPolicy == "full-jitter",
+            "full-jitter stream transform should be reported");
+    require(result.report.quality.streamJitteredNotes == checkedNotes,
+            "full-jitter should offset every note");
+    require(chordTimes.size() == 3 && std::distance(chordTimes.begin(), uniqueEnd) > 1,
+            "full-jitter should split a same-time chord into close ms offsets");
+}
+
 }  // namespace
 
 int main() {
@@ -2904,6 +3070,12 @@ int main() {
         {"training stream echo profile deterministic", testTrainingStreamEchoProfileDeterministic},
         {"feel report values stable", testFeelReportValuesStable},
         {"policy comparison core matrix stable", testPolicyComparisonCoreMatrixStable},
+        {"preserve convert lane drift moves stable phrases", testPreserveConvertLaneDriftMovesStablePhrases},
+        {"preserve convert lane drift keeps source jack together",
+         testPreserveConvertLaneDriftKeepsSourceJackTogether},
+        {"auto-more expansion reports larger budget", testAutoMoreExpansionReportsLargerBudget},
+        {"stream superrandom relanes stream runs", testStreamSuperRandomRelanesStreamRuns},
+        {"full jitter offsets same-time chords", testFullJitterOffsetsSameTimeChords},
     };
 
     try {

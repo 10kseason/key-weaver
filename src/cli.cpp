@@ -33,7 +33,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.5.6";
+constexpr const char* kToolVersion = "v0.5.7";
 
 #if defined(_WIN32)
 std::string utf8FromWide(std::wstring_view value) {
@@ -197,8 +197,10 @@ struct CliOptions {
     bool expansionPolicyProvided = false;
     keyconv::EchoPolicy echoPolicy = keyconv::EchoPolicy::Off;
     keyconv::StreamEchoProfile streamEchoProfile = keyconv::StreamEchoProfile::Conservative;
+    keyconv::StreamTransformPolicy streamTransformPolicy = keyconv::StreamTransformPolicy::Off;
     keyconv::JackPreservePolicy jackPreservePolicy = keyconv::JackPreservePolicy::PreservePlayable;
     bool gestureRailEnabled = true;
+    bool preserveLaneDrift = false;
     bool echoDiagnostics = false;
     bool dpMode = false;
     int beamWidth = 16;
@@ -269,13 +271,16 @@ void printHelp(std::ostream& out) {
     out << "  --no-snap-roll          Allow raw-ms roll candidates and report unsnapped rolled notes.\n";
     out << "  --snap-tolerance <ms>   Snap validation tolerance. Default: 2.\n";
     out << "  --max-roll-ms <ms>      Maximum roll distance from original time. Default: 64.\n";
-    out << "  --expansion-policy <p>  auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random.\n";
+    out << "  --expansion-policy <p>  auto-more | auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random.\n";
     out << "                          Default auto-normal: preserve when target <= source, preserve-tap-plus when target > source.\n";
+    out << "                          auto-more uses the larger preserve-tap-plus growth budget for high-key conversion.\n";
     out << "                          auto-low keeps the same preserve behavior but caps high-key generation at 12.5%.\n";
     out << "  --max-added-ratio <n>   Max added notes as source-note ratio. Default: 0.45.\n";
     out << "  --max-added-per-slice <n> Max added notes per source slice. Default: 2.\n";
     out << "  --max-added-per-measure <n> Max added notes per approximate measure. Default: 16.\n";
     out << "  --preserve-convert     Faithful mapping, strict source-jack preservation, and no generated notes.\n";
+    out << "  --preserve-lane-drift  Allow Preserve Convert to move stable phrases into adjacent safe lanes.\n";
+    out << "  --no-preserve-lane-drift Disable Preserve Convert lane drift.\n";
     out << "  --expansion-min-gap <ms> Minimum positive object gap for added notes. Default: 16.\n";
     out << "  --expansion-same-lane-min-gap <ms> Minimum same-lane gap for added notes. Default: 20.\n";
     out << "  --snap-added-notes      Require added notes to be timing-grid snapped. Default.\n";
@@ -283,6 +288,7 @@ void printHelp(std::ostream& out) {
     out << "  --expansion-snap-tolerance <ms> Snap validation tolerance for added notes. Default: 2.\n";
     out << "  --echo-policy <p>       off | stair | trill | stream | stair-trill | stair-trill-stream | auto.\n";
     out << "  --stream-echo-profile <p> conservative | balanced | training | experimental. Default: conservative.\n";
+    out << "  --stream-transform <p>  off | superrandom | full-jitter. Superrandom relanes stream runs; full-jitter offsets simultaneous notes by a few ms.\n";
     out << "  --echo-diagnostics      Print StreamEcho reject breakdown; does not alter conversion output.\n";
     out << "  --max-echo-ratio <n>    Max echo notes as source-note ratio. Default: 0.08.\n";
     out << "  --max-echo-per-pattern <n> Max echo notes per pattern. Default: 4.\n";
@@ -495,6 +501,13 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
                 throw std::runtime_error("Invalid stream echo profile: " + value);
             }
             options.streamEchoProfile = *profile;
+        } else if (arg == "--stream-transform") {
+            const auto value = requireValue(i, args, arg);
+            const auto policy = keyconv::parseStreamTransformPolicy(value);
+            if (!policy.has_value()) {
+                throw std::runtime_error("Invalid stream transform: " + value);
+            }
+            options.streamTransformPolicy = *policy;
         } else if (arg == "--echo-diagnostics") {
             options.echoDiagnostics = true;
         } else if (arg == "--max-added-ratio") {
@@ -511,6 +524,11 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.jackPreservePolicy = keyconv::JackPreservePolicy::PreserveStrict;
             options.allowPlayableJackSplit = false;
             options.maxAddedNoteRatio = 0.0;
+            options.preserveLaneDrift = true;
+        } else if (arg == "--preserve-lane-drift") {
+            options.preserveLaneDrift = true;
+        } else if (arg == "--no-preserve-lane-drift") {
+            options.preserveLaneDrift = false;
         } else if (arg == "--deterministic-expansion") {
             options.deterministicExpansion = true;
         } else if (arg == "--expansion-min-gap") {
@@ -1240,6 +1258,13 @@ keyconv::ConvertOptions optionsForPolicyToken(const std::string& token,
         options.streamEchoProfile = keyconv::StreamEchoProfile::Conservative;
         return options;
     }
+    if (normalized == "auto-more" || normalized == "tap-plus-more" ||
+        normalized == "preserve-tap-plus-more") {
+        options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+        options.echoPolicy = keyconv::EchoPolicy::Off;
+        options.streamEchoProfile = keyconv::StreamEchoProfile::Conservative;
+        return options;
+    }
     if (normalized == "auto-low" || normalized == "tap-plus-low" ||
         normalized == "preserve-tap-plus-low") {
         options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusLow;
@@ -1400,6 +1425,7 @@ std::string comparisonToJson(const std::vector<PolicyComparisonRow>& rows,
         out << "      \"policy\": \"" << jsonEscape(row.policy) << "\",\n";
         out << "      \"expansionPolicy\": \"" << jsonEscape(q.expansionPolicy) << "\",\n";
         out << "      \"streamEchoProfile\": \"" << jsonEscape(q.streamEchoProfile) << "\",\n";
+        out << "      \"streamTransformPolicy\": \"" << jsonEscape(q.streamTransformPolicy) << "\",\n";
         out << "      \"composerProfile\": \"" << jsonEscape(q.expansionComposerProfile) << "\",\n";
         out << "      \"totalNotes\": " << row.report.totalNotes << ",\n";
         out << "      \"addedNotes\": " << q.addedNotes << ",\n";
@@ -1537,8 +1563,10 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
                                                                   convertOptions.targetKeyCount);
     convertOptions.echoPolicy = cli.echoPolicy;
     convertOptions.streamEchoProfile = cli.streamEchoProfile;
+    convertOptions.streamTransformPolicy = cli.streamTransformPolicy;
     convertOptions.jackPreservePolicy = cli.jackPreservePolicy;
     convertOptions.gestureRailEnabled = cli.gestureRailEnabled;
+    convertOptions.preserveLaneDrift = cli.preserveLaneDrift;
     convertOptions.echoDiagnostics = cli.echoDiagnostics;
     convertOptions.dpMode = cli.dpMode;
     convertOptions.beamWidth = cli.beamWidth;
@@ -1642,6 +1670,7 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     std::cout << "Expansion policy: " << keyconv::toString(convertOptions.expansionPolicy) << "\n";
     std::cout << "Echo policy: " << keyconv::toString(convertOptions.echoPolicy) << "\n";
     std::cout << "Stream echo profile: " << keyconv::toString(convertOptions.streamEchoProfile) << "\n";
+    std::cout << "Stream transform: " << keyconv::toString(convertOptions.streamTransformPolicy) << "\n";
     std::cout << "Echo diagnostics: " << (convertOptions.echoDiagnostics ? "yes" : "no") << "\n";
     std::cout << "Optimizer: " << keyconv::toString(convertOptions.optimizer) << "\n";
     std::cout << "Same-time epsilon: " << convertOptions.sameTimeEpsilonMs << " ms\n";
@@ -1671,6 +1700,7 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     std::cout << "Echo same-lane min gap: " << convertOptions.echoSameLaneMinGapMs << " ms\n";
     std::cout << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
     std::cout << "Preserve convert: " << (cli.preserveConvert ? "yes" : "no") << "\n";
+    std::cout << "Preserve lane drift: " << (convertOptions.preserveLaneDrift ? "yes" : "no") << "\n";
     if (convertOptions.targetKProfile.has_value()) {
         std::cout << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
                   << convertOptions.targetKProfile->sourceName << " ("

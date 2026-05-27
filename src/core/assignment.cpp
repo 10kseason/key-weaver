@@ -318,6 +318,46 @@ double sourceLaneAnchorScore(int targetLane, int anchorLane, int targetKeyCount)
     return -std::min(1.0, static_cast<double>(delta) / 3.0);
 }
 
+bool preserveLaneDriftActive(const AssignmentContext& context) {
+    return context.preserveLaneDrift && context.style == ConversionStyle::Faithful &&
+           context.targetKeyCount > context.sourceKeyCount && context.targetKeyCount > 1;
+}
+
+int preserveLaneDriftBaseLane(int sourceLane, const AssignmentContext& context) {
+    return useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount)
+               ? dualFiveBaseLaneForSource(sourceLane, context.targetKeyCount)
+               : mapLaneDirect(sourceLane, context.sourceKeyCount, context.targetKeyCount);
+}
+
+std::optional<int> preserveLaneDriftLane(int sourceLane, int time, const AssignmentContext& context) {
+    if (!preserveLaneDriftActive(context)) {
+        return std::nullopt;
+    }
+
+    constexpr int kPhraseMs = 1800;
+    constexpr int kOffsets[] = {0, 1, 0, -1, 0, 1, 0, -1};
+    const int phase = std::max(0, time) / kPhraseMs;
+    const int offset = kOffsets[(phase + sourceLane * 3) %
+                                (static_cast<int>(sizeof(kOffsets) / sizeof(kOffsets[0])))];
+    int lane = preserveLaneDriftBaseLane(sourceLane, context) + offset;
+    if (useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount)) {
+        const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
+        lane = clampInt(lane, zoneStart, zoneEnd);
+    }
+    return clampInt(lane, 0, context.targetKeyCount - 1);
+}
+
+double preserveLaneDriftScore(int targetLane, int driftLane, const AssignmentContext& context) {
+    const int delta = std::abs(targetLane - driftLane);
+    if (delta == 0) {
+        return context.weights.shape * 1.35;
+    }
+    if (delta == 1) {
+        return context.weights.shape * 0.35;
+    }
+    return -context.weights.shape * 0.75;
+}
+
 bool roleHasHandVoice(PhraseRole role) {
     return role == PhraseRole::LeftHandVoice || role == PhraseRole::RightHandVoice;
 }
@@ -718,6 +758,7 @@ double scoreAssignment(const TimeSlice& slice,
             recentSameSourceLane(context.placed, sourceLane, source.time, jackWindowMsForBalance).has_value();
         const auto sourceAnchor =
             recentSourceLaneAnchor(context.placed, sourceLane, source.time, context.targetKeyCount);
+        const auto driftLane = preserveLaneDriftLane(sourceLane, source.time, context);
 
         score += context.weights.position *
                  (1.0 - std::abs(normalizedLane(sourceLane, context.sourceKeyCount) -
@@ -739,10 +780,16 @@ double scoreAssignment(const TimeSlice& slice,
         }
         score += gestureScore(source, targetLane, hint, context);
         if (!sourceJackLike && sourceAnchor.has_value()) {
-            const double anchorWeight = context.targetKeyCount > context.sourceKeyCount ? 0.85 : 2.25;
+            double anchorWeight = context.targetKeyCount > context.sourceKeyCount ? 0.85 : 2.25;
+            if (preserveLaneDriftActive(context) && !sourceRepeatNearby) {
+                anchorWeight = 0.30;
+            }
             score += context.weights.shape *
                      sourceLaneAnchorScore(targetLane, *sourceAnchor, context.targetKeyCount) *
                      anchorWeight;
+        }
+        if (!sourceJackLike && !sourceRepeatNearby && driftLane.has_value()) {
+            score += preserveLaneDriftScore(targetLane, *driftLane, context);
         }
 
         if (!usedInSlice.insert(targetLane).second) {

@@ -44,6 +44,7 @@ struct AssignmentContext {
     int jackWindowMs = 180;
     ConversionStyle style = ConversionStyle::Playable;
     PpgWeights weights;
+    bool preserveLaneDrift = false;
     int* preventedJacksByAssignment = nullptr;
     const GestureRail* gestureRail = nullptr;
 };

@@ -124,6 +124,7 @@ OptimizationResult greedyOptimizeSlices(const Chart& chart, const ConvertOptions
     context.jackWindowMs = options.jackWindowMs;
     context.style = options.style;
     context.weights = weightsForStyle(options.style);
+    context.preserveLaneDrift = options.preserveLaneDrift;
     context.preventedJacksByAssignment = &result.preventedJacksByAssignment;
     context.gestureRail = &gestureRail;
     context.laneUse.assign(static_cast<std::size_t>(options.targetKeyCount), 0);

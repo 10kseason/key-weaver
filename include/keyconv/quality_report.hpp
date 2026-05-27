@@ -46,6 +46,7 @@ enum class DistancePolicy {
 
 enum class ExpansionPolicy {
     PreserveNoteCount,
+    PreserveTapPlusMore,
     PreserveTapPlus,
     PreserveTapPlusLow,
     DeterministicChordFill,
@@ -70,6 +71,12 @@ enum class StreamEchoProfile {
     Balanced,
     Training,
     Experimental,
+};
+
+enum class StreamTransformPolicy {
+    Off,
+    SuperRandom,
+    FullJitter,
 };
 
 enum class JackPreservePolicy {
@@ -206,9 +213,10 @@ struct ConversionReport {
         int droppedByDistanceGuard = 0;
         int rerolledByDistanceGuard = 0;
         bool deterministic = true;
-        std::string algorithmVersion = "v0.5.6";
+        std::string algorithmVersion = "v0.5.7";
         std::string expansionPolicy = "preserve";
         std::string streamEchoProfile = "conservative";
+        std::string streamTransformPolicy = "off";
         std::string expansionComposerProfile = "preserve";
         double targetAddedNoteRatio = 0.0;
         double budgetUsedRatio = 0.0;
@@ -304,6 +312,8 @@ struct ConversionReport {
         int rejectedStreamPrimaryByBudget = 0;
         double streamEchoAddedRatio = 0.0;
         double maxObservedLocalNpsAfterEcho = 0.0;
+        int streamTransformedNotes = 0;
+        int streamJitteredNotes = 0;
     } quality;
 };
 
@@ -317,6 +327,7 @@ std::string toString(DistancePolicy policy);
 std::string toString(ExpansionPolicy policy);
 std::string toString(EchoPolicy policy);
 std::string toString(StreamEchoProfile profile);
+std::string toString(StreamTransformPolicy policy);
 std::string toString(JackPreservePolicy policy);
 std::optional<ConversionStyle> parseConversionStyle(const std::string& value);
 std::optional<CollisionPolicy> parseCollisionPolicy(const std::string& value);
@@ -326,6 +337,7 @@ std::optional<DistancePolicy> parseDistancePolicy(const std::string& value);
 std::optional<ExpansionPolicy> parseExpansionPolicy(const std::string& value);
 std::optional<EchoPolicy> parseEchoPolicy(const std::string& value);
 std::optional<StreamEchoProfile> parseStreamEchoProfile(const std::string& value);
+std::optional<StreamTransformPolicy> parseStreamTransformPolicy(const std::string& value);
 std::optional<JackPreservePolicy> parseJackPreservePolicy(const std::string& value);
 std::string reportToJson(const ConversionReport& report);
 std::string reportToText(const ConversionReport& report);

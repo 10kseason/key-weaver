@@ -10,5 +10,13 @@ QualityReport computeQualityReport(const Chart& original,
                                    int sourceKeyCount,
                                    int targetKeyCount);
 
-}  // namespace keyconv
+TargetKProfile targetKProfileFor(int sourceKeyCount, int targetKeyCount);
 
+void finalizeTargetKLikenessReport(QualityReport& report,
+                                   const Chart& original,
+                                   const Chart& converted,
+                                   int sourceKeyCount,
+                                   int targetKeyCount,
+                                   const TargetKProfile* profileOverride = nullptr);
+
+}  // namespace keyconv

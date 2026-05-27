@@ -398,6 +398,23 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"leftHandNotes\": " << report.quality.leftHandNotes << ",\n";
     out << "    \"rightHandNotes\": " << report.quality.rightHandNotes << ",\n";
     out << "    \"handBalanceRatio\": " << report.quality.handBalanceRatio << ",\n";
+    out << "    \"kLikenessScore\": " << report.quality.kLikenessScore << ",\n";
+    out << "    \"targetProfileChartCount\": " << report.quality.targetProfileChartCount << ",\n";
+    out << "    \"targetProfileWindowMs\": " << report.quality.targetProfileWindowMs << ",\n";
+    out << "    \"targetProfileName\": \"" << jsonEscape(report.quality.targetProfileName) << "\",\n";
+    out << "    \"targetProfileKind\": \"" << jsonEscape(report.quality.targetProfileKind) << "\",\n";
+    out << "    \"targetProfileSource\": \"" << jsonEscape(report.quality.targetProfileSource) << "\",\n";
+    out << "    \"targetProfileAuthor\": \"" << jsonEscape(report.quality.targetProfileAuthor) << "\",\n";
+    out << "    \"laneCoverageScore\": " << report.quality.laneCoverageScore << ",\n";
+    out << "    \"laneEntropyScore\": " << report.quality.laneEntropyScore << ",\n";
+    out << "    \"edgeUsageScore\": " << report.quality.edgeUsageScore << ",\n";
+    out << "    \"activeLaneWindowScore\": " << report.quality.activeLaneWindowScore << ",\n";
+    out << "    \"spatialSpanScore\": " << report.quality.spatialSpanScore << ",\n";
+    out << "    \"adjacentExpansionScore\": " << report.quality.adjacentExpansionScore << ",\n";
+    out << "    \"anchorPreserveScore\": " << report.quality.anchorPreserveScore << ",\n";
+    out << "    \"patternVocabularyScore\": " << report.quality.patternVocabularyScore << ",\n";
+    out << "    \"addedRatioFitScore\": " << report.quality.addedRatioFitScore << ",\n";
+    out << "    \"targetKSafetyScore\": " << report.quality.targetKSafetyScore << ",\n";
     out << "    \"feelTags\": [";
     for (std::size_t i = 0; i < report.quality.feelTags.size(); ++i) {
         if (i > 0) {
@@ -435,9 +452,17 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"expansionComposerProfile\": \"" << jsonEscape(report.quality.expansionComposerProfile) << "\",\n";
     out << "    \"targetAddedNoteRatio\": " << report.quality.targetAddedNoteRatio << ",\n";
     out << "    \"budgetUsedRatio\": " << report.quality.budgetUsedRatio << ",\n";
+    out << "    \"adaptiveGrowthBudgetEnabled\": "
+        << (report.quality.adaptiveGrowthBudgetEnabled ? "true" : "false") << ",\n";
+    out << "    \"adaptiveBudgetWindowMs\": " << report.quality.adaptiveBudgetWindowMs << ",\n";
+    out << "    \"adaptiveBudgetWindows\": " << report.quality.adaptiveBudgetWindows << ",\n";
+    out << "    \"adaptiveBudgetAverageRatio\": " << report.quality.adaptiveBudgetAverageRatio << ",\n";
+    out << "    \"adaptiveBudgetMinRatio\": " << report.quality.adaptiveBudgetMinRatio << ",\n";
+    out << "    \"adaptiveBudgetMaxRatio\": " << report.quality.adaptiveBudgetMaxRatio << ",\n";
     out << "    \"acceptedByComposer\": " << report.quality.acceptedByComposer << ",\n";
     out << "    \"rejectedByComposerBudget\": " << report.quality.rejectedByComposerBudget << ",\n";
     out << "    \"rejectedByComposerSafety\": " << report.quality.rejectedByComposerSafety << ",\n";
+    out << "    \"rejectedByAdaptiveBudget\": " << report.quality.rejectedByAdaptiveBudget << ",\n";
     out << "    \"addedNotes\": " << report.quality.addedNotes << ",\n";
     out << "    \"addedByTapPlus\": " << report.quality.addedByTapPlus << ",\n";
     out << "    \"addedByChordFill\": " << report.quality.addedByChordFill << ",\n";
@@ -580,6 +605,23 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Left hand notes: " << report.quality.leftHandNotes << "\n";
     out << "- Right hand notes: " << report.quality.rightHandNotes << "\n";
     out << "- Hand balance ratio: " << report.quality.handBalanceRatio << "\n";
+    out << "- K-likeness score: " << report.quality.kLikenessScore << "\n";
+    out << "- Target profile charts: " << report.quality.targetProfileChartCount << "\n";
+    out << "- Target profile window: " << report.quality.targetProfileWindowMs << " ms\n";
+    out << "- Target profile name: " << report.quality.targetProfileName << "\n";
+    out << "- Target profile kind: " << report.quality.targetProfileKind << "\n";
+    out << "- Target profile source: " << report.quality.targetProfileSource << "\n";
+    out << "- Target profile author: " << report.quality.targetProfileAuthor << "\n";
+    out << "- Lane coverage score: " << report.quality.laneCoverageScore << "\n";
+    out << "- Lane entropy score: " << report.quality.laneEntropyScore << "\n";
+    out << "- Edge usage score: " << report.quality.edgeUsageScore << "\n";
+    out << "- Active lane window score: " << report.quality.activeLaneWindowScore << "\n";
+    out << "- Spatial span score: " << report.quality.spatialSpanScore << "\n";
+    out << "- Adjacent expansion score: " << report.quality.adjacentExpansionScore << "\n";
+    out << "- Anchor preserve score: " << report.quality.anchorPreserveScore << "\n";
+    out << "- Pattern vocabulary score: " << report.quality.patternVocabularyScore << "\n";
+    out << "- Added ratio fit score: " << report.quality.addedRatioFitScore << "\n";
+    out << "- Target-K safety score: " << report.quality.targetKSafetyScore << "\n";
     out << "- Feel tags: [";
     for (std::size_t i = 0; i < report.quality.feelTags.size(); ++i) {
         if (i > 0) {
@@ -611,9 +653,16 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Expansion composer profile: " << report.quality.expansionComposerProfile << "\n";
     out << "- Target added note ratio: " << report.quality.targetAddedNoteRatio << "\n";
     out << "- Budget used ratio: " << report.quality.budgetUsedRatio << "\n";
+    out << "- Adaptive growth budget: " << (report.quality.adaptiveGrowthBudgetEnabled ? "yes" : "no") << "\n";
+    out << "- Adaptive budget window: " << report.quality.adaptiveBudgetWindowMs << " ms\n";
+    out << "- Adaptive budget windows: " << report.quality.adaptiveBudgetWindows << "\n";
+    out << "- Adaptive budget average ratio: " << report.quality.adaptiveBudgetAverageRatio << "\n";
+    out << "- Adaptive budget min ratio: " << report.quality.adaptiveBudgetMinRatio << "\n";
+    out << "- Adaptive budget max ratio: " << report.quality.adaptiveBudgetMaxRatio << "\n";
     out << "- Accepted by composer: " << report.quality.acceptedByComposer << "\n";
     out << "- Rejected by composer budget: " << report.quality.rejectedByComposerBudget << "\n";
     out << "- Rejected by composer safety: " << report.quality.rejectedByComposerSafety << "\n";
+    out << "- Rejected by adaptive budget: " << report.quality.rejectedByAdaptiveBudget << "\n";
     out << "- Added notes: " << report.quality.addedNotes << "\n";
     out << "- Added by tap plus: " << report.quality.addedByTapPlus << "\n";
     out << "- Added by chord fill: " << report.quality.addedByChordFill << "\n";

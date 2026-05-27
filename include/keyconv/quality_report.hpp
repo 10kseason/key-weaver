@@ -78,6 +78,22 @@ enum class JackPreservePolicy {
     SmoothAll,
 };
 
+struct TargetKProfile {
+    int targetKeys = 10;
+    int sampleCount = 0;
+    int windowMs = 1000;
+    std::string profileName = "builtin_10k_profile";
+    std::string profileKind = "builtin";
+    std::string sourceName = "builtin";
+    std::string authorToken;
+    double desiredLaneEntropy = 0.90;
+    double desiredEdgeUsage = 0.34;
+    double desiredActiveLaneRate = 0.80;
+    double desiredChordSpan = 0.45;
+    double desiredHandBalance = 0.88;
+    double desiredAdjacentExpansion = 0.18;
+};
+
 struct ConversionReport {
     int sourceKeyCount = 0;
     int targetKeyCount = 0;
@@ -112,6 +128,23 @@ struct ConversionReport {
         int leftHandNotes = 0;
         int rightHandNotes = 0;
         double handBalanceRatio = 1.0;
+        double kLikenessScore = 0.0;
+        int targetProfileChartCount = 0;
+        int targetProfileWindowMs = 0;
+        std::string targetProfileName = "builtin_10k_profile";
+        std::string targetProfileKind = "builtin";
+        std::string targetProfileSource = "builtin";
+        std::string targetProfileAuthor;
+        double laneCoverageScore = 0.0;
+        double laneEntropyScore = 0.0;
+        double edgeUsageScore = 0.0;
+        double activeLaneWindowScore = 0.0;
+        double spatialSpanScore = 0.0;
+        double adjacentExpansionScore = 0.0;
+        double anchorPreserveScore = 1.0;
+        double patternVocabularyScore = 1.0;
+        double addedRatioFitScore = 0.0;
+        double targetKSafetyScore = 1.0;
         std::vector<std::string> feelTags;
         double orderPreserveScore = 0.0;
         double spanPreserveScore = 0.0;
@@ -132,15 +165,22 @@ struct ConversionReport {
         int droppedByDistanceGuard = 0;
         int rerolledByDistanceGuard = 0;
         bool deterministic = true;
-        std::string algorithmVersion = "v0.5.3";
+        std::string algorithmVersion = "v0.5.5";
         std::string expansionPolicy = "preserve";
         std::string streamEchoProfile = "conservative";
         std::string expansionComposerProfile = "preserve";
         double targetAddedNoteRatio = 0.0;
         double budgetUsedRatio = 0.0;
+        bool adaptiveGrowthBudgetEnabled = false;
+        int adaptiveBudgetWindowMs = 1000;
+        int adaptiveBudgetWindows = 0;
+        double adaptiveBudgetAverageRatio = 0.0;
+        double adaptiveBudgetMinRatio = 0.0;
+        double adaptiveBudgetMaxRatio = 0.0;
         int acceptedByComposer = 0;
         int rejectedByComposerBudget = 0;
         int rejectedByComposerSafety = 0;
+        int rejectedByAdaptiveBudget = 0;
         int addedNotes = 0;
         int addedByTapPlus = 0;
         int addedByChordFill = 0;

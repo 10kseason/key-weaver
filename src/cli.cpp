@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -32,7 +33,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.5.3";
+constexpr const char* kToolVersion = "v0.5.5";
 
 #if defined(_WIN32)
 std::string utf8FromWide(std::wstring_view value) {
@@ -190,6 +191,7 @@ struct CliOptions {
     double echoMaxLocalNps = 12.0;
     bool dryRun = false;
     std::optional<std::filesystem::path> report;
+    std::optional<std::filesystem::path> targetProfile;
     std::optional<std::string> comparePolicies;
     bool emitFeelReport = false;
     bool emitDiffReport = false;
@@ -249,6 +251,7 @@ void printHelp(std::ostream& out) {
     out << "  --dp                    Reserve DP mode; this version reports fallback to SP PPG.\n";
     out << "  --dry-run               Convert in memory and report only; do not write output.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
+    out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "  --compare-policies <list> Compare comma-separated policies without writing chart output.\n";
     out << "  --emit-feel-report      Include feel metrics in policy comparison console output.\n";
     out << "  --emit-diff-report      Include before/after diff metrics in policy comparison console output.\n";
@@ -307,9 +310,16 @@ bool isBmsPath(const std::filesystem::path& path) {
     return extension == ".bms" || extension == ".bme" || extension == ".bml" || extension == ".pms";
 }
 
+std::filesystem::path defaultChartExtension(const std::filesystem::path& input, int targetKeys) {
+    if (isBmsPath(input) && targetKeys == 9) {
+        return std::filesystem::path(".pms");
+    }
+    return input.has_extension() ? input.extension() : std::filesystem::path(".osu");
+}
+
 std::filesystem::path defaultOutputPath(const std::filesystem::path& input, int targetKeys) {
     const auto parent = input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
-    const auto extension = input.has_extension() ? input.extension() : std::filesystem::path(".osu");
+    const auto extension = defaultChartExtension(input, targetKeys);
     const auto marker = keyWeaverDifficultyMarker(targetKeys);
 
     for (int suffix = 1;; ++suffix) {
@@ -500,6 +510,8 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.dryRun = true;
         } else if (arg == "--report") {
             options.report = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--target-profile") {
+            options.targetProfile = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--compare-policies") {
             options.comparePolicies = requireValue(i, args, arg);
         } else if (arg == "--emit-feel-report") {
@@ -541,6 +553,133 @@ void writeFile(const std::filesystem::path& path, const std::string& text) {
         throw std::runtime_error("Could not write file: " + displayPath(path));
     }
     out << text;
+}
+
+std::optional<std::string> jsonStringField(const std::string& text, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    const auto keyPos = text.find(needle);
+    if (keyPos == std::string::npos) {
+        return std::nullopt;
+    }
+    const auto colon = text.find(':', keyPos + needle.size());
+    if (colon == std::string::npos) {
+        return std::nullopt;
+    }
+    auto pos = text.find('"', colon + 1);
+    if (pos == std::string::npos) {
+        return std::nullopt;
+    }
+    ++pos;
+    std::string value;
+    bool escaped = false;
+    for (; pos < text.size(); ++pos) {
+        const char ch = text[pos];
+        if (escaped) {
+            switch (ch) {
+                case 'n':
+                    value.push_back('\n');
+                    break;
+                case 'r':
+                    value.push_back('\r');
+                    break;
+                case 't':
+                    value.push_back('\t');
+                    break;
+                default:
+                    value.push_back(ch);
+                    break;
+            }
+            escaped = false;
+            continue;
+        }
+        if (ch == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (ch == '"') {
+            return value;
+        }
+        value.push_back(ch);
+    }
+    return std::nullopt;
+}
+
+std::optional<double> jsonNumberField(const std::string& text, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    const auto keyPos = text.find(needle);
+    if (keyPos == std::string::npos) {
+        return std::nullopt;
+    }
+    const auto colon = text.find(':', keyPos + needle.size());
+    if (colon == std::string::npos) {
+        return std::nullopt;
+    }
+    std::size_t pos = colon + 1;
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+    try {
+        std::size_t consumed = 0;
+        const double value = std::stod(text.substr(pos), &consumed);
+        if (consumed == 0) {
+            return std::nullopt;
+        }
+        return value;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+keyconv::TargetKProfile loadTargetKProfile(const std::filesystem::path& path) {
+    const auto text = readFile(path);
+    keyconv::TargetKProfile profile;
+    profile.sourceName = displayPath(path);
+
+    if (const auto value = jsonNumberField(text, "targetKeys"); value.has_value()) {
+        profile.targetKeys = static_cast<int>(std::lround(*value));
+    }
+    if (const auto value = jsonNumberField(text, "sampleCount"); value.has_value()) {
+        profile.sampleCount = static_cast<int>(std::lround(*value));
+    }
+    if (const auto value = jsonNumberField(text, "windowMs"); value.has_value()) {
+        profile.windowMs = static_cast<int>(std::lround(*value));
+    }
+    if (const auto value = jsonStringField(text, "profileName"); value.has_value()) {
+        profile.profileName = *value;
+    }
+    if (const auto value = jsonStringField(text, "profileKind"); value.has_value()) {
+        profile.profileKind = *value;
+    }
+    if (const auto value = jsonStringField(text, "sourceName"); value.has_value()) {
+        profile.sourceName = *value;
+    }
+    if (const auto value = jsonStringField(text, "authorToken"); value.has_value()) {
+        profile.authorToken = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredLaneEntropy"); value.has_value()) {
+        profile.desiredLaneEntropy = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredEdgeUsage"); value.has_value()) {
+        profile.desiredEdgeUsage = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredActiveLaneRate"); value.has_value()) {
+        profile.desiredActiveLaneRate = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredChordSpan"); value.has_value()) {
+        profile.desiredChordSpan = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredHandBalance"); value.has_value()) {
+        profile.desiredHandBalance = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredAdjacentExpansion"); value.has_value()) {
+        profile.desiredAdjacentExpansion = *value;
+    }
+
+    if (profile.targetKeys <= 0 || profile.sampleCount <= 0) {
+        throw std::runtime_error("Target profile must include positive targetKeys and sampleCount: " +
+                                 displayPath(path));
+    }
+    return profile;
 }
 
 void validateOptions(const CliOptions& options) {
@@ -881,7 +1020,10 @@ bool comparisonSafetyOk(const keyconv::QualityReport& quality) {
 std::string comparisonToCsv(const std::vector<PolicyComparisonRow>& rows) {
     std::ostringstream out;
     out << std::setprecision(10);
-    out << "policy,expansionPolicy,composerProfile,totalNotes,addedNotes,addedByTapPlus,addedNoteRatio,laneEntropy,"
+    out << "policy,expansionPolicy,composerProfile,totalNotes,addedNotes,addedByTapPlus,addedNoteRatio,kLikenessScore,"
+           "targetProfileChartCount,"
+           "adaptiveGrowthBudgetEnabled,adaptiveBudgetAverageRatio,rejectedByAdaptiveBudget,"
+           "laneEntropy,"
            "patternPreserveScore,playabilityScore,collisionCount,lnConflictCount,nearTimeConflicts,"
            "unsnappedAddedNotes,sourceJackGroups,preservedJackGroups,splitJackGroups,createdJacks,preventedJacks,"
            "jackPreserveScore,densityDelta,chordRateBefore,chordRateAfter,laneCoverageBefore,"
@@ -896,6 +1038,11 @@ std::string comparisonToCsv(const std::vector<PolicyComparisonRow>& rows) {
             << q.addedNotes << ","
             << q.addedByTapPlus << ","
             << q.addedNoteRatio << ","
+            << q.kLikenessScore << ","
+            << q.targetProfileChartCount << ","
+            << (q.adaptiveGrowthBudgetEnabled ? 1 : 0) << ","
+            << q.adaptiveBudgetAverageRatio << ","
+            << q.rejectedByAdaptiveBudget << ","
             << q.laneEntropy << ","
             << q.patternPreserveScore << ","
             << q.playabilityScore << ","
@@ -950,6 +1097,31 @@ std::string comparisonToJson(const std::vector<PolicyComparisonRow>& rows,
         out << "      \"addedNotes\": " << q.addedNotes << ",\n";
         out << "      \"addedByTapPlus\": " << q.addedByTapPlus << ",\n";
         out << "      \"addedNoteRatio\": " << q.addedNoteRatio << ",\n";
+        out << "      \"kLikenessScore\": " << q.kLikenessScore << ",\n";
+        out << "      \"targetProfileChartCount\": " << q.targetProfileChartCount << ",\n";
+        out << "      \"targetProfileWindowMs\": " << q.targetProfileWindowMs << ",\n";
+        out << "      \"targetProfileName\": \"" << jsonEscape(q.targetProfileName) << "\",\n";
+        out << "      \"targetProfileKind\": \"" << jsonEscape(q.targetProfileKind) << "\",\n";
+        out << "      \"targetProfileSource\": \"" << jsonEscape(q.targetProfileSource) << "\",\n";
+        out << "      \"targetProfileAuthor\": \"" << jsonEscape(q.targetProfileAuthor) << "\",\n";
+        out << "      \"adaptiveGrowthBudgetEnabled\": "
+            << (q.adaptiveGrowthBudgetEnabled ? "true" : "false") << ",\n";
+        out << "      \"adaptiveBudgetWindowMs\": " << q.adaptiveBudgetWindowMs << ",\n";
+        out << "      \"adaptiveBudgetWindows\": " << q.adaptiveBudgetWindows << ",\n";
+        out << "      \"adaptiveBudgetAverageRatio\": " << q.adaptiveBudgetAverageRatio << ",\n";
+        out << "      \"adaptiveBudgetMinRatio\": " << q.adaptiveBudgetMinRatio << ",\n";
+        out << "      \"adaptiveBudgetMaxRatio\": " << q.adaptiveBudgetMaxRatio << ",\n";
+        out << "      \"rejectedByAdaptiveBudget\": " << q.rejectedByAdaptiveBudget << ",\n";
+        out << "      \"laneCoverageScore\": " << q.laneCoverageScore << ",\n";
+        out << "      \"laneEntropyScore\": " << q.laneEntropyScore << ",\n";
+        out << "      \"edgeUsageScore\": " << q.edgeUsageScore << ",\n";
+        out << "      \"activeLaneWindowScore\": " << q.activeLaneWindowScore << ",\n";
+        out << "      \"spatialSpanScore\": " << q.spatialSpanScore << ",\n";
+        out << "      \"adjacentExpansionScore\": " << q.adjacentExpansionScore << ",\n";
+        out << "      \"anchorPreserveScore\": " << q.anchorPreserveScore << ",\n";
+        out << "      \"patternVocabularyScore\": " << q.patternVocabularyScore << ",\n";
+        out << "      \"addedRatioFitScore\": " << q.addedRatioFitScore << ",\n";
+        out << "      \"targetKSafetyScore\": " << q.targetKSafetyScore << ",\n";
         out << "      \"laneEntropy\": " << q.laneEntropy << ",\n";
         out << "      \"patternPreserveScore\": " << q.patternPreserveScore << ",\n";
         out << "      \"playabilityScore\": " << q.playabilityScore << ",\n";
@@ -997,7 +1169,7 @@ void printPolicyComparison(const std::vector<PolicyComparisonRow>& rows,
                            std::ostream& out) {
     out << std::setprecision(6);
     out << "Policy comparison:\n";
-    out << "policy,notes,added,ratio,entropy,pattern,playability,safety";
+    out << "policy,notes,added,ratio,weave,entropy,pattern,playability,safety";
     if (emitDiffReport) {
         out << ",densityDelta,chordBefore,chordAfter,laneCoverageBefore,laneCoverageAfter";
     }
@@ -1012,6 +1184,7 @@ void printPolicyComparison(const std::vector<PolicyComparisonRow>& rows,
             << row.report.totalNotes << ","
             << q.addedNotes << ","
             << q.addedNoteRatio << ","
+            << q.kLikenessScore << ","
             << q.laneEntropy << ","
             << q.patternPreserveScore << ","
             << q.playabilityScore << ","
@@ -1105,6 +1278,13 @@ int main(int argc, char** argv) {
         convertOptions.echoAvoidHighDensity = cli.echoAvoidHighDensity;
         convertOptions.echoHighDensityWindowMs = cli.echoHighDensityWindowMs;
         convertOptions.echoMaxLocalNps = cli.echoMaxLocalNps;
+        if (cli.targetProfile.has_value()) {
+            auto profile = loadTargetKProfile(*cli.targetProfile);
+            if (profile.targetKeys != convertOptions.targetKeyCount) {
+                throw std::runtime_error("Target profile key count does not match --target");
+            }
+            convertOptions.targetKProfile = std::move(profile);
+        }
 
         if (cli.comparePolicies.has_value()) {
             const auto rows = runPolicyComparison(chart, convertOptions, *cli.comparePolicies);
@@ -1113,6 +1293,11 @@ int main(int argc, char** argv) {
             std::cout << "Mode: " << (bmsInput ? "BMS policy comparison" : "osu!mania policy comparison") << "\n";
             std::cout << "Source keys: " << convertOptions.sourceKeyCount << "\n";
             std::cout << "Target keys: " << convertOptions.targetKeyCount << "\n\n";
+        if (convertOptions.targetKProfile.has_value()) {
+            std::cout << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
+                      << convertOptions.targetKProfile->sourceName << " ("
+                      << convertOptions.targetKProfile->sampleCount << " charts)\n";
+        }
             printPolicyComparison(rows, cli.emitFeelReport, cli.emitDiffReport, std::cout);
 
             if (cli.report.has_value()) {
@@ -1187,6 +1372,15 @@ int main(int argc, char** argv) {
         std::cout << "Echo min gap: " << convertOptions.echoMinGapMs << " ms\n";
         std::cout << "Echo same-lane min gap: " << convertOptions.echoSameLaneMinGapMs << " ms\n";
         std::cout << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
+        if (convertOptions.targetKProfile.has_value()) {
+            std::cout << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
+                      << convertOptions.targetKProfile->sourceName << " ("
+                      << convertOptions.targetKProfile->sampleCount << " charts";
+            if (!convertOptions.targetKProfile->authorToken.empty()) {
+                std::cout << ", author " << convertOptions.targetKProfile->authorToken;
+            }
+            std::cout << ")\n";
+        }
         if (convertOptions.dpMode) {
             std::cout << "DP mode: requested\n";
         }

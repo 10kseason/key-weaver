@@ -25,6 +25,9 @@ struct LaneCandidateSet {
     int sourceLane = 0;
     int baseLane = 0;
     int radius = 1;
+    bool hasPreferredZone = false;
+    int preferredZoneStart = 0;
+    int preferredZoneEnd = 0;
     std::vector<int> candidates;
 };
 

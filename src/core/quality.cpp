@@ -1,9 +1,11 @@
 #include "core/quality.hpp"
 
 #include "core/collision.hpp"
+#include "core/mapping.hpp"
 #include "core/repeat.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <numeric>
@@ -34,6 +36,29 @@ int signOf(int value) {
 
 double clamp01(double value) {
     return std::max(0.0, std::min(1.0, value));
+}
+
+double scoreAtLeast(double value, double desired) {
+    if (desired <= 0.0) {
+        return 1.0;
+    }
+    return clamp01(value / desired);
+}
+
+double scoreBand(double value, double low, double ideal, double high) {
+    if (ideal <= low || high <= ideal) {
+        return scoreAtLeast(value, ideal);
+    }
+    if (value <= low) {
+        return 0.0;
+    }
+    if (value <= ideal) {
+        return clamp01((value - low) / (ideal - low));
+    }
+    if (value <= high) {
+        return clamp01((high - value) / (high - ideal));
+    }
+    return 0.0;
 }
 
 double jackRate(const std::vector<Note>& notes) {
@@ -314,7 +339,200 @@ double spanScore(const Chart& original, const Chart& converted, int sourceK, int
     return total <= 0.0 ? 1.0 : score / total;
 }
 
+int targetAnchorLaneForSource(int sourceLane, int sourceK, int targetK) {
+    if (sourceK == 7 && targetK == 10) {
+        static constexpr std::array<int, 7> anchors = {0, 1, 3, 4, 6, 8, 9};
+        const int clamped = clampInt(sourceLane, 0, 6);
+        return anchors[static_cast<std::size_t>(clamped)];
+    }
+    return mapLaneDirect(sourceLane, sourceK, targetK);
+}
+
+double edgeUsageRatio(const std::vector<int>& distribution) {
+    if (distribution.empty()) {
+        return 0.0;
+    }
+    const int total = std::accumulate(distribution.begin(), distribution.end(), 0);
+    if (total <= 0) {
+        return 0.0;
+    }
+    const int edgeWidth = std::min(2, static_cast<int>(distribution.size()) / 2);
+    int edgeNotes = 0;
+    for (int i = 0; i < edgeWidth; ++i) {
+        edgeNotes += distribution[static_cast<std::size_t>(i)];
+        edgeNotes += distribution[distribution.size() - 1 - static_cast<std::size_t>(i)];
+    }
+    return static_cast<double>(edgeNotes) / static_cast<double>(total);
+}
+
+double activeLaneWindowScore(const Chart& converted, int targetK, const TargetKProfile& profile) {
+    if (converted.notes.empty() || targetK <= 0) {
+        return 0.0;
+    }
+
+    int minTime = converted.notes.front().time;
+    int maxTime = converted.notes.front().time;
+    for (const auto& note : converted.notes) {
+        minTime = std::min(minTime, note.time);
+        maxTime = std::max(maxTime, note.time);
+    }
+
+    constexpr int windowMs = 2000;
+    constexpr int stepMs = 1000;
+    const double desiredActiveLanes =
+        std::max(1.0, std::round(static_cast<double>(targetK) * profile.desiredActiveLaneRate));
+
+    double score = 0.0;
+    int windows = 0;
+    for (int start = minTime; start <= maxTime; start += stepMs) {
+        std::vector<bool> active(static_cast<std::size_t>(targetK), false);
+        int noteCount = 0;
+        for (const auto& note : converted.notes) {
+            if (note.time < start || note.time >= start + windowMs) {
+                continue;
+            }
+            if (note.lane >= 0 && note.lane < targetK) {
+                active[static_cast<std::size_t>(note.lane)] = true;
+                ++noteCount;
+            }
+        }
+        if (noteCount <= 0) {
+            continue;
+        }
+        const int activeCount =
+            static_cast<int>(std::count(active.begin(), active.end(), true));
+        score += clamp01(static_cast<double>(activeCount) / desiredActiveLanes);
+        ++windows;
+    }
+
+    return windows <= 0 ? 0.0 : score / static_cast<double>(windows);
+}
+
+double averageChordSpan(const Chart& converted, int targetK) {
+    if (converted.notes.empty() || targetK <= 1) {
+        return 0.0;
+    }
+
+    std::map<int, std::vector<int>> lanesByTime;
+    for (const auto& note : converted.notes) {
+        lanesByTime[note.time].push_back(note.lane);
+    }
+
+    double totalSpan = 0.0;
+    int chordSlices = 0;
+    for (const auto& entry : lanesByTime) {
+        if (entry.second.size() < 2) {
+            continue;
+        }
+        const auto [minIt, maxIt] =
+            std::minmax_element(entry.second.begin(), entry.second.end());
+        totalSpan += static_cast<double>(*maxIt - *minIt) / static_cast<double>(targetK - 1);
+        ++chordSlices;
+    }
+    return chordSlices <= 0 ? 0.0 : totalSpan / static_cast<double>(chordSlices);
+}
+
+double anchorPreserveScore(const Chart& original,
+                           const Chart& converted,
+                           int sourceK,
+                           int targetK) {
+    if (original.notes.empty() || targetK <= 1 || sourceK <= 0) {
+        return 1.0;
+    }
+
+    const auto convertedById = byId(converted.notes);
+    const double tolerance = std::max(1.0, static_cast<double>(targetK) * 0.30);
+    double total = 0.0;
+    double score = 0.0;
+    for (const auto& sourceNote : original.notes) {
+        const auto convertedNote = convertedById.find(sourceNote.id);
+        if (convertedNote == convertedById.end()) {
+            continue;
+        }
+        const int sourceLane = sourceNote.sourceLane.value_or(sourceNote.lane);
+        const int anchor = targetAnchorLaneForSource(sourceLane, sourceK, targetK);
+        const double distance = std::abs(static_cast<double>(convertedNote->second.lane - anchor));
+        score += clamp01(1.0 - distance / tolerance);
+        ++total;
+    }
+
+    return total <= 0.0 ? 1.0 : score / total;
+}
+
+double adjacentExpansionRatio(const Chart& converted, int sourceK, int targetK) {
+    if (converted.notes.empty() || sourceK <= 0 || targetK <= sourceK) {
+        return 0.0;
+    }
+
+    double total = 0.0;
+    double adjacent = 0.0;
+    for (const auto& note : converted.notes) {
+        const int sourceLane = note.sourceLane.value_or(note.lane);
+        if (sourceLane < 0 || sourceLane >= sourceK) {
+            continue;
+        }
+        const int anchor = targetAnchorLaneForSource(sourceLane, sourceK, targetK);
+        const int distance = std::abs(note.lane - anchor);
+        if (distance == 1) {
+            adjacent += 1.0;
+        }
+        total += 1.0;
+    }
+
+    return total <= 0.0 ? 0.0 : adjacent / total;
+}
+
+double addedRatioFitScore(double addedRatio, int sourceK, int targetK) {
+    if (sourceK <= 0 || targetK <= sourceK) {
+        return addedRatio <= 0.001 ? 1.0 : clamp01(1.0 - addedRatio / 0.20);
+    }
+
+    const double growthPotential =
+        static_cast<double>(targetK) / static_cast<double>(sourceK) - 1.0;
+    const double ideal = std::max(0.05, std::min(0.32, growthPotential * 0.55));
+    const double low = std::max(0.0, ideal * 0.35);
+    const double high = std::min(0.45, ideal * 1.65);
+    return scoreBand(addedRatio, low, ideal, high);
+}
+
+double targetKSafetyScore(const QualityReport& report) {
+    double safety = 1.0;
+    safety -= std::min(0.75, static_cast<double>(report.collisionCount) * 0.25);
+    safety -= std::min(0.75, static_cast<double>(report.lnConflictCount) * 0.25);
+    safety -= std::min(0.80, static_cast<double>(report.createdJacks) * 0.20);
+    safety -= std::min(0.90, static_cast<double>(report.unsolvedCreatedJacks) * 0.35);
+    safety -= std::min(0.40, static_cast<double>(report.nearTimeConflicts) * 0.08);
+    safety -= std::min(0.35, static_cast<double>(report.sameLaneNearConflicts) * 0.06);
+    safety -= std::min(0.30, static_cast<double>(report.unsnappedAddedNotes) * 0.05);
+    return clamp01(safety);
+}
+
 }  // namespace
+
+TargetKProfile targetKProfileFor(int sourceKeyCount, int targetKeyCount) {
+    TargetKProfile profile;
+    profile.targetKeys = targetKeyCount;
+    profile.profileName = "builtin_10k_profile";
+    profile.profileKind = "builtin";
+    profile.windowMs = 2000;
+    if (targetKeyCount <= 0) {
+        return profile;
+    }
+
+    const double growthPotential =
+        sourceKeyCount > 0
+            ? std::max(0.0,
+                       static_cast<double>(targetKeyCount) / static_cast<double>(sourceKeyCount) - 1.0)
+            : 0.0;
+    profile.desiredLaneEntropy = targetKeyCount >= 10 ? 0.90 : 0.84;
+    profile.desiredEdgeUsage = targetKeyCount >= 10 ? 0.34 : std::min(0.45, 2.0 / targetKeyCount);
+    profile.desiredActiveLaneRate = targetKeyCount >= 10 ? 0.80 : 0.72;
+    profile.desiredChordSpan = targetKeyCount >= 10 ? 0.45 : 0.38;
+    profile.desiredHandBalance = targetKeyCount >= 9 ? 0.88 : 0.95;
+    profile.desiredAdjacentExpansion =
+        std::max(0.08, std::min(0.30, growthPotential * 0.45));
+    return profile;
+}
 
 QualityReport computeQualityReport(const Chart& original,
                                    const Chart& converted,
@@ -364,6 +582,68 @@ QualityReport computeQualityReport(const Chart& original,
     playability += report.orderPreserveScore * 5.0;
     report.playabilityScore = std::max(0.0, std::min(100.0, playability));
     return report;
+}
+
+void finalizeTargetKLikenessReport(QualityReport& report,
+                                   const Chart& original,
+                                   const Chart& converted,
+                                   int sourceKeyCount,
+                                   int targetKeyCount,
+                                   const TargetKProfile* profileOverride) {
+    if (targetKeyCount <= 1 || converted.notes.empty()) {
+        report.kLikenessScore = 0.0;
+        return;
+    }
+
+    const auto fallbackProfile = targetKProfileFor(sourceKeyCount, targetKeyCount);
+    const auto& profile = profileOverride != nullptr ? *profileOverride : fallbackProfile;
+    report.targetProfileChartCount = profile.sampleCount;
+    report.targetProfileWindowMs = profile.windowMs;
+    report.targetProfileName = profile.profileName;
+    report.targetProfileKind = profile.profileKind;
+    report.targetProfileSource = profile.sourceName;
+    report.targetProfileAuthor = profile.authorToken;
+    report.laneCoverageScore =
+        scoreAtLeast(report.laneCoverageAfter, std::min(1.0, profile.desiredActiveLaneRate + 0.10));
+    report.laneEntropyScore = scoreAtLeast(report.laneEntropyAfter, profile.desiredLaneEntropy);
+    report.edgeUsageScore = scoreBand(edgeUsageRatio(report.laneDistribution),
+                                      profile.desiredEdgeUsage * 0.35,
+                                      profile.desiredEdgeUsage,
+                                      std::min(0.75, profile.desiredEdgeUsage * 1.75));
+    report.activeLaneWindowScore = activeLaneWindowScore(converted, targetKeyCount, profile);
+
+    const double chordSpan = averageChordSpan(converted, targetKeyCount);
+    const double spatialSpan = chordSpan > 0.0 ? chordSpan : report.handSpreadAfter;
+    report.spatialSpanScore = scoreAtLeast(spatialSpan, profile.desiredChordSpan);
+
+    const double adjacentRatio = adjacentExpansionRatio(converted, sourceKeyCount, targetKeyCount);
+    report.adjacentExpansionScore = scoreBand(adjacentRatio,
+                                             profile.desiredAdjacentExpansion * 0.25,
+                                             profile.desiredAdjacentExpansion,
+                                             std::min(0.60, profile.desiredAdjacentExpansion * 2.20));
+    report.anchorPreserveScore =
+        anchorPreserveScore(original, converted, sourceKeyCount, targetKeyCount);
+    report.patternVocabularyScore =
+        clamp01(report.patternPreserveScore * 0.40 + report.gesturePreservationScore * 0.40 +
+                report.jackPreserveScore * 0.20);
+    report.addedRatioFitScore =
+        addedRatioFitScore(report.addedNoteRatio, sourceKeyCount, targetKeyCount);
+    report.targetKSafetyScore = targetKSafetyScore(report);
+
+    const double handBalanceScore = scoreAtLeast(report.handBalanceRatio, profile.desiredHandBalance);
+    const double sourceIntegrity =
+        clamp01(report.anchorPreserveScore * 0.55 + report.patternVocabularyScore * 0.45);
+    const double targetKSpace =
+        clamp01(report.laneCoverageScore * 0.22 + report.laneEntropyScore * 0.22 +
+                report.edgeUsageScore * 0.18 + report.activeLaneWindowScore * 0.24 +
+                report.spatialSpanScore * 0.14);
+    const double raw =
+        clamp01(sourceIntegrity * 0.32 + targetKSpace * 0.30 +
+                report.adjacentExpansionScore * 0.16 + handBalanceScore * 0.12 +
+                report.addedRatioFitScore * 0.10);
+    const double adjacentGrowthGate = 0.50 + report.adjacentExpansionScore * 0.50;
+    report.kLikenessScore =
+        std::round(raw * adjacentGrowthGate * report.targetKSafetyScore * 1000.0) / 10.0;
 }
 
 }  // namespace keyconv

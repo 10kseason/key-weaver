@@ -71,6 +71,20 @@ struct LnWindowProfile {
     std::vector<LnAnchor> anchors;
 };
 
+struct AdaptiveGrowthWindow {
+    int bucket = 0;
+    int startMs = 0;
+    int endMs = 0;
+    int originalNotes = 0;
+    int activeLanes = 0;
+    int holdNotes = 0;
+    int chordSlices = 0;
+    int totalSlices = 0;
+    double localRatio = 0.0;
+    int maxAdds = 0;
+    int added = 0;
+};
+
 int handBoundary(int targetKeyCount) {
     return std::max(1, targetKeyCount / 2);
 }
@@ -295,6 +309,143 @@ int maxAddedTotal(const Chart& original, const ConvertOptions& options) {
                                                    targetRatio)));
 }
 
+int adaptiveBudgetWindowMs(const ConvertOptions& options) {
+    int windowMs = options.targetKProfile.has_value() ? options.targetKProfile->windowMs : 1000;
+    if (windowMs <= 0) {
+        windowMs = 1000;
+    }
+    return std::max(500, std::min(4000, windowMs));
+}
+
+bool adaptiveBudgetEnabledFor(const ConvertOptions& options) {
+    return options.targetKProfile.has_value() &&
+           effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus &&
+           options.targetKeyCount > options.sourceKeyCount;
+}
+
+double adaptiveDensityRoom(double densityNps) {
+    if (densityNps <= 8.0) {
+        return 1.15;
+    }
+    if (densityNps <= 14.0) {
+        return 0.95;
+    }
+    if (densityNps <= 20.0) {
+        return 0.55;
+    }
+    return 0.25;
+}
+
+double adaptivePatternSafety(double holdRate, double chordRate) {
+    double safety = 1.0;
+    if (holdRate >= 0.35) {
+        safety *= 0.60;
+    } else if (holdRate >= 0.20) {
+        safety *= 0.80;
+    }
+    if (chordRate >= 0.65) {
+        safety *= 0.75;
+    } else if (chordRate >= 0.35) {
+        safety *= 0.90;
+    }
+    return safety;
+}
+
+double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
+                          const ConvertOptions& options,
+                          double globalTargetRatio) {
+    if (window.originalNotes <= 0 || globalTargetRatio <= 0.0) {
+        return 0.0;
+    }
+
+    const auto& profile = *options.targetKProfile;
+    const double desiredActiveRate = std::clamp(profile.desiredActiveLaneRate, 0.10, 1.0);
+    const int desiredActiveLanes =
+        std::max(1, std::min(options.targetKeyCount,
+                             static_cast<int>(std::lround(static_cast<double>(options.targetKeyCount) *
+                                                          desiredActiveRate))));
+    const double activeGap =
+        std::max(0.0, static_cast<double>(desiredActiveLanes - window.activeLanes)) /
+        static_cast<double>(desiredActiveLanes);
+    const double targetKNeed = std::clamp(0.45 + activeGap * 1.10, 0.35, 1.35);
+    const double densityNps = static_cast<double>(window.originalNotes) * 1000.0 /
+                              static_cast<double>(std::max(1, window.endMs - window.startMs));
+    const double holdRate = static_cast<double>(window.holdNotes) /
+                            static_cast<double>(std::max(1, window.originalNotes));
+    const double chordRate = static_cast<double>(window.chordSlices) /
+                             static_cast<double>(std::max(1, window.totalSlices));
+    const double adjacentPressure =
+        std::clamp(0.85 + profile.desiredAdjacentExpansion, 0.85, 1.25);
+    const double hardMax = std::min(options.maxAddedNoteRatio, 0.35);
+    return std::clamp(globalTargetRatio *
+                          adaptiveDensityRoom(densityNps) *
+                          adaptivePatternSafety(holdRate, chordRate) *
+                          targetKNeed *
+                          adjacentPressure,
+                      0.0,
+                      hardMax);
+}
+
+std::vector<AdaptiveGrowthWindow> buildAdaptiveGrowthWindows(const Chart& original,
+                                                             const ConvertOptions& options,
+                                                             double globalTargetRatio,
+                                                             int windowMs) {
+    if (!adaptiveBudgetEnabledFor(options) || globalTargetRatio <= 0.0 || original.notes.empty()) {
+        return {};
+    }
+
+    int minTime = original.notes.front().time;
+    int maxTime = original.notes.front().time;
+    for (const auto& note : original.notes) {
+        minTime = std::min(minTime, note.time);
+        maxTime = std::max(maxTime, note.time);
+    }
+    const int startBase = (minTime / windowMs) * windowMs;
+    const int endBase = ((maxTime - startBase) / windowMs) * windowMs + startBase;
+
+    std::vector<AdaptiveGrowthWindow> windows;
+    for (int start = startBase; start <= endBase; start += windowMs) {
+        AdaptiveGrowthWindow window;
+        window.bucket = (start - startBase) / windowMs;
+        window.startMs = start;
+        window.endMs = start + windowMs;
+
+        std::set<int> activeLanes;
+        std::map<int, int> notesByTime;
+        for (const auto& note : original.notes) {
+            if (note.time < window.startMs || note.time >= window.endMs) {
+                continue;
+            }
+            ++window.originalNotes;
+            const int sourceLane = note.sourceLane.has_value() ? *note.sourceLane : note.lane;
+            activeLanes.insert(sourceLane);
+            if (note.type == NoteType::Hold) {
+                ++window.holdNotes;
+            }
+            ++notesByTime[note.time];
+        }
+        if (window.originalNotes <= 0) {
+            continue;
+        }
+        window.activeLanes = static_cast<int>(activeLanes.size());
+        window.totalSlices = static_cast<int>(notesByTime.size());
+        for (const auto& [time, count] : notesByTime) {
+            (void)time;
+            if (count >= 2) {
+                ++window.chordSlices;
+            }
+        }
+        window.localRatio = adaptiveLocalRatio(window, options, globalTargetRatio);
+        window.maxAdds = static_cast<int>(std::floor(static_cast<double>(window.originalNotes) *
+                                                     window.localRatio));
+        if (window.maxAdds == 0 && window.originalNotes >= 4 && window.localRatio >= 0.08) {
+            window.maxAdds = 1;
+        }
+        windows.push_back(window);
+    }
+    return windows;
+}
+
 int measureIndexForTime(int time) {
     constexpr int fallbackMeasureMs = 2000;
     return time / fallbackMeasureMs;
@@ -363,6 +514,10 @@ public:
         laneUse = calculateLaneDistribution(chart.notes, options.targetKeyCount);
         stats.expansionComposerProfile = composerProfile.profile;
         stats.targetAddedNoteRatio = effectiveTargetAddedNoteRatio(options);
+        adaptiveWindowMs = adaptiveBudgetWindowMs(options);
+        adaptiveWindows =
+            buildAdaptiveGrowthWindows(originalChart, convertOptions, stats.targetAddedNoteRatio, adaptiveWindowMs);
+        configureAdaptiveBudgetStats();
     }
 
     bool tryAdd(ExpansionCandidate candidate) {
@@ -372,6 +527,9 @@ public:
             ++stats.rejectedExpansionCandidates;
             ++stats.rejectedByBudget;
             ++stats.rejectedByComposerBudget;
+            return false;
+        }
+        if (rejectByAdaptiveBudget(candidate.note.time)) {
             return false;
         }
 
@@ -570,6 +728,22 @@ private:
         }
     }
 
+    bool rejectByAdaptiveBudget(int time) {
+        const auto windowIndex = adaptiveWindowIndexForTime(time);
+        if (!windowIndex.has_value()) {
+            return false;
+        }
+        auto& window = adaptiveWindows[*windowIndex];
+        if (window.added < window.maxAdds) {
+            return false;
+        }
+        ++stats.rejectedExpansionCandidates;
+        ++stats.rejectedByBudget;
+        ++stats.rejectedByComposerBudget;
+        ++stats.rejectedByAdaptiveBudget;
+        return true;
+    }
+
     void commit(ExpansionCandidate& candidate) {
         candidate.note.id = generatedId(candidate);
         chart.notes.push_back(candidate.note);
@@ -579,6 +753,10 @@ private:
         ++perMeasureAdded[measureIndexForTime(candidate.note.time)];
         if (candidate.note.lane >= 0 && candidate.note.lane < static_cast<int>(laneUse.size())) {
             ++laneUse[static_cast<std::size_t>(candidate.note.lane)];
+        }
+        const auto windowIndex = adaptiveWindowIndexForTime(candidate.note.time);
+        if (windowIndex.has_value()) {
+            ++adaptiveWindows[*windowIndex].added;
         }
         if (candidate.ruleName == "chord_fill") {
             ++stats.addedByChordFill;
@@ -603,11 +781,54 @@ private:
 
     ConvertOptions distanceOptions;
     ConvertOptions echoDistanceOptionsForAdd;
+    int adaptiveWindowMs = 1000;
+    std::vector<AdaptiveGrowthWindow> adaptiveWindows;
+    std::map<int, std::size_t> adaptiveWindowByBucket;
     std::map<int, int> perSliceAdded;
     std::map<int, int> perMeasureAdded;
     std::map<int, int> perEchoSliceAdded;
     std::map<int, int> perEchoMeasureAdded;
     std::map<std::string, int> perPatternEchoAdded;
+
+    void configureAdaptiveBudgetStats() {
+        if (adaptiveWindows.empty()) {
+            stats.adaptiveGrowthBudgetEnabled = false;
+            stats.adaptiveBudgetWindowMs = adaptiveWindowMs;
+            return;
+        }
+
+        stats.adaptiveGrowthBudgetEnabled = true;
+        stats.adaptiveBudgetWindowMs = adaptiveWindowMs;
+        stats.adaptiveBudgetWindows = static_cast<int>(adaptiveWindows.size());
+        stats.adaptiveBudgetMinRatio = adaptiveWindows.front().localRatio;
+        stats.adaptiveBudgetMaxRatio = adaptiveWindows.front().localRatio;
+
+        double weightedRatioSum = 0.0;
+        int totalNotes = 0;
+        for (std::size_t index = 0; index < adaptiveWindows.size(); ++index) {
+            const auto& window = adaptiveWindows[index];
+            adaptiveWindowByBucket[window.bucket] = index;
+            stats.adaptiveBudgetMinRatio = std::min(stats.adaptiveBudgetMinRatio, window.localRatio);
+            stats.adaptiveBudgetMaxRatio = std::max(stats.adaptiveBudgetMaxRatio, window.localRatio);
+            weightedRatioSum += window.localRatio * static_cast<double>(window.originalNotes);
+            totalNotes += window.originalNotes;
+        }
+        stats.adaptiveBudgetAverageRatio =
+            totalNotes <= 0 ? 0.0 : weightedRatioSum / static_cast<double>(totalNotes);
+    }
+
+    std::optional<std::size_t> adaptiveWindowIndexForTime(int time) const {
+        if (adaptiveWindows.empty() || adaptiveWindowMs <= 0) {
+            return std::nullopt;
+        }
+        const int firstStart = adaptiveWindows.front().startMs;
+        const int bucket = (time - firstStart) / adaptiveWindowMs;
+        const auto found = adaptiveWindowByBucket.find(bucket);
+        if (found == adaptiveWindowByBucket.end()) {
+            return std::nullopt;
+        }
+        return found->second;
+    }
 };
 
 std::vector<ExpansionCandidate> chordFillCandidates(const SliceView& slice,

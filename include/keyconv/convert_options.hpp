@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <keyconv/quality_report.hpp>
 
 namespace keyconv {
@@ -49,6 +51,7 @@ struct ConvertOptions {
     bool echoAvoidHighDensity = true;
     int echoHighDensityWindowMs = 1000;
     double echoMaxLocalNps = 12.0;
+    std::optional<TargetKProfile> targetKProfile;
     CollisionPolicy collisionPolicy = CollisionPolicy::ShiftNearest;
     unsigned int seed = 0;
 };

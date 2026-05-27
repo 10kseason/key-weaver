@@ -12,6 +12,8 @@ namespace keyconv {
 
 namespace {
 
+constexpr int kSourceLaneAnchorWindowMs = 4000;
+
 double normalizedLane(int lane, int keyCount) {
     if (keyCount <= 1) {
         return 0.5;
@@ -39,6 +41,12 @@ void addGestureCandidates(LaneCandidateSet& set, const GestureHint* hint, int ta
     if (hint == nullptr || targetKeyCount <= 0) {
         return;
     }
+    set.hasPreferredZone = true;
+    set.preferredZoneStart = clampInt(hint->zoneStart, 0, targetKeyCount - 1);
+    set.preferredZoneEnd = clampInt(hint->zoneEnd, 0, targetKeyCount - 1);
+    if (set.preferredZoneStart > set.preferredZoneEnd) {
+        std::swap(set.preferredZoneStart, set.preferredZoneEnd);
+    }
     addUnique(set.candidates, clampInt(hint->preferredLane, 0, targetKeyCount - 1));
     if (hint->kind == PatternKind::Trill || hint->kind == PatternKind::Jack) {
         for (int lane = hint->zoneStart; lane <= hint->zoneEnd; ++lane) {
@@ -47,6 +55,26 @@ void addGestureCandidates(LaneCandidateSet& set, const GestureHint* hint, int ta
     } else {
         addUnique(set.candidates, clampInt(hint->preferredLane - 1, 0, targetKeyCount - 1));
         addUnique(set.candidates, clampInt(hint->preferredLane + 1, 0, targetKeyCount - 1));
+    }
+}
+
+bool candidateInPreferredZone(const LaneCandidateSet& set, int lane) {
+    return !set.hasPreferredZone || (lane >= set.preferredZoneStart && lane <= set.preferredZoneEnd);
+}
+
+void keepPreferredZoneCandidates(LaneCandidateSet& set) {
+    if (!set.hasPreferredZone) {
+        return;
+    }
+
+    std::vector<int> filtered;
+    for (const int lane : set.candidates) {
+        if (candidateInPreferredZone(set, lane)) {
+            addUnique(filtered, lane);
+        }
+    }
+    if (!filtered.empty()) {
+        set.candidates = std::move(filtered);
     }
 }
 
@@ -162,9 +190,32 @@ std::optional<Note> previousInMotif(const std::vector<Note>& placed,
     return std::nullopt;
 }
 
+bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
+    return sourceKeyCount == 7 && targetKeyCount == 10;
+}
+
+std::pair<int, int> dualFiveZoneForSource(int sourceLane) {
+    return sourceLane <= 3 ? std::pair<int, int>{0, 4} : std::pair<int, int>{5, 9};
+}
+
+int dualFiveBaseLaneForSource(int sourceLane, int targetKeyCount) {
+    const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
+    const bool leftZone = zoneStart < 5;
+    const int sourceMin = leftZone ? 0 : 3;
+    const int sourceMax = leftZone ? 3 : 6;
+    const double t = static_cast<double>(clampInt(sourceLane, sourceMin, sourceMax) - sourceMin) /
+                     static_cast<double>(std::max(1, sourceMax - sourceMin));
+    const int lane = static_cast<int>(std::lround(static_cast<double>(zoneStart) +
+                                                  t * static_cast<double>(zoneEnd - zoneStart)));
+    return clampInt(lane, 0, targetKeyCount - 1);
+}
+
 std::pair<int, int> balanceZoneForSource(int sourceLane, int sourceKeyCount, int targetKeyCount) {
     if (targetKeyCount <= 1) {
         return {0, 0};
+    }
+    if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
+        return dualFiveZoneForSource(sourceLane);
     }
     if (sourceKeyCount <= 1) {
         return {0, targetKeyCount - 1};
@@ -187,6 +238,133 @@ int handBoundary(int targetKeyCount) {
 
 int handForLane(int lane, int targetKeyCount) {
     return lane < handBoundary(targetKeyCount) ? 0 : 1;
+}
+
+double dualFivePanelScore(int sourceLane,
+                          int targetLane,
+                          const GestureHint* hint,
+                          const AssignmentContext& context) {
+    if (!useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount)) {
+        return 0.0;
+    }
+
+    int zoneStart = 0;
+    int zoneEnd = 0;
+    if (hint != nullptr &&
+        (hint->role == PhraseRole::LeftHandVoice || hint->role == PhraseRole::RightHandVoice)) {
+        zoneStart = hint->zoneStart;
+        zoneEnd = hint->zoneEnd;
+    } else {
+        const auto zone = dualFiveZoneForSource(sourceLane);
+        zoneStart = zone.first;
+        zoneEnd = zone.second;
+    }
+    return targetLane >= zoneStart && targetLane <= zoneEnd ? context.weights.shape * 0.5
+                                                            : -context.weights.shape * 4.0;
+}
+
+std::optional<int> recentSourceLaneAnchor(const std::vector<Note>& placed,
+                                          int sourceLane,
+                                          int time,
+                                          int targetKeyCount) {
+    if (targetKeyCount <= 0) {
+        return std::nullopt;
+    }
+
+    std::vector<int> counts(static_cast<std::size_t>(targetKeyCount), 0);
+    std::vector<int> latestTimes(static_cast<std::size_t>(targetKeyCount), -1);
+    for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
+        const int dt = time - it->time;
+        if (dt > kSourceLaneAnchorWindowMs) {
+            break;
+        }
+        if (dt <= 0 || it->sourceLane.value_or(it->lane) != sourceLane ||
+            it->lane < 0 || it->lane >= targetKeyCount) {
+            continue;
+        }
+        ++counts[static_cast<std::size_t>(it->lane)];
+        latestTimes[static_cast<std::size_t>(it->lane)] =
+            std::max(latestTimes[static_cast<std::size_t>(it->lane)], it->time);
+    }
+
+    int bestLane = -1;
+    int bestCount = 0;
+    int bestLatestTime = -1;
+    for (int lane = 0; lane < targetKeyCount; ++lane) {
+        const int count = counts[static_cast<std::size_t>(lane)];
+        const int latestTime = latestTimes[static_cast<std::size_t>(lane)];
+        if (count > bestCount || (count == bestCount && latestTime > bestLatestTime)) {
+            bestLane = lane;
+            bestCount = count;
+            bestLatestTime = latestTime;
+        }
+    }
+
+    if (bestLane < 0 || bestCount == 0) {
+        return std::nullopt;
+    }
+    return bestLane;
+}
+
+double sourceLaneAnchorScore(int targetLane, int anchorLane, int targetKeyCount) {
+    if (targetLane == anchorLane) {
+        return 1.0;
+    }
+
+    const int delta = std::abs(targetLane - anchorLane);
+    if (handForLane(targetLane, targetKeyCount) == handForLane(anchorLane, targetKeyCount) && delta == 1) {
+        return 0.25;
+    }
+    return -std::min(1.0, static_cast<double>(delta) / 3.0);
+}
+
+bool roleHasHandVoice(PhraseRole role) {
+    return role == PhraseRole::LeftHandVoice || role == PhraseRole::RightHandVoice;
+}
+
+int expectedRoleHand(PhraseRole role) {
+    return role == PhraseRole::RightHandVoice ? 1 : 0;
+}
+
+double roleVoiceLeadingScore(const Note& previous,
+                             const GestureHint* previousHint,
+                             const Note& source,
+                             int targetLane,
+                             const GestureHint& hint,
+                             const AssignmentContext& context) {
+    if (!useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount) || !roleHasHandVoice(hint.role) ||
+        hint.kind == PatternKind::Jack || previousHint == nullptr || previousHint->role != hint.role) {
+        return 0.0;
+    }
+
+    const int roleHand = expectedRoleHand(hint.role);
+    if (handForLane(targetLane, context.targetKeyCount) != roleHand ||
+        handForLane(previous.lane, context.targetKeyCount) != roleHand) {
+        return 0.0;
+    }
+
+    const int sourceLane = source.sourceLane.value_or(source.lane);
+    const int previousSourceLane = previous.sourceLane.value_or(previous.lane);
+    const int sourceDelta = std::abs(sourceLane - previousSourceLane);
+    const int targetDelta = std::abs(targetLane - previous.lane);
+    const int sourceSign = signOf(sourceLane - previousSourceLane);
+    const int targetSign = signOf(targetLane - previous.lane);
+    if (sourceSign != 0) {
+        if (targetSign == 0) {
+            return 0.0;
+        }
+        if (targetSign != sourceSign) {
+            return 0.0;
+        }
+    }
+
+    const int expectedDelta = std::max(1, sourceDelta + 1);
+    if (targetDelta <= expectedDelta) {
+        return context.weights.gesture * 0.08 *
+               (1.0 - std::min(1.0, static_cast<double>(targetDelta) / 5.0));
+    }
+
+    return 0.0;
 }
 
 std::pair<int, int> handUseCounts(const std::vector<int>& laneUse, int targetKeyCount) {
@@ -274,6 +452,7 @@ double gestureScore(const Note& source,
     const int previousSourceLane = previous->sourceLane.value_or(previous->lane);
     const int sourceSign = signOf(sourceLane - previousSourceLane);
     const int targetSign = signOf(targetLane - previous->lane);
+    score += roleVoiceLeadingScore(*previous, previousHint, source, targetLane, *hint, context);
 
     if (hint->kind == PatternKind::StairUp || hint->kind == PatternKind::StairDown) {
         if (sourceSign != 0) {
@@ -330,6 +509,24 @@ std::vector<int> noCreatedJackCandidates(const LaneCandidateSet& baseSet,
     }
     if (!safe.empty()) {
         return safe;
+    }
+
+    for (int distance = 0; distance < context.targetKeyCount; ++distance) {
+        const int left = baseSet.baseLane - distance;
+        const int right = baseSet.baseLane + distance;
+        if (left >= 0 && left < context.targetKeyCount &&
+            candidateInPreferredZone(baseSet, left) &&
+            !createsSourceDifferentRepeat(context.placed, sourceLane, note.time, left, window)) {
+            addUnique(safe, left);
+        }
+        if (right >= 0 && right < context.targetKeyCount && right != left &&
+            candidateInPreferredZone(baseSet, right) &&
+            !createsSourceDifferentRepeat(context.placed, sourceLane, note.time, right, window)) {
+            addUnique(safe, right);
+        }
+        if (!safe.empty()) {
+            return safe;
+        }
     }
 
     for (int distance = 0; distance < context.targetKeyCount; ++distance) {
@@ -408,7 +605,15 @@ PpgWeights weightsForStyle(ConversionStyle style) {
 LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK, ConversionStyle style) {
     LaneCandidateSet set;
     set.sourceLane = sourceLane;
-    set.baseLane = mapLaneDirect(sourceLane, sourceK, targetK);
+    set.baseLane = useDualFiveSplit(sourceK, targetK)
+                       ? dualFiveBaseLaneForSource(sourceLane, targetK)
+                       : mapLaneDirect(sourceLane, sourceK, targetK);
+    if (useDualFiveSplit(sourceK, targetK)) {
+        const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
+        set.hasPreferredZone = true;
+        set.preferredZoneStart = zoneStart;
+        set.preferredZoneEnd = zoneEnd;
+    }
     set.radius = 1;
     if (style == ConversionStyle::Direct) {
         set.radius = 0;
@@ -427,6 +632,7 @@ LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK
         addUnique(set.candidates, clampInt(set.baseLane - offset, 0, targetK - 1));
         addUnique(set.candidates, clampInt(set.baseLane + offset, 0, targetK - 1));
     }
+    keepPreferredZoneCandidates(set);
     return set;
 }
 
@@ -441,8 +647,24 @@ std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
         const int sourceLane = note.sourceLane.value_or(note.lane);
         auto baseSet =
             generateCandidateLanes(sourceLane, context.sourceKeyCount, context.targetKeyCount, context.style);
-        addGestureCandidates(baseSet, findGestureHint(context.gestureRail, note.id), context.targetKeyCount);
-        candidateLists.push_back(noCreatedJackCandidates(baseSet, note, context));
+        const auto* hint = findGestureHint(context.gestureRail, note.id);
+        addGestureCandidates(baseSet, hint, context.targetKeyCount);
+        auto candidates = noCreatedJackCandidates(baseSet, note, context);
+        auto sourceAnchor =
+            recentSourceLaneAnchor(context.placed, sourceLane, note.time, context.targetKeyCount);
+        if (slice.noteIndices.size() == 1 && hint != nullptr && hint->kind == PatternKind::Jack) {
+            sourceAnchor.reset();
+        }
+        if (slice.noteIndices.size() == 1 && sourceAnchor.has_value() &&
+            std::find(candidates.begin(), candidates.end(), *sourceAnchor) != candidates.end() &&
+            !hasSameTimeNote(context.placed, note.time, *sourceAnchor)) {
+            Note anchored = note;
+            anchored.lane = *sourceAnchor;
+            if (!hasLongNoteConflict(context.placed, anchored, *sourceAnchor)) {
+                candidates = {*sourceAnchor};
+            }
+        }
+        candidateLists.push_back(std::move(candidates));
     }
 
     std::vector<SliceAssignment> assignments;
@@ -493,11 +715,14 @@ double scoreAssignment(const TimeSlice& slice,
         const bool sourceJackLike = hint != nullptr && hint->kind == PatternKind::Jack;
         const bool sourceRepeatNearby =
             recentSameSourceLane(context.placed, sourceLane, source.time, jackWindowMsForBalance).has_value();
+        const auto sourceAnchor =
+            recentSourceLaneAnchor(context.placed, sourceLane, source.time, context.targetKeyCount);
 
         score += context.weights.position *
                  (1.0 - std::abs(normalizedLane(sourceLane, context.sourceKeyCount) -
                                   normalizedLane(targetLane, context.targetKeyCount)));
-        if (!sourceJackLike && !sourceRepeatNearby) {
+        score += dualFivePanelScore(sourceLane, targetLane, hint, context);
+        if (!sourceJackLike && !sourceRepeatNearby && !sourceAnchor.has_value()) {
             score += context.weights.density *
                      expandedLaneBalanceScore(context.laneUse,
                                               sourceLane,
@@ -512,6 +737,11 @@ double scoreAssignment(const TimeSlice& slice,
             }
         }
         score += gestureScore(source, targetLane, hint, context);
+        if (!sourceJackLike && sourceAnchor.has_value()) {
+            score += context.weights.shape *
+                     sourceLaneAnchorScore(targetLane, *sourceAnchor, context.targetKeyCount) *
+                     2.25;
+        }
 
         if (!usedInSlice.insert(targetLane).second) {
             collisionPenalty += 1.0;

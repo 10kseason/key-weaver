@@ -11,9 +11,16 @@
 
 namespace keyconv {
 
+enum class PhraseRole {
+    Neutral,
+    LeftHandVoice,
+    RightHandVoice,
+};
+
 struct GestureHint {
     int motifId = -1;
     PatternKind kind = PatternKind::Single;
+    PhraseRole role = PhraseRole::Neutral;
     int preferredLane = 0;
     int zoneStart = 0;
     int zoneEnd = 0;

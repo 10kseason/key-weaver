@@ -145,6 +145,10 @@ bool isPlayableLine(const std::string& line) {
     return data.has_value() && (isNormalKeyChannel(data->second) || isLongKeyChannel(data->second));
 }
 
+bool isKeyModeHeader(const std::string& name) {
+    return name.size() == 2 && name[0] >= '4' && name[0] <= '8' && name[1] == 'K';
+}
+
 std::vector<std::string> objectTokens(const std::string& payload) {
     std::vector<std::string> tokens;
     if (payload.size() < 2) {
@@ -344,6 +348,9 @@ std::vector<int> channelsForKeyCount(int keyCount) {
     if (keyCount == 8) {
         return {16, 11, 12, 13, 14, 15, 18, 19};
     }
+    if (keyCount == 9) {
+        return {11, 12, 13, 14, 15, 16, 17, 18, 19};
+    }
     if (keyCount == 10) {
         return {11, 12, 13, 14, 15, 21, 22, 23, 24, 25};
     }
@@ -434,6 +441,17 @@ std::string keyWeaverMarker(int keyCount) {
     return "KeyWeaver" + std::to_string(keyCount) + "K";
 }
 
+int playerModeForKeyCount(int keyCount) {
+    return keyCount == 10 || keyCount == 14 || keyCount == 16 ? 3 : 1;
+}
+
+void writeKeyModeHeaders(std::ostream& out, int keyCount) {
+    out << "#PLAYER " << playerModeForKeyCount(keyCount) << "\n";
+    if (keyCount >= 4 && keyCount <= 8) {
+        out << "#" << keyCount << "K\n";
+    }
+}
+
 }  // namespace
 
 std::string exportBms(const Chart& chart, std::optional<int> targetKeyCount) {
@@ -478,6 +496,9 @@ std::string exportBms(const Chart& chart, std::optional<int> targetKeyCount) {
             const auto header = parseHeaderLine(line);
             if (header.has_value()) {
                 wroteAnyHeader = true;
+                if (header->first == "PLAYER" || isKeyModeHeader(header->first)) {
+                    continue;
+                }
                 if (header->first == "LNTYPE") {
                     wroteLntype = true;
                 }
@@ -496,7 +517,6 @@ std::string exportBms(const Chart& chart, std::optional<int> targetKeyCount) {
         }
     } else {
         wroteAnyHeader = true;
-        out << "#PLAYER 1\n";
         out << "#GENRE Converted\n";
         out << "#TITLE " << (chart.meta.title.has_value() ? *chart.meta.title : std::string("Converted")) << "\n";
         out << "#ARTIST " << (chart.meta.artist.has_value() ? *chart.meta.artist : std::string("Unknown")) << "\n";
@@ -506,8 +526,9 @@ std::string exportBms(const Chart& chart, std::optional<int> targetKeyCount) {
     }
 
     if (!wroteAnyHeader) {
-        out << "#PLAYER 1\n#TITLE Converted\n#BPM 120\n#WAV01 keyweaver.wav\n";
+        out << "#TITLE Converted\n#BPM 120\n#WAV01 keyweaver.wav\n";
     }
+    writeKeyModeHeaders(out, keyCount);
     if (!wroteSubtitle) {
         out << "#SUBTITLE " << keyWeaverMarker(keyCount) << "\n";
     }

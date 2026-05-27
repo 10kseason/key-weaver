@@ -48,7 +48,8 @@ struct CompressionPlanStats {
 CompressPolicy resolveCompressPolicy(const ConvertOptions& options);
 CompressionPlanStats applyCompressPlanner(std::vector<Note>& notes,
                                           const ConvertOptions& options,
-                                          const std::vector<TimingPoint>& timingPoints);
+                                          const std::vector<TimingPoint>& timingPoints,
+                                          const Chart* original = nullptr);
 OverlapValidationResult validateNoOverlap(const std::vector<Note>& notes, int targetKeyCount);
 
 }  // namespace keyconv

@@ -1,5 +1,6 @@
 build/
 dist/
+scripts/build/
 테스트 대상/
 samples/* KeyWeaver*.osu
 key_converter_codex_dev_manual*.md

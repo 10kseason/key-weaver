@@ -39,9 +39,16 @@ struct ExpansionPlanStats {
     std::string expansionComposerProfile = "preserve";
     double targetAddedNoteRatio = 0.0;
     double budgetUsedRatio = 0.0;
+    bool adaptiveGrowthBudgetEnabled = false;
+    int adaptiveBudgetWindowMs = 1000;
+    int adaptiveBudgetWindows = 0;
+    double adaptiveBudgetAverageRatio = 0.0;
+    double adaptiveBudgetMinRatio = 0.0;
+    double adaptiveBudgetMaxRatio = 0.0;
     int acceptedByComposer = 0;
     int rejectedByComposerBudget = 0;
     int rejectedByComposerSafety = 0;
+    int rejectedByAdaptiveBudget = 0;
     int rejectedEchoCandidates = 0;
     int rejectedEchoByDensity = 0;
     int rejectedEchoByDistance = 0;
@@ -79,7 +86,7 @@ struct ExpansionPlanStats {
     double streamEchoAddedRatio = 0.0;
     double maxObservedLocalNpsAfterEcho = 0.0;
     bool deterministic = true;
-    std::string algorithmVersion = "v0.5.3";
+    std::string algorithmVersion = "v0.5.5";
     StreamEchoProfile streamEchoProfile = StreamEchoProfile::Conservative;
     ExpansionPolicy policy = ExpansionPolicy::PreserveNoteCount;
     std::vector<GeneratedNoteInfo> generatedNotes;

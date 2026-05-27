@@ -678,7 +678,7 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
                                   expansionStats.warnings.begin(),
                                   expansionStats.warnings.end());
 
-    compressionStats = applyCompressPlanner(placed, options, chart.timingPoints);
+    compressionStats = applyCompressPlanner(placed, options, chart.timingPoints, &chart);
     result.report.droppedNotes += compressionStats.droppedByCompression;
     result.report.warnings.insert(result.report.warnings.end(),
                                   compressionStats.warnings.begin(),
@@ -798,9 +798,16 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     result.report.quality.expansionComposerProfile = expansionStats.expansionComposerProfile;
     result.report.quality.targetAddedNoteRatio = expansionStats.targetAddedNoteRatio;
     result.report.quality.budgetUsedRatio = expansionStats.budgetUsedRatio;
+    result.report.quality.adaptiveGrowthBudgetEnabled = expansionStats.adaptiveGrowthBudgetEnabled;
+    result.report.quality.adaptiveBudgetWindowMs = expansionStats.adaptiveBudgetWindowMs;
+    result.report.quality.adaptiveBudgetWindows = expansionStats.adaptiveBudgetWindows;
+    result.report.quality.adaptiveBudgetAverageRatio = expansionStats.adaptiveBudgetAverageRatio;
+    result.report.quality.adaptiveBudgetMinRatio = expansionStats.adaptiveBudgetMinRatio;
+    result.report.quality.adaptiveBudgetMaxRatio = expansionStats.adaptiveBudgetMaxRatio;
     result.report.quality.acceptedByComposer = expansionStats.acceptedByComposer;
     result.report.quality.rejectedByComposerBudget = expansionStats.rejectedByComposerBudget;
     result.report.quality.rejectedByComposerSafety = expansionStats.rejectedByComposerSafety;
+    result.report.quality.rejectedByAdaptiveBudget = expansionStats.rejectedByAdaptiveBudget;
     result.report.quality.rejectedEchoCandidates = expansionStats.rejectedEchoCandidates;
     result.report.quality.rejectedEchoByDensity = expansionStats.rejectedEchoByDensity;
     result.report.quality.rejectedEchoByDistance = expansionStats.rejectedEchoByDistance;
@@ -845,6 +852,12 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     result.report.quality.rejectedStreamPrimaryByBudget = expansionStats.rejectedStreamPrimaryByBudget;
     result.report.quality.streamEchoAddedRatio = expansionStats.streamEchoAddedRatio;
     result.report.quality.maxObservedLocalNpsAfterEcho = expansionStats.maxObservedLocalNpsAfterEcho;
+    finalizeTargetKLikenessReport(result.report.quality,
+                                  chart,
+                                  result.chart,
+                                  options.sourceKeyCount,
+                                  options.targetKeyCount,
+                                  options.targetKProfile.has_value() ? &*options.targetKProfile : nullptr);
     return result;
 }
 

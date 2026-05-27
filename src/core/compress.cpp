@@ -3,6 +3,7 @@
 #include "core/collision.hpp"
 #include "core/distance.hpp"
 #include "core/mapping.hpp"
+#include "core/repeat.hpp"
 
 #include <algorithm>
 #include <map>
@@ -102,6 +103,17 @@ bool createsSourceDifferentRepeat(const std::vector<Note>& placed,
     return false;
 }
 
+bool createsCompressedRepeat(const std::vector<Note>& placed,
+                             const Note& note,
+                             int lane,
+                             const ConvertOptions& options,
+                             const Chart* original) {
+    if (original != nullptr) {
+        return wouldCreateCreatedJackOnLane(*original, placed, note, lane, options.jackWindowMs);
+    }
+    return createsSourceDifferentRepeat(placed, note, lane, options.jackWindowMs);
+}
+
 struct PlacementAttempt {
     std::optional<Note> note;
     bool distanceBlocked = false;
@@ -117,10 +129,12 @@ PlacementAttempt placeAtNearestLane(const std::vector<Note>& placed,
                                     int targetKeyCount,
                                     const ConvertOptions& options,
                                     bool checkDistance,
-                                    bool includeHoldEdges) {
+                                    bool includeHoldEdges,
+                                    const Chart* original,
+                                    bool allowCreatedJackFallback) {
     PlacementAttempt result;
     const auto candidates = nearestLanes(note.lane, targetKeyCount);
-    for (int pass = 0; pass < 2; ++pass) {
+    for (int pass = 0; pass < (allowCreatedJackFallback ? 2 : 1); ++pass) {
         const bool avoidCompressedJack = pass == 0;
         for (const int lane : candidates) {
             Note candidate = note;
@@ -129,7 +143,7 @@ PlacementAttempt placeAtNearestLane(const std::vector<Note>& placed,
                 continue;
             }
             if (avoidCompressedJack &&
-                createsSourceDifferentRepeat(placed, candidate, lane, options.jackWindowMs)) {
+                createsCompressedRepeat(placed, candidate, lane, options, original)) {
                 continue;
             }
             if (checkDistance && hasDistanceConflict(placed, candidate, options, includeHoldEdges)) {
@@ -259,7 +273,9 @@ RollAttempt rollNote(const std::vector<Note>& placed,
                      const Note& note,
                      int targetKeyCount,
                      const ConvertOptions& options,
-                     const std::vector<TimingPoint>& timingPoints) {
+                     const std::vector<TimingPoint>& timingPoints,
+                     const Chart* original,
+                     bool allowCreatedJackFallback) {
     RollAttempt result;
     const auto candidateTimes = rollTimesForNote(placed, note, options, timingPoints);
 
@@ -281,7 +297,14 @@ RollAttempt rollNote(const std::vector<Note>& placed,
             continue;
         }
 
-        const auto placedRolled = placeAtNearestLane(placed, rolled, targetKeyCount, options, true, true);
+        const auto placedRolled = placeAtNearestLane(placed,
+                                                     rolled,
+                                                     targetKeyCount,
+                                                     options,
+                                                     true,
+                                                     true,
+                                                     original,
+                                                     allowCreatedJackFallback);
         if (placedRolled.distanceBlocked) {
             result.distanceBlocked = true;
         }
@@ -384,12 +407,16 @@ CompressPolicy resolveCompressPolicy(const ConvertOptions& options) {
     if (options.style == ConversionStyle::Training) {
         return CompressPolicy::TrainingSimplify;
     }
+    if (options.sourceKeyCount > options.targetKeyCount) {
+        return CompressPolicy::NoOverlapDrop;
+    }
     return CompressPolicy::NoOverlapHybrid;
 }
 
 CompressionPlanStats applyCompressPlanner(std::vector<Note>& notes,
                                           const ConvertOptions& options,
-                                          const std::vector<TimingPoint>& timingPoints) {
+                                          const std::vector<TimingPoint>& timingPoints,
+                                          const Chart* original) {
     CompressionPlanStats stats;
     const auto policy = resolveCompressPolicy(options);
     if (policy == CompressPolicy::PreserveStrict) {
@@ -410,6 +437,7 @@ CompressionPlanStats applyCompressPlanner(std::vector<Note>& notes,
     std::vector<Note> placed;
     int sliceIndex = 0;
     const int rollBudget = rollBudgetForPolicy(policy, options.targetKeyCount);
+    const bool allowCreatedJackFallback = policy != CompressPolicy::NoOverlapDrop;
 
     for (auto& entry : groups) {
         auto& group = entry.second;
@@ -433,7 +461,14 @@ CompressionPlanStats applyCompressPlanner(std::vector<Note>& notes,
 
         for (auto note : group) {
             bool blockedByDistance = false;
-            const auto direct = placeAtNearestLane(placed, note, options.targetKeyCount, options, true, false);
+            const auto direct = placeAtNearestLane(placed,
+                                                   note,
+                                                   options.targetKeyCount,
+                                                   options,
+                                                   true,
+                                                   false,
+                                                   original,
+                                                   allowCreatedJackFallback);
             blockedByDistance = blockedByDistance || direct.distanceBlocked;
             if (direct.note.has_value()) {
                 placed.push_back(*direct.note);
@@ -442,7 +477,13 @@ CompressionPlanStats applyCompressPlanner(std::vector<Note>& notes,
 
             if (policyAllowsHoldRoll(policy) && note.type == NoteType::Hold &&
                 stats.rolledByCompression < rollBudget) {
-                const auto rolled = rollNote(placed, note, options.targetKeyCount, options, timingPoints);
+                const auto rolled = rollNote(placed,
+                                             note,
+                                             options.targetKeyCount,
+                                             options,
+                                             timingPoints,
+                                             original,
+                                             allowCreatedJackFallback);
                 blockedByDistance = blockedByDistance || rolled.distanceBlocked;
                 if (rolled.note.has_value()) {
                     placed.push_back(*rolled.note);
@@ -461,7 +502,14 @@ CompressionPlanStats applyCompressPlanner(std::vector<Note>& notes,
                 Note tapified = note;
                 tapified.type = NoteType::Tap;
                 tapified.endTime = std::nullopt;
-                const auto placedTap = placeAtNearestLane(placed, tapified, options.targetKeyCount, options, true, false);
+                const auto placedTap = placeAtNearestLane(placed,
+                                                          tapified,
+                                                          options.targetKeyCount,
+                                                          options,
+                                                          true,
+                                                          false,
+                                                          original,
+                                                          allowCreatedJackFallback);
                 blockedByDistance = blockedByDistance || placedTap.distanceBlocked;
                 if (placedTap.note.has_value()) {
                     placed.push_back(*placedTap.note);
@@ -472,7 +520,13 @@ CompressionPlanStats applyCompressPlanner(std::vector<Note>& notes,
 
             if (policyAllowsRoll(policy) && note.type == NoteType::Tap &&
                 stats.rolledByCompression < rollBudget) {
-                const auto rolled = rollNote(placed, note, options.targetKeyCount, options, timingPoints);
+                const auto rolled = rollNote(placed,
+                                             note,
+                                             options.targetKeyCount,
+                                             options,
+                                             timingPoints,
+                                             original,
+                                             allowCreatedJackFallback);
                 blockedByDistance = blockedByDistance || rolled.distanceBlocked;
                 if (rolled.note.has_value()) {
                     placed.push_back(*rolled.note);

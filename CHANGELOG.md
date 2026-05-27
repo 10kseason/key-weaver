@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.5
+
+- Promoted the current KeyWeaver surface to `v0.5.5`.
+- Added profile-guided Adaptive Growth Budget for `preserve-tap-plus`: when `--target-profile` is supplied, local profile windows now throttle or open tap-plus additions based on density, active-lane need, LN/chord pressure, and adjacent-growth pressure while keeping the global added-note cap as a hard ceiling.
+- Reports expose `adaptiveGrowthBudgetEnabled`, local ratio bounds, and `rejectedByAdaptiveBudget` for profile-driven budget audits.
+- Expanded the Target-K profile builder to accept repeated `--author` tokens, so broad style profiles can include both u_e and CircusGalop 10K references.
+- Broad scans can use `--author-path-prefilter` and `--target-key-path-prefilter` with `rg --files` candidate discovery; compact key-conversion tags such as `4K10C` / `5K7C` / `4to8C` are excluded by default.
+- Added the sanitized reusable `profiles/keyweaver_10k_broad_style_v1.json` style profile, generated from 628 u_e/CircusGalop reference charts with local Songs-folder paths removed. On the Ray 7K-to-10K smoke chart, the broad profile produced `kLikenessScore=75.3`, `createdJacks=0`, `nearTimeConflicts=0`, `lnConflictCount=0`, and `adaptiveBudgetAverageRatio=0.0484583`.
+
 ## 0.5.3
 
 - Added a basic BMS-family parser/exporter path for `.bms`, `.bme`, `.bml`, and `.pms` inputs.
@@ -8,6 +17,16 @@
 - Rejects non-BMS output paths for BMS-family inputs so BMS conversion stays BMS-to-BMS.
 - Fixed the GUI conversion path so BMS-family inputs write BMS-family outputs instead of hardcoding `.osu`.
 - Added BMS public headers, CLI extension dispatch, synthetic roundtrip tests, and public-header smoke coverage.
+- Added BMS key-mode export handling: 4K-8K outputs write SP `#PLAYER 1` with `#4K`-`#8K`, 9K uses PMS-style 1P channels and defaults to `.pms`, and 10K writes scratchless 2P `#PLAYER 3` channels.
+- Added source-lane anchor scoring for higher-key playable mapping so sparse repeats from the same 7K source lane stay on a stable 10K target lane instead of drifting only for lane-balance pressure.
+- Added a 7K-to-10K dual-5K split rail so phrase motifs are recomposed inside either the left 5K panel or right 5K panel instead of being stretched across a single 7K-like lane scale.
+- Added a source-panel candidate guard for 7K-to-10K non-gesture chords and sparse notes so lane-balance scoring cannot casually leak low-register source notes into the right 5K panel or high-register notes into the left 5K panel.
+- Added role voice-leading for 7K-to-10K dual-5K motifs so each detected phrase prefers compact movement inside its assigned hand panel.
+- Changed default high-to-low `auto` compression to drop overflow objects instead of rolling them, prioritizing low-key recreation over preserving every source object; explicit `no-overlap-roll` / `no-overlap-hybrid` remain available when object preservation is desired.
+- Added Target-K likeness reporting (`kLikenessScore`) as the first WeaveScore-style scorer for lane coverage, lane entropy, edge use, active-lane windows, spatial span, adjacent expansion, 7K anchor preservation, added-ratio fit, and safety penalties. Policy comparison JSON/CSV now exposes the score so later adaptive budgets can optimize toward 10K feel instead of fixed added-note percentages.
+- Added `scripts/build_target_k_profile.py`, `scripts/u_e_10k_curated_patterns.txt`, and `--target-profile` so K-likeness scoring can use either broad u_e-authored/native 10K references or the curated high-quality KeyWeaver style profile from `D:\osu!\Songs` while excluding converted charts such as `7to10C`. Profile JSON now records 1000 ms window medians/IQRs and density buckets for low/mid/high, LN-heavy, chord-heavy, and jack-risk windows.
+- Expanded the profile builder to accept repeated `--author` tokens, so broad style profiles can include both u_e and CircusGalop 10K references. Broad scans can use `--author-path-prefilter` and `--target-key-path-prefilter` with `rg --files` candidate discovery, compact key-conversion tags such as `4K10C` / `5K7C` / `4to8C` are excluded by default, and extra style-pack tags can be filtered with `--exclude-style-token`.
+- Added the first profile-guided Adaptive Growth Budget for `preserve-tap-plus`: when `--target-profile` is supplied, local profile windows now throttle or open tap-plus additions based on density, active-lane need, LN/chord pressure, and adjacent-growth pressure while keeping the global added-note cap as a hard ceiling. Reports expose `adaptiveGrowthBudgetEnabled`, local ratio bounds, and `rejectedByAdaptiveBudget`.
 - STOP timing, random/control-flow directives, LNOBJ-style long notes, and full BMS extension coverage remain future work.
 
 ## 0.5.2

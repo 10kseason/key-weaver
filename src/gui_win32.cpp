@@ -269,6 +269,9 @@ bool isBmsFamilyPath(const std::filesystem::path& path) {
 }
 
 std::wstring chartOutputExtension(const ToolOptions& options) {
+    if (isBmsFamilyPath(options.inputFile) && trim(options.targetKeys) == L"9") {
+        return L".pms";
+    }
     if (isBmsFamilyPath(options.inputFile) && options.inputFile.has_extension()) {
         return options.inputFile.extension().wstring();
     }
@@ -1014,7 +1017,7 @@ int runGui() {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.5.3 Playtest Tool",
+                                L"KeyWeaver v0.5.5 Playtest Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,

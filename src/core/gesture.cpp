@@ -39,12 +39,40 @@ double averageLane(const std::vector<PhraseNote>& notes) {
     return static_cast<double>(total) / static_cast<double>(notes.size());
 }
 
+bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
+    return sourceKeyCount == 7 && targetKeyCount == 10;
+}
+
+std::pair<int, int> dualFiveZoneForPhrase(const std::vector<PhraseNote>& notes) {
+    if (notes.empty()) {
+        return {0, 4};
+    }
+
+    const double center = averageLane(notes);
+    if (center <= 3.0) {
+        return {0, 4};
+    }
+    return {5, 9};
+}
+
+PhraseRole phraseRoleFor(const std::vector<PhraseNote>& notes, int sourceKeyCount, int targetKeyCount) {
+    if (!useDualFiveSplit(sourceKeyCount, targetKeyCount) || notes.empty()) {
+        return PhraseRole::Neutral;
+    }
+
+    const auto zone = dualFiveZoneForPhrase(notes);
+    return zone.first < 5 ? PhraseRole::LeftHandVoice : PhraseRole::RightHandVoice;
+}
+
 std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes, int sourceKeyCount, int targetKeyCount) {
     if (targetKeyCount <= 1) {
         return {0, 0};
     }
     if (notes.empty()) {
         return {0, targetKeyCount - 1};
+    }
+    if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
+        return dualFiveZoneForPhrase(notes);
     }
 
     const double center = averageLane(notes);
@@ -59,6 +87,17 @@ std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes, int sour
         return {0, std::max(0, mid - 1)};
     }
     return {std::min(mid, targetKeyCount - 1), targetKeyCount - 1};
+}
+
+int laneInDualFiveZone(int sourceLane, int zoneStart, int zoneEnd, int targetKeyCount) {
+    const bool leftZone = zoneStart < 5;
+    const int sourceMin = leftZone ? 0 : 3;
+    const int sourceMax = leftZone ? 3 : 6;
+    const double t = static_cast<double>(clampInt(sourceLane, sourceMin, sourceMax) - sourceMin) /
+                     static_cast<double>(std::max(1, sourceMax - sourceMin));
+    const int lane = static_cast<int>(std::lround(static_cast<double>(zoneStart) +
+                                                  t * static_cast<double>(zoneEnd - zoneStart)));
+    return clampInt(lane, 0, targetKeyCount - 1);
 }
 
 int laneInZoneBySourcePosition(int sourceLane,
@@ -131,16 +170,20 @@ void addStairHints(GestureRail& rail,
         return a.sourceLane < b.sourceLane;
     });
     const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
     for (const auto& note : notes) {
         GestureHint hint;
         hint.motifId = motifId;
         hint.kind = token.kind;
-        hint.preferredLane = laneInZoneBySourcePosition(note.sourceLane,
-                                                        sourceMinIt->sourceLane,
-                                                        sourceMaxIt->sourceLane,
-                                                        zoneStart,
-                                                        zoneEnd,
-                                                        targetKeyCount);
+        hint.role = role;
+        hint.preferredLane = useDualFiveSplit(sourceKeyCount, targetKeyCount)
+                                 ? laneInDualFiveZone(note.sourceLane, zoneStart, zoneEnd, targetKeyCount)
+                                 : laneInZoneBySourcePosition(note.sourceLane,
+                                                              sourceMinIt->sourceLane,
+                                                              sourceMaxIt->sourceLane,
+                                                              zoneStart,
+                                                              zoneEnd,
+                                                              targetKeyCount);
         hint.zoneStart = zoneStart;
         hint.zoneEnd = zoneEnd;
         hint.direction = token.direction;
@@ -158,6 +201,7 @@ void addTrillHints(GestureRail& rail,
     }
 
     const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
     std::vector<int> sourceLanes;
     for (const auto& note : notes) {
         if (std::find(sourceLanes.begin(), sourceLanes.end(), note.sourceLane) == sourceLanes.end()) {
@@ -193,6 +237,7 @@ void addTrillHints(GestureRail& rail,
         GestureHint hint;
         hint.motifId = motifId;
         hint.kind = PatternKind::Trill;
+        hint.role = role;
         hint.preferredLane = note.sourceLane == sourceLanes.front() ? first : second;
         hint.zoneStart = std::min(first, second);
         hint.zoneEnd = std::max(first, second);
@@ -210,14 +255,19 @@ void addJackHints(GestureRail& rail,
     }
 
     const int sourceLane = notes.front().sourceLane;
-    const int preferred = mapLaneDirect(sourceLane, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const int preferred = useDualFiveSplit(sourceKeyCount, targetKeyCount)
+                              ? laneInDualFiveZone(sourceLane, zoneStart, zoneEnd, targetKeyCount)
+                              : mapLaneDirect(sourceLane, sourceKeyCount, targetKeyCount);
     for (const auto& note : notes) {
         GestureHint hint;
         hint.motifId = motifId;
         hint.kind = PatternKind::Jack;
+        hint.role = role;
         hint.preferredLane = clampInt(preferred, 0, targetKeyCount - 1);
-        hint.zoneStart = clampInt(preferred - 1, 0, targetKeyCount - 1);
-        hint.zoneEnd = clampInt(preferred + 1, 0, targetKeyCount - 1);
+        hint.zoneStart = clampInt(preferred - 1, zoneStart, zoneEnd);
+        hint.zoneEnd = clampInt(preferred + 1, zoneStart, zoneEnd);
         rail.hintsByNoteId[note.id] = hint;
     }
 }

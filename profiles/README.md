@@ -17,3 +17,8 @@ python scripts/build_target_k_profile.py --songs-root "<osu Songs folder>" --aut
 ```
 
 The committed `keyweaver_10k_broad_style_v1.json` is sanitized: it keeps aggregate statistics and removes local Songs-folder paths.
+
+The v0.5.5 Composer baseline is frozen in `../docs/algorithm-lock-v0.5.5.md`.
+For 10K conversion tuning, Composer/Repair local pressure should use the 1000 ms
+`densityBuckets.low/mid/high/chordHeavy/jackRisk` window features from this profile,
+not chart-level `chartSummary` fields.

@@ -100,7 +100,7 @@ try {
     foreach ($file in @("README.md", "CHANGELOG.md", "LICENSE")) {
         Copy-Item -LiteralPath (Join-Path $Root $file) -Destination $PackageDir
     }
-    foreach ($dir in @("samples", "profiles")) {
+    foreach ($dir in @("samples", "profiles", "docs")) {
         Copy-Item -LiteralPath (Join-Path $Root $dir) -Destination (Join-Path $PackageDir $dir) -Recurse
     }
     $PackageScriptsDir = Join-Path $PackageDir "scripts"
@@ -119,14 +119,15 @@ BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu 
 The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family output extension.
 Gesture Rail is on by default; use --gesture-rail off to compare older lane scoring.
 Preserve Tap Plus uses key-growth budgets and 10K hand-zone balancing.
-With --target-profile, Adaptive Growth Budget uses profile windows to throttle dense, LN-heavy, or chord-heavy sections.
+With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mid/high/chordHeavy/jackRisk windows for Composer pressure.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
+Frozen algorithm contract: docs/algorithm-lock-v0.5.5.md
 
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, osu!mania sample conversion/report, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, osu!mania sample conversion/report, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"

@@ -13,6 +13,7 @@
 - Added coverage-aware tap-plus candidate scoring: locally dead lanes receive fill pressure, tap-plus can spend the second per-slice slot when the budget allows, and expansion-mode source anchors are less rigid so 8K/10K lanes do not stay visually dead.
 - Raised the default high-key tap-plus growth budget by 50%: 8K/10K targets now scale up to a 37.5% added-note ratio by default, while explicit `--max-added-ratio` still overrides the cap.
 - Adaptive Growth Budget now reads the profile's 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` window features for Composer pressure instead of using chart-level summary fields; the Ray 7K-to-10K smoke chart now adds 420 notes with `createdJacks=0`, `nearTimeConflicts=0`, `lnConflictCount=0`, and `adaptiveBudgetAverageRatio=0.377974`.
+- Documented the frozen v0.5.5 high-key expansion contract in `docs/algorithm-lock-v0.5.5.md`, including bucket selection, no-`chartSummary` Composer pressure, Ray smoke baseline, and change-control rules.
 - Added `scripts/package_release.ps1` so 0.5.5 Windows release zips can be rebuilt with Release CMake, tests, GUI smoke, sample conversions, bundled profiles/scripts/samples, MinGW runtime DLLs, and SHA256 output.
 
 ## 0.5.3

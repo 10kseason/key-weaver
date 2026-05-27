@@ -31,7 +31,7 @@ struct ConvertOptions {
     bool snapRolledNotes = true;
     int snapToleranceMs = 2;
     int maxRollMs = 64;
-    double maxAddedNoteRatio = 0.30;
+    double maxAddedNoteRatio = 0.45;
     int maxAddedPerSlice = 2;
     int maxAddedPerMeasure = 16;
     bool deterministicExpansion = true;

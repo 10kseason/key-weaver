@@ -169,7 +169,7 @@ struct CliOptions {
     bool snapRolledNotes = true;
     int snapToleranceMs = 2;
     int maxRollMs = 64;
-    double maxAddedNoteRatio = 0.30;
+    double maxAddedNoteRatio = 0.45;
     int maxAddedPerSlice = 2;
     int maxAddedPerMeasure = 16;
     bool deterministicExpansion = true;
@@ -225,7 +225,7 @@ void printHelp(std::ostream& out) {
     out << "  --max-roll-ms <ms>      Maximum roll distance from original time. Default: 64.\n";
     out << "  --expansion-policy <p>  auto | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random.\n";
     out << "                          Default auto: preserve when target <= source, preserve-tap-plus when target > source.\n";
-    out << "  --max-added-ratio <n>   Max added notes as source-note ratio. Default: 0.15.\n";
+    out << "  --max-added-ratio <n>   Max added notes as source-note ratio. Default: 0.45.\n";
     out << "  --max-added-per-slice <n> Max added notes per source slice. Default: 2.\n";
     out << "  --max-added-per-measure <n> Max added notes per approximate measure. Default: 16.\n";
     out << "  --expansion-min-gap <ms> Minimum positive object gap for added notes. Default: 16.\n";

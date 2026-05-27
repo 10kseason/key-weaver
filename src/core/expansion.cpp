@@ -125,8 +125,9 @@ double preserveTapPlusTargetRatio(int sourceKeyCount, int targetKeyCount) {
     if (targetKeyCount <= sourceKeyCount || sourceKeyCount <= 0) {
         return 0.0;
     }
-    constexpr double baseRatio = 0.125;
-    constexpr double maxRatio = 0.25;
+    const bool highKeyTarget = targetKeyCount >= 8;
+    const double baseRatio = highKeyTarget ? 0.1875 : 0.125;
+    const double maxRatio = highKeyTarget ? 0.375 : 0.25;
     const int addedKeyCount = std::max(0, targetKeyCount - sourceKeyCount);
     const double growthRatio = baseRatio * std::min(1.0, static_cast<double>(addedKeyCount) / 3.0);
     return std::min(maxRatio, baseRatio + growthRatio);
@@ -199,7 +200,7 @@ double effectiveTargetAddedNoteRatio(const ConvertOptions& options) {
     if (composer.targetAddedRatio <= 0.0) {
         return 0.0;
     }
-    constexpr double defaultMaxAddedNoteRatio = 0.30;
+    constexpr double defaultMaxAddedNoteRatio = 0.45;
     constexpr double epsilon = 1e-9;
     if (std::abs(options.maxAddedNoteRatio - defaultMaxAddedNoteRatio) > epsilon) {
         return options.maxAddedNoteRatio;
@@ -376,7 +377,7 @@ double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
                              static_cast<double>(std::max(1, window.totalSlices));
     const double adjacentPressure =
         std::clamp(0.85 + profile.desiredAdjacentExpansion, 0.85, 1.25);
-    const double hardMax = std::min(options.maxAddedNoteRatio, 0.35);
+    const double hardMax = std::min(options.maxAddedNoteRatio, 0.45);
     return std::clamp(globalTargetRatio *
                           adaptiveDensityRoom(densityNps) *
                           adaptivePatternSafety(holdRate, chordRate) *

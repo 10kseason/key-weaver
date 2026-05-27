@@ -11,6 +11,7 @@
 - Target-10 conversions now auto-load the bundled broad style profile when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; explicit `--target-profile` still overrides it.
 - Relaxed the first adaptive-growth-budget pass so sparse windows can spend one local fill slot when the global tap-plus budget has room, and so 7K-to-10K profile windows do not over-throttle sections that already use the original 7 lanes well.
 - Added coverage-aware tap-plus candidate scoring: locally dead lanes receive fill pressure, tap-plus can spend the second per-slice slot when the budget allows, and expansion-mode source anchors are less rigid so 8K/10K lanes do not stay visually dead.
+- Raised the default high-key tap-plus growth budget by 50%: 8K/10K targets now scale up to a 37.5% added-note ratio by default, while explicit `--max-added-ratio` still overrides the cap.
 - Added `scripts/package_release.ps1` so 0.5.5 Windows release zips can be rebuilt with Release CMake, tests, GUI smoke, sample conversions, bundled profiles/scripts/samples, MinGW runtime DLLs, and SHA256 output.
 
 ## 0.5.3

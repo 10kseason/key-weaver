@@ -1719,9 +1719,10 @@ void testPreserveTapPlusIncludesHoldsBudgetAndAddsOnlyTaps() {
 
     require(quality.expansionPolicy == "preserve-tap-plus", "tap plus policy should be reported");
     require(quality.expansionComposerProfile == "tap-plus", "tap plus composer profile should be reported");
-    require(quality.targetAddedNoteRatio == 0.25, "tap plus should target a 25 percent added-note budget on wide key expansion");
-    require(quality.addedNotes == 4, "tap plus should use holds in the key-growth source-note budget");
-    require(quality.addedByTapPlus == 4, "tap plus should report generated tap-plus notes");
+    require(quality.targetAddedNoteRatio == 0.375,
+            "tap plus should target a 37.5 percent added-note budget on high-key expansion");
+    require(quality.addedNotes == 6, "tap plus should use the larger high-key source-note budget");
+    require(quality.addedByTapPlus == 6, "tap plus should report generated tap-plus notes");
     require(first.report.holdNotes == 2, "tap plus should preserve original hold notes");
     require(quality.collisionCount == 0, "tap plus should avoid collisions");
     require(quality.lnConflictCount == 0, "tap plus should avoid LN conflicts");
@@ -1737,7 +1738,7 @@ void testPreserveTapPlusIncludesHoldsBudgetAndAddsOnlyTaps() {
             require(note.type == keyconv::NoteType::Tap, "tap plus should generate only tap notes");
         }
     }
-    require(generatedTaps == 4, "tap plus should generate the expected tracked tap notes");
+    require(generatedTaps == 6, "tap plus should generate the expected tracked tap notes");
 }
 
 void testPreserveTapPlusAddsHoldsInLnHeavyWindow() {

@@ -606,9 +606,12 @@ void testSevenToTenSourceAnchorsTakePriorityOverLeftEdgeBalance() {
         }
     }
     require(!sourceZeroTargets.empty(), "left-edge source phrase should survive conversion");
+    std::set<int> sourceZeroUnique(sourceZeroTargets.begin(), sourceZeroTargets.end());
+    require(sourceZeroUnique.size() <= 3,
+            "repeated left-edge source phrases should stay compact while allowing coverage pressure");
     for (const int lane : sourceZeroTargets) {
-        require(lane == sourceZeroTargets.front(),
-                "repeated left-edge source phrases should stay anchored instead of drifting for lane balance");
+        require(lane >= 0 && lane <= 4,
+                "repeated left-edge source phrases should stay in the left 5K panel");
     }
     require(result.report.quality.createdJacks == 0, "left balance should not create jacks");
     require(result.report.quality.collisionCount == 0, "left balance should not create collisions");
@@ -639,9 +642,12 @@ void testSevenToTenSparseSourceLaneAnchor() {
     const auto result = keyconv::convertChart(chart, options);
     const auto lanes = lanesOf(result.chart);
     require(lanes.size() == chart.notes.size(), "source-lane anchor test should keep note count");
+    const auto [minLane, maxLane] = std::minmax_element(lanes.begin(), lanes.end());
+    require(*maxLane - *minLane <= 2,
+            "same sparse 7K source lane should stay compact while allowing nearby coverage pressure");
     for (const int lane : lanes) {
-        require(lane == lanes.front(),
-                "same sparse 7K source lane should stay anchored instead of balancing across nearby 10K lanes");
+        require(lane >= 0 && lane <= 4,
+                "same sparse 7K source lane should stay inside the left 5K panel");
     }
     require(result.report.quality.createdJacks == 0, "source-lane anchoring should not create unrelated jacks");
     require(result.report.quality.collisionCount == 0, "source-lane anchoring should not create collisions");
@@ -767,7 +773,8 @@ void testTargetKLikenessReportSevenToTen() {
     require(quality.laneEntropyScore > 0.0, "Target-K likeness should score lane entropy");
     require(quality.edgeUsageScore > 0.0, "Target-K likeness should score outer lane usage");
     require(quality.activeLaneWindowScore > 0.0, "Target-K likeness should score local active lanes");
-    require(quality.anchorPreserveScore > 0.70, "Target-K likeness should reward preserving 7K anchors");
+    require(quality.anchorPreserveScore > 0.40,
+            "Target-K likeness should keep anchor preservation visible while allowing 10K coverage pressure");
     require(quality.patternVocabularyScore > 0.0, "Target-K likeness should score preserved vocabulary");
     require(quality.addedRatioFitScore > 0.0, "Target-K likeness should score added-note fit without a fixed cap");
     require(quality.targetKSafetyScore == 1.0, "safe conversion should keep full Target-K safety score");
@@ -882,6 +889,72 @@ void testAdaptiveGrowthBudgetReportsProfileWindows() {
             "JSON report should expose adaptive budget state");
     require(json.find("\"rejectedByAdaptiveBudget\"") != std::string::npos,
             "JSON report should expose adaptive budget rejects");
+}
+
+void testAdaptiveGrowthBudgetAllowsSparseProfiledFill() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {0, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 3, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::TargetKProfile profile;
+    profile.targetKeys = 10;
+    profile.sampleCount = 14;
+    profile.windowMs = 1000;
+    profile.profileName = "keyweaver_10k_style_test";
+    profile.profileKind = "style";
+    profile.sourceName = "u_e fixture";
+    profile.authorToken = "u_e";
+    profile.desiredLaneEntropy = 0.90;
+    profile.desiredEdgeUsage = 0.35;
+    profile.desiredActiveLaneRate = 0.80;
+    profile.desiredChordSpan = 0.55;
+    profile.desiredHandBalance = 0.88;
+    profile.desiredAdjacentExpansion = 0.32;
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+    options.targetKProfile = profile;
+    options.maxAddedPerSlice = 1;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto& quality = result.report.quality;
+    require(quality.adaptiveGrowthBudgetEnabled, "sparse profiled tap-plus should enable adaptive growth budget");
+    require(quality.addedNotes == 1,
+            "sparse profiled windows should keep one local fill slot when the global budget has room");
+    require(quality.createdJacks == 0, "sparse profiled fill should not create jacks");
+    require(quality.nearTimeConflicts == 0, "sparse profiled fill should avoid near-time conflicts");
+}
+
+void testPreserveTapPlusCanUseSecondSliceFillSlot() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+    options.maxAddedNoteRatio = 0.50;
+    options.maxAddedPerSlice = 2;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto& quality = result.report.quality;
+    require(quality.addedNotes == 2, "tap-plus should use the second per-slice fill slot when budget allows");
+    require(quality.createdJacks == 0, "second fill slot should not create jacks");
+    require(quality.collisionCount == 0, "second fill slot should avoid collisions");
 }
 
 void testPpgChordDoesNotCollapse() {
@@ -2665,6 +2738,8 @@ int main() {
         {"Target-K likeness report 7K to 10K", testTargetKLikenessReportSevenToTen},
         {"Target-K likeness uses reference profile", testTargetKLikenessUsesReferenceProfile},
         {"adaptive growth budget reports profile windows", testAdaptiveGrowthBudgetReportsProfileWindows},
+        {"adaptive growth budget allows sparse profiled fill", testAdaptiveGrowthBudgetAllowsSparseProfiledFill},
+        {"preserve tap plus can use second slice fill slot", testPreserveTapPlusCanUseSecondSliceFillSlot},
         {"PPG chord does not collapse", testPpgChordDoesNotCollapse},
         {"PPG LN avoids tap", testPpgLnAvoidsTap},
         {"PPG playable reduces jack and faithful preserves more", testPpgPlayableReducesJackAndFaithfulPreservesMore},

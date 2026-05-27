@@ -655,7 +655,8 @@ std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
         if (slice.noteIndices.size() == 1 && hint != nullptr && hint->kind == PatternKind::Jack) {
             sourceAnchor.reset();
         }
-        if (slice.noteIndices.size() == 1 && sourceAnchor.has_value() &&
+        const bool expansionMode = context.targetKeyCount > context.sourceKeyCount;
+        if (!expansionMode && slice.noteIndices.size() == 1 && sourceAnchor.has_value() &&
             std::find(candidates.begin(), candidates.end(), *sourceAnchor) != candidates.end() &&
             !hasSameTimeNote(context.placed, note.time, *sourceAnchor)) {
             Note anchored = note;
@@ -738,9 +739,10 @@ double scoreAssignment(const TimeSlice& slice,
         }
         score += gestureScore(source, targetLane, hint, context);
         if (!sourceJackLike && sourceAnchor.has_value()) {
+            const double anchorWeight = context.targetKeyCount > context.sourceKeyCount ? 0.85 : 2.25;
             score += context.weights.shape *
                      sourceLaneAnchorScore(targetLane, *sourceAnchor, context.targetKeyCount) *
-                     2.25;
+                     anchorWeight;
         }
 
         if (!usedInSlice.insert(targetLane).second) {

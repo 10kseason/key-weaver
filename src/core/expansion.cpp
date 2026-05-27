@@ -331,7 +331,7 @@ double adaptiveDensityRoom(double densityNps) {
         return 0.95;
     }
     if (densityNps <= 20.0) {
-        return 0.55;
+        return 0.70;
     }
     return 0.25;
 }
@@ -367,7 +367,7 @@ double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
     const double activeGap =
         std::max(0.0, static_cast<double>(desiredActiveLanes - window.activeLanes)) /
         static_cast<double>(desiredActiveLanes);
-    const double targetKNeed = std::clamp(0.45 + activeGap * 1.10, 0.35, 1.35);
+    const double targetKNeed = std::clamp(0.75 + activeGap * 0.95, 0.65, 1.45);
     const double densityNps = static_cast<double>(window.originalNotes) * 1000.0 /
                               static_cast<double>(std::max(1, window.endMs - window.startMs));
     const double holdRate = static_cast<double>(window.holdNotes) /
@@ -438,7 +438,8 @@ std::vector<AdaptiveGrowthWindow> buildAdaptiveGrowthWindows(const Chart& origin
         window.localRatio = adaptiveLocalRatio(window, options, globalTargetRatio);
         window.maxAdds = static_cast<int>(std::floor(static_cast<double>(window.originalNotes) *
                                                      window.localRatio));
-        if (window.maxAdds == 0 && window.originalNotes >= 4 && window.localRatio >= 0.08) {
+        if (window.maxAdds == 0 && window.localRatio >= 0.08 &&
+            window.activeLanes < options.targetKeyCount) {
             window.maxAdds = 1;
         }
         windows.push_back(window);
@@ -914,6 +915,23 @@ std::vector<int> underusedLaneOrder(const ExpansionContext& context) {
     return lanes;
 }
 
+int localLaneUseAround(const std::vector<Note>& notes, int lane, int time, int windowMs) {
+    const int halfWindow = std::max(250, windowMs / 2);
+    const int start = time - halfWindow;
+    const int end = time + halfWindow;
+    int count = 0;
+    for (const auto& note : notes) {
+        if (note.lane != lane) {
+            continue;
+        }
+        const int noteEnd = note.endTime.value_or(note.time);
+        if (note.time <= end && noteEnd >= start) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 std::pair<int, int> sliceHandCounts(const SliceView& slice,
                                     const std::vector<Note>& notes,
                                     int targetKeyCount) {
@@ -1107,11 +1125,16 @@ void applyPreserveTapPlus(ExpansionContext& context) {
             candidate.sourceSliceIndex = slice.index;
             candidate.sourceNoteIndex = 0;
             candidate.ordinal = ordinal++;
+            const int localLaneUse =
+                localLaneUseAround(context.chart.notes, lane, slice.time, adaptiveBudgetWindowMs(context.options));
+            const double vacancyBonus =
+                localLaneUse == 0 ? 14.0 : -std::min(12.0, static_cast<double>(localLaneUse) * 4.0);
             candidate.score = 105.0 -
                               static_cast<double>(context.laneUse[static_cast<std::size_t>(lane)]) * 2.0 -
                               static_cast<double>(slice.noteIndices.size()) * 0.25 +
                               handBalanceScore(context.laneUse, lane, context.options.targetKeyCount) * 10.0 +
-                              counterHandScore;
+                              counterHandScore +
+                              vacancyBonus;
             if (lnAnchor != nullptr) {
                 candidate.score += 12.0 - static_cast<double>(lnAnchorDistance) * 8.0;
             }
@@ -1125,9 +1148,14 @@ void applyPreserveTapPlus(ExpansionContext& context) {
         }
 
         std::stable_sort(candidates.begin(), candidates.end(), candidateLess);
+        int addedInThisSlice = 0;
         for (auto& candidate : candidates) {
-            if (context.tryAdd(candidate)) {
+            if (addedInThisSlice >= context.options.maxAddedPerSlice ||
+                context.stats.addedNotes >= context.maxAdded) {
                 break;
+            }
+            if (context.tryAdd(candidate)) {
+                ++addedInThisSlice;
             }
         }
     }

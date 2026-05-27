@@ -9,6 +9,8 @@
 - Broad scans can use `--author-path-prefilter` and `--target-key-path-prefilter` with `rg --files` candidate discovery; compact key-conversion tags such as `4K10C` / `5K7C` / `4to8C` are excluded by default.
 - Added the sanitized reusable `profiles/keyweaver_10k_broad_style_v1.json` style profile, generated from 628 u_e/CircusGalop reference charts with local Songs-folder paths removed. On the Ray 7K-to-10K smoke chart, the broad profile produced `kLikenessScore=75.3`, `createdJacks=0`, `nearTimeConflicts=0`, `lnConflictCount=0`, and `adaptiveBudgetAverageRatio=0.0484583`.
 - Target-10 conversions now auto-load the bundled broad style profile when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; explicit `--target-profile` still overrides it.
+- Relaxed the first adaptive-growth-budget pass so sparse windows can spend one local fill slot when the global tap-plus budget has room, and so 7K-to-10K profile windows do not over-throttle sections that already use the original 7 lanes well.
+- Added coverage-aware tap-plus candidate scoring: locally dead lanes receive fill pressure, tap-plus can spend the second per-slice slot when the budget allows, and expansion-mode source anchors are less rigid so 8K/10K lanes do not stay visually dead.
 - Added `scripts/package_release.ps1` so 0.5.5 Windows release zips can be rebuilt with Release CMake, tests, GUI smoke, sample conversions, bundled profiles/scripts/samples, MinGW runtime DLLs, and SHA256 output.
 
 ## 0.5.3

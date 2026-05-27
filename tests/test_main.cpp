@@ -891,6 +891,62 @@ void testAdaptiveGrowthBudgetReportsProfileWindows() {
             "JSON report should expose adaptive budget rejects");
 }
 
+void testAdaptiveGrowthBudgetUsesDensityBuckets() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    for (int i = 0; i < 60; ++i) {
+        keyconv::Note note;
+        note.id = "bucket" + std::to_string(i);
+        note.time = 1000 + i * 50;
+        note.lane = i % 7;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::TargetKProfile profile;
+    profile.targetKeys = 10;
+    profile.sampleCount = 14;
+    profile.windowMs = 1000;
+    profile.profileName = "keyweaver_10k_bucket_test";
+    profile.profileKind = "style";
+    profile.desiredActiveLaneRate = 0.10;
+    profile.desiredAdjacentExpansion = 0.0;
+    profile.densityBuckets.present = true;
+    profile.densityBuckets.lowMaxNps = 7.0;
+    profile.densityBuckets.midMaxNps = 15.0;
+    profile.densityBuckets.high.present = true;
+    profile.densityBuckets.high.windowCount = 10;
+    profile.densityBuckets.high.activeLaneRate.present = true;
+    profile.densityBuckets.high.activeLaneRate.p25 = 0.90;
+    profile.densityBuckets.high.activeLaneRate.median = 1.00;
+    profile.densityBuckets.high.activeLaneRate.p75 = 1.00;
+    profile.densityBuckets.high.adjacentExpansion.present = true;
+    profile.densityBuckets.high.adjacentExpansion.median = 0.32;
+    profile.densityBuckets.high.densityNps.present = true;
+    profile.densityBuckets.high.densityNps.median = 21.0;
+    profile.densityBuckets.high.densityNps.p75 = 28.0;
+    profile.densityBuckets.high.densityNps.p90 = 36.0;
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+    options.targetKProfile = profile;
+    options.maxAddedNoteRatio = 0.45;
+    options.maxAddedPerSlice = 1;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto& quality = result.report.quality;
+    require(quality.adaptiveGrowthBudgetEnabled,
+            "profiled tap-plus conversion should enable adaptive growth budget");
+    require(quality.adaptiveBudgetAverageRatio > 0.30,
+            "adaptive budget should use density bucket windows instead of root chart summary fields");
+    require(quality.adaptiveBudgetMaxRatio > 0.40,
+            "high-density 10K bucket should permit coverage fill up to the local cap");
+}
+
 void testAdaptiveGrowthBudgetAllowsSparseProfiledFill() {
     const auto chart = makeChart(4,
                                  {
@@ -2739,6 +2795,7 @@ int main() {
         {"Target-K likeness report 7K to 10K", testTargetKLikenessReportSevenToTen},
         {"Target-K likeness uses reference profile", testTargetKLikenessUsesReferenceProfile},
         {"adaptive growth budget reports profile windows", testAdaptiveGrowthBudgetReportsProfileWindows},
+        {"adaptive growth budget uses density buckets", testAdaptiveGrowthBudgetUsesDensityBuckets},
         {"adaptive growth budget allows sparse profiled fill", testAdaptiveGrowthBudgetAllowsSparseProfiledFill},
         {"preserve tap plus can use second slice fill slot", testPreserveTapPlusCanUseSecondSliceFillSlot},
         {"PPG chord does not collapse", testPpgChordDoesNotCollapse},

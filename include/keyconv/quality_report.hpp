@@ -78,6 +78,45 @@ enum class JackPreservePolicy {
     SmoothAll,
 };
 
+struct TargetKFeatureStat {
+    bool present = false;
+    double mean = 0.0;
+    double median = 0.0;
+    double iqr = 0.0;
+    double p10 = 0.0;
+    double p25 = 0.0;
+    double p75 = 0.0;
+    double p90 = 0.0;
+};
+
+struct TargetKBucketProfile {
+    bool present = false;
+    int windowCount = 0;
+    TargetKFeatureStat activeLaneRate;
+    TargetKFeatureStat adjacentExpansion;
+    TargetKFeatureStat chordRate;
+    TargetKFeatureStat chordSpan;
+    TargetKFeatureStat densityNps;
+    TargetKFeatureStat edgeUsage;
+    TargetKFeatureStat handBalance;
+    TargetKFeatureStat holdRate;
+    TargetKFeatureStat jackRisk;
+    TargetKFeatureStat laneEntropy;
+};
+
+struct TargetKDensityBuckets {
+    bool present = false;
+    double lowMaxNps = 7.0;
+    double midMaxNps = 15.0;
+    TargetKBucketProfile all;
+    TargetKBucketProfile low;
+    TargetKBucketProfile mid;
+    TargetKBucketProfile high;
+    TargetKBucketProfile lnHeavy;
+    TargetKBucketProfile chordHeavy;
+    TargetKBucketProfile jackRisk;
+};
+
 struct TargetKProfile {
     int targetKeys = 10;
     int sampleCount = 0;
@@ -92,6 +131,7 @@ struct TargetKProfile {
     double desiredChordSpan = 0.45;
     double desiredHandBalance = 0.88;
     double desiredAdjacentExpansion = 0.18;
+    TargetKDensityBuckets densityBuckets;
 };
 
 struct ConversionReport {

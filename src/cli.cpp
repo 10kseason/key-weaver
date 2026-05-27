@@ -631,6 +631,199 @@ std::optional<double> jsonNumberField(const std::string& text, const std::string
     }
 }
 
+std::optional<std::string> jsonStringTokenAt(const std::string& text,
+                                             std::size_t quotePos,
+                                             std::size_t* endQuote) {
+    if (quotePos >= text.size() || text[quotePos] != '"') {
+        return std::nullopt;
+    }
+    std::string value;
+    bool escaped = false;
+    for (std::size_t pos = quotePos + 1; pos < text.size(); ++pos) {
+        const char ch = text[pos];
+        if (escaped) {
+            value.push_back(ch);
+            escaped = false;
+            continue;
+        }
+        if (ch == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (ch == '"') {
+            if (endQuote != nullptr) {
+                *endQuote = pos;
+            }
+            return value;
+        }
+        value.push_back(ch);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> jsonObjectAt(const std::string& text, std::size_t openBrace) {
+    if (openBrace >= text.size() || text[openBrace] != '{') {
+        return std::nullopt;
+    }
+
+    int depth = 0;
+    for (std::size_t pos = openBrace; pos < text.size(); ++pos) {
+        const char ch = text[pos];
+        if (ch == '"') {
+            std::size_t endQuote = pos;
+            if (!jsonStringTokenAt(text, pos, &endQuote).has_value()) {
+                return std::nullopt;
+            }
+            pos = endQuote;
+            continue;
+        }
+        if (ch == '{') {
+            ++depth;
+        } else if (ch == '}') {
+            --depth;
+            if (depth == 0) {
+                return text.substr(openBrace, pos - openBrace + 1);
+            }
+            if (depth < 0) {
+                return std::nullopt;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> jsonDirectObjectField(const std::string& text, const std::string& key) {
+    std::size_t first = 0;
+    while (first < text.size() && std::isspace(static_cast<unsigned char>(text[first]))) {
+        ++first;
+    }
+    const int keyDepth = first < text.size() && text[first] == '{' ? 1 : 0;
+
+    int depth = 0;
+    for (std::size_t pos = 0; pos < text.size(); ++pos) {
+        const char ch = text[pos];
+        if (ch == '"') {
+            std::size_t endQuote = pos;
+            const auto token = jsonStringTokenAt(text, pos, &endQuote);
+            if (!token.has_value()) {
+                return std::nullopt;
+            }
+            if (depth == keyDepth && *token == key) {
+                std::size_t valuePos = endQuote + 1;
+                while (valuePos < text.size() &&
+                       std::isspace(static_cast<unsigned char>(text[valuePos]))) {
+                    ++valuePos;
+                }
+                if (valuePos >= text.size() || text[valuePos] != ':') {
+                    return std::nullopt;
+                }
+                ++valuePos;
+                while (valuePos < text.size() &&
+                       std::isspace(static_cast<unsigned char>(text[valuePos]))) {
+                    ++valuePos;
+                }
+                return jsonObjectAt(text, valuePos);
+            }
+            pos = endQuote;
+            continue;
+        }
+        if (ch == '{') {
+            ++depth;
+        } else if (ch == '}') {
+            --depth;
+        }
+    }
+    return std::nullopt;
+}
+
+keyconv::TargetKFeatureStat loadTargetKFeatureStat(const std::string& featuresBody,
+                                                   const std::string& key) {
+    keyconv::TargetKFeatureStat stat;
+    const auto statBody = jsonDirectObjectField(featuresBody, key);
+    if (!statBody.has_value()) {
+        return stat;
+    }
+
+    stat.present = true;
+    if (const auto value = jsonNumberField(*statBody, "mean"); value.has_value()) {
+        stat.mean = *value;
+    }
+    if (const auto value = jsonNumberField(*statBody, "median"); value.has_value()) {
+        stat.median = *value;
+    }
+    if (const auto value = jsonNumberField(*statBody, "iqr"); value.has_value()) {
+        stat.iqr = *value;
+    }
+    if (const auto value = jsonNumberField(*statBody, "p10"); value.has_value()) {
+        stat.p10 = *value;
+    }
+    if (const auto value = jsonNumberField(*statBody, "p25"); value.has_value()) {
+        stat.p25 = *value;
+    }
+    if (const auto value = jsonNumberField(*statBody, "p75"); value.has_value()) {
+        stat.p75 = *value;
+    }
+    if (const auto value = jsonNumberField(*statBody, "p90"); value.has_value()) {
+        stat.p90 = *value;
+    }
+    return stat;
+}
+
+keyconv::TargetKBucketProfile loadTargetKBucketProfile(const std::string& bucketsBody,
+                                                       const std::string& key) {
+    keyconv::TargetKBucketProfile bucket;
+    const auto bucketBody = jsonDirectObjectField(bucketsBody, key);
+    if (!bucketBody.has_value()) {
+        return bucket;
+    }
+
+    bucket.present = true;
+    if (const auto value = jsonNumberField(*bucketBody, "windowCount"); value.has_value()) {
+        bucket.windowCount = static_cast<int>(std::lround(*value));
+    }
+    const auto featuresBody = jsonDirectObjectField(*bucketBody, "features");
+    if (!featuresBody.has_value()) {
+        return bucket;
+    }
+    bucket.activeLaneRate = loadTargetKFeatureStat(*featuresBody, "activeLaneRate");
+    bucket.adjacentExpansion = loadTargetKFeatureStat(*featuresBody, "adjacentExpansion");
+    bucket.chordRate = loadTargetKFeatureStat(*featuresBody, "chordRate");
+    bucket.chordSpan = loadTargetKFeatureStat(*featuresBody, "chordSpan");
+    bucket.densityNps = loadTargetKFeatureStat(*featuresBody, "densityNps");
+    bucket.edgeUsage = loadTargetKFeatureStat(*featuresBody, "edgeUsage");
+    bucket.handBalance = loadTargetKFeatureStat(*featuresBody, "handBalance");
+    bucket.holdRate = loadTargetKFeatureStat(*featuresBody, "holdRate");
+    bucket.jackRisk = loadTargetKFeatureStat(*featuresBody, "jackRisk");
+    bucket.laneEntropy = loadTargetKFeatureStat(*featuresBody, "laneEntropy");
+    return bucket;
+}
+
+keyconv::TargetKDensityBuckets loadTargetKDensityBuckets(const std::string& text) {
+    keyconv::TargetKDensityBuckets buckets;
+    const auto bucketsBody = jsonDirectObjectField(text, "densityBuckets");
+    if (!bucketsBody.has_value()) {
+        return buckets;
+    }
+
+    buckets.present = true;
+    if (const auto cutsBody = jsonDirectObjectField(*bucketsBody, "densityCuts"); cutsBody.has_value()) {
+        if (const auto value = jsonNumberField(*cutsBody, "lowMaxNps"); value.has_value()) {
+            buckets.lowMaxNps = *value;
+        }
+        if (const auto value = jsonNumberField(*cutsBody, "midMaxNps"); value.has_value()) {
+            buckets.midMaxNps = *value;
+        }
+    }
+    buckets.all = loadTargetKBucketProfile(*bucketsBody, "all");
+    buckets.low = loadTargetKBucketProfile(*bucketsBody, "low");
+    buckets.mid = loadTargetKBucketProfile(*bucketsBody, "mid");
+    buckets.high = loadTargetKBucketProfile(*bucketsBody, "high");
+    buckets.lnHeavy = loadTargetKBucketProfile(*bucketsBody, "lnHeavy");
+    buckets.chordHeavy = loadTargetKBucketProfile(*bucketsBody, "chordHeavy");
+    buckets.jackRisk = loadTargetKBucketProfile(*bucketsBody, "jackRisk");
+    return buckets;
+}
+
 keyconv::TargetKProfile loadTargetKProfile(const std::filesystem::path& path) {
     const auto text = readFile(path);
     keyconv::TargetKProfile profile;
@@ -675,6 +868,7 @@ keyconv::TargetKProfile loadTargetKProfile(const std::filesystem::path& path) {
     if (const auto value = jsonNumberField(text, "desiredAdjacentExpansion"); value.has_value()) {
         profile.desiredAdjacentExpansion = *value;
     }
+    profile.densityBuckets = loadTargetKDensityBuckets(text);
 
     if (profile.targetKeys <= 0 || profile.sampleCount <= 0) {
         throw std::runtime_error("Target profile must include positive targetKeys and sampleCount: " +

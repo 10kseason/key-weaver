@@ -78,11 +78,27 @@ struct AdaptiveGrowthWindow {
     int originalNotes = 0;
     int activeLanes = 0;
     int holdNotes = 0;
+    int jackRiskPairs = 0;
     int chordSlices = 0;
     int totalSlices = 0;
     double localRatio = 0.0;
     int maxAdds = 0;
     int added = 0;
+};
+
+enum class AdaptiveBucketKind {
+    None,
+    All,
+    Low,
+    Mid,
+    High,
+    ChordHeavy,
+    JackRisk,
+};
+
+struct AdaptiveBucketChoice {
+    const TargetKBucketProfile* bucket = nullptr;
+    AdaptiveBucketKind kind = AdaptiveBucketKind::None;
 };
 
 int handBoundary(int targetKeyCount) {
@@ -352,6 +368,147 @@ double adaptivePatternSafety(double holdRate, double chordRate) {
     return safety;
 }
 
+double statMedianOr(const TargetKFeatureStat& stat, double fallback) {
+    return stat.present ? stat.median : fallback;
+}
+
+double statP25Or(const TargetKFeatureStat& stat, double fallback) {
+    return stat.present ? stat.p25 : fallback;
+}
+
+int activeLanesForRate(double rate, int targetKeyCount) {
+    return std::max(1,
+                    std::min(targetKeyCount,
+                             static_cast<int>(std::lround(static_cast<double>(targetKeyCount) *
+                                                          std::clamp(rate, 0.05, 1.0)))));
+}
+
+AdaptiveBucketChoice chooseAdaptiveBucket(const AdaptiveGrowthWindow& window,
+                                          const ConvertOptions& options,
+                                          double densityNps,
+                                          double chordRate,
+                                          double jackRiskRate) {
+    if (!options.targetKProfile.has_value() ||
+        !options.targetKProfile->densityBuckets.present) {
+        return {};
+    }
+
+    const auto& buckets = options.targetKProfile->densityBuckets;
+    const double jackThreshold =
+        buckets.jackRisk.present
+            ? std::max(0.05, statP25Or(buckets.jackRisk.jackRisk, 0.08) * 0.75)
+            : 0.05;
+    if (buckets.jackRisk.present && jackRiskRate >= jackThreshold) {
+        return {&buckets.jackRisk, AdaptiveBucketKind::JackRisk};
+    }
+
+    const double chordHeavyThreshold =
+        buckets.chordHeavy.present
+            ? std::clamp(statP25Or(buckets.chordHeavy.chordRate, 0.85), 0.80, 0.95)
+            : 0.85;
+    if (buckets.chordHeavy.present && chordRate >= chordHeavyThreshold) {
+        return {&buckets.chordHeavy, AdaptiveBucketKind::ChordHeavy};
+    }
+
+    if (densityNps <= buckets.lowMaxNps && buckets.low.present) {
+        return {&buckets.low, AdaptiveBucketKind::Low};
+    }
+    if (densityNps <= buckets.midMaxNps && buckets.mid.present) {
+        return {&buckets.mid, AdaptiveBucketKind::Mid};
+    }
+    if (buckets.high.present) {
+        return {&buckets.high, AdaptiveBucketKind::High};
+    }
+    if (buckets.all.present) {
+        return {&buckets.all, AdaptiveBucketKind::All};
+    }
+    (void)window;
+    return {};
+}
+
+double adaptiveBucketBasePressure(AdaptiveBucketKind kind) {
+    switch (kind) {
+        case AdaptiveBucketKind::Low:
+            return 0.50;
+        case AdaptiveBucketKind::Mid:
+            return 0.86;
+        case AdaptiveBucketKind::High:
+            return 0.96;
+        case AdaptiveBucketKind::ChordHeavy:
+            return 1.02;
+        case AdaptiveBucketKind::JackRisk:
+            return 0.62;
+        case AdaptiveBucketKind::All:
+            return 0.78;
+        case AdaptiveBucketKind::None:
+            return 0.75;
+    }
+    return 0.75;
+}
+
+double profiledDensityRoom(const TargetKBucketProfile& bucket, double densityNps) {
+    if (!bucket.densityNps.present) {
+        return adaptiveDensityRoom(densityNps);
+    }
+
+    const double median = std::max(0.1, bucket.densityNps.median);
+    const double p75 = std::max(median, bucket.densityNps.p75);
+    const double p90 = std::max(p75, bucket.densityNps.p90);
+    if (densityNps <= median) {
+        return 1.08;
+    }
+    if (densityNps <= p75 || p75 <= median) {
+        return 1.00;
+    }
+    if (densityNps <= p90 || p90 <= p75) {
+        return 0.88;
+    }
+    return 0.72;
+}
+
+double profiledPatternSafety(double holdRate,
+                             double chordRate,
+                             AdaptiveBucketKind kind) {
+    double safety = adaptivePatternSafety(holdRate, chordRate);
+    if (kind == AdaptiveBucketKind::ChordHeavy) {
+        safety = std::max(safety, 0.88);
+    } else if (kind == AdaptiveBucketKind::High || kind == AdaptiveBucketKind::Mid) {
+        safety = std::max(safety, 0.78);
+    } else if (kind == AdaptiveBucketKind::JackRisk) {
+        safety *= 0.70;
+    }
+    return safety;
+}
+
+double profiledTargetKNeed(const AdaptiveGrowthWindow& window,
+                           const ConvertOptions& options,
+                           const TargetKBucketProfile& bucket,
+                           AdaptiveBucketKind kind,
+                           const TargetKProfile& profile) {
+    const double fallbackActiveRate = std::clamp(profile.desiredActiveLaneRate, 0.10, 1.0);
+    const double floorRate = std::clamp(statP25Or(bucket.activeLaneRate, fallbackActiveRate * 0.75),
+                                        0.05,
+                                        1.0);
+    const double targetRate = std::clamp(statMedianOr(bucket.activeLaneRate, fallbackActiveRate),
+                                         floorRate,
+                                         1.0);
+    const int floorActiveLanes = activeLanesForRate(floorRate, options.targetKeyCount);
+    const int targetActiveLanes = activeLanesForRate(targetRate, options.targetKeyCount);
+    const double floorGap =
+        std::max(0.0, static_cast<double>(floorActiveLanes - window.activeLanes)) /
+        static_cast<double>(std::max(1, floorActiveLanes));
+    const double targetGap =
+        std::max(0.0, static_cast<double>(targetActiveLanes - window.activeLanes)) /
+        static_cast<double>(std::max(1, targetActiveLanes));
+
+    const double pressure = adaptiveBucketBasePressure(kind) + floorGap * 1.15 + targetGap * 0.85;
+    const double maxPressure =
+        kind == AdaptiveBucketKind::Low ? 0.95 :
+        kind == AdaptiveBucketKind::JackRisk ? 1.05 :
+        1.55;
+    return std::clamp(pressure, 0.35, maxPressure);
+}
+
 double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
                           const ConvertOptions& options,
                           double globalTargetRatio) {
@@ -360,27 +517,47 @@ double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
     }
 
     const auto& profile = *options.targetKProfile;
-    const double desiredActiveRate = std::clamp(profile.desiredActiveLaneRate, 0.10, 1.0);
-    const int desiredActiveLanes =
-        std::max(1, std::min(options.targetKeyCount,
-                             static_cast<int>(std::lround(static_cast<double>(options.targetKeyCount) *
-                                                          desiredActiveRate))));
-    const double activeGap =
-        std::max(0.0, static_cast<double>(desiredActiveLanes - window.activeLanes)) /
-        static_cast<double>(desiredActiveLanes);
-    const double targetKNeed = std::clamp(0.75 + activeGap * 0.95, 0.65, 1.45);
     const double densityNps = static_cast<double>(window.originalNotes) * 1000.0 /
                               static_cast<double>(std::max(1, window.endMs - window.startMs));
     const double holdRate = static_cast<double>(window.holdNotes) /
                             static_cast<double>(std::max(1, window.originalNotes));
     const double chordRate = static_cast<double>(window.chordSlices) /
                              static_cast<double>(std::max(1, window.totalSlices));
-    const double adjacentPressure =
-        std::clamp(0.85 + profile.desiredAdjacentExpansion, 0.85, 1.25);
+    const double jackRiskRate = static_cast<double>(window.jackRiskPairs) /
+                                static_cast<double>(std::max(1, window.originalNotes));
+    const auto bucketChoice =
+        chooseAdaptiveBucket(window, options, densityNps, chordRate, jackRiskRate);
+
+    double targetKNeed = 0.0;
+    double densityRoom = 0.0;
+    double patternSafety = 0.0;
+    double adjacentPressure = 0.0;
+    if (bucketChoice.bucket != nullptr) {
+        targetKNeed = profiledTargetKNeed(window,
+                                          options,
+                                          *bucketChoice.bucket,
+                                          bucketChoice.kind,
+                                          profile);
+        densityRoom = profiledDensityRoom(*bucketChoice.bucket, densityNps);
+        patternSafety = profiledPatternSafety(holdRate, chordRate, bucketChoice.kind);
+        const double adjacentTarget =
+            statMedianOr(bucketChoice.bucket->adjacentExpansion, profile.desiredAdjacentExpansion);
+        adjacentPressure = std::clamp(0.88 + adjacentTarget, 0.85, 1.28);
+    } else {
+        const double desiredActiveRate = std::clamp(profile.desiredActiveLaneRate, 0.10, 1.0);
+        const int desiredActiveLanes = activeLanesForRate(desiredActiveRate, options.targetKeyCount);
+        const double activeGap =
+            std::max(0.0, static_cast<double>(desiredActiveLanes - window.activeLanes)) /
+            static_cast<double>(desiredActiveLanes);
+        targetKNeed = std::clamp(0.75 + activeGap * 0.95, 0.65, 1.45);
+        densityRoom = adaptiveDensityRoom(densityNps);
+        patternSafety = adaptivePatternSafety(holdRate, chordRate);
+        adjacentPressure = std::clamp(0.85 + profile.desiredAdjacentExpansion, 0.85, 1.25);
+    }
     const double hardMax = std::min(options.maxAddedNoteRatio, 0.45);
     return std::clamp(globalTargetRatio *
-                          adaptiveDensityRoom(densityNps) *
-                          adaptivePatternSafety(holdRate, chordRate) *
+                          densityRoom *
+                          patternSafety *
                           targetKNeed *
                           adjacentPressure,
                       0.0,
@@ -413,6 +590,7 @@ std::vector<AdaptiveGrowthWindow> buildAdaptiveGrowthWindows(const Chart& origin
 
         std::set<int> activeLanes;
         std::map<int, int> notesByTime;
+        std::vector<std::pair<int, int>> timedSourceLanes;
         for (const auto& note : original.notes) {
             if (note.time < window.startMs || note.time >= window.endMs) {
                 continue;
@@ -420,6 +598,7 @@ std::vector<AdaptiveGrowthWindow> buildAdaptiveGrowthWindows(const Chart& origin
             ++window.originalNotes;
             const int sourceLane = note.sourceLane.has_value() ? *note.sourceLane : note.lane;
             activeLanes.insert(sourceLane);
+            timedSourceLanes.push_back({note.time, sourceLane});
             if (note.type == NoteType::Hold) {
                 ++window.holdNotes;
             }
@@ -434,6 +613,17 @@ std::vector<AdaptiveGrowthWindow> buildAdaptiveGrowthWindows(const Chart& origin
             (void)time;
             if (count >= 2) {
                 ++window.chordSlices;
+            }
+        }
+        std::sort(timedSourceLanes.begin(), timedSourceLanes.end());
+        for (std::size_t index = 1; index < timedSourceLanes.size(); ++index) {
+            const auto& previous = timedSourceLanes[index - 1];
+            const auto& current = timedSourceLanes[index];
+            if (previous.second == current.second) {
+                const int delta = current.first - previous.first;
+                if (delta > 0 && delta <= options.jackWindowMs) {
+                    ++window.jackRiskPairs;
+                }
             }
         }
         window.localRatio = adaptiveLocalRatio(window, options, globalTargetRatio);

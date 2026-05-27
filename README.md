@@ -39,7 +39,7 @@ Current scope:
 - v0.5.3 low-key recreation default: high-to-low `auto` compression drops overflow objects instead of retiming every object
 - v0.5.3 Target-K likeness reporting with a `kLikenessScore` / WeaveScore-style diagnostic for lane coverage, lane entropy, edge use, active-lane windows, spatial span, adjacent expansion, anchor preservation, added-ratio fit, and safety
 - v0.5.3 Target-K profile builder script for KeyWeaver style profiles from curated u_e 10K osu!mania references, with broad reference scans able to include multiple authors such as `u_e` and `CircusGalop` while excluding converted charts such as `7to10C` and key-conversion tags such as `4K10C` / `5K7C`
-- v0.5.5 profile-guided Adaptive Growth Budget for `preserve-tap-plus`, using Target-K profile windows to throttle dense/LN-heavy/chord-heavy sections while keeping a global added-note cap
+- v0.5.5 profile-guided Adaptive Growth Budget for `preserve-tap-plus`, using 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` Target-K profile windows to open or throttle local fill while keeping a global added-note cap
 - v0.5.5 broad style-profile workflow validated on a 628-chart u_e + CircusGalop 10K reference set, with a sanitized reusable profile committed at `profiles/keyweaver_10k_broad_style_v1.json`
 - v0.5.5 automatically loads the bundled broad 10K style profile for target-10 conversions when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; `--target-profile` overrides it
 
@@ -194,7 +194,7 @@ The broad profile scanner accepts osu!mania `CircleSize:10` charts whose `Creato
 
 `profiles/keyweaver_10k_broad_style_v1.json` is the sanitized committed broad profile. It keeps aggregate feature statistics and removes local Songs-folder paths. Target-10 conversions auto-load this bundled profile when it is next to the executable or in the current working folder; pass `--target-profile` to override it with a different profile.
 
-Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables a first adaptive-growth-budget pass: the global added-note cap stays in place, but each profile window gets its own local ratio based on density, active lanes, LN/chord pressure, and adjacent-growth need.
+Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables an adaptive-growth-budget pass: the global added-note cap stays in place, but Composer pressure is based on the 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` features rather than chart-level summaries.
 
 GUI scope:
 

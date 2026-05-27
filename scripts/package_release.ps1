@@ -115,6 +115,9 @@ KeyWeaver v$Version Windows x64 package
 Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keyconv_gui.exe when both files are in this folder.
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
+Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
+Dropping files onto an already-open GUI window uses the current Target field; multiple files or Batch write beside each original file when Output is blank.
+CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
 The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family output extension.
 Gesture Rail is on by default; use --gesture-rail off to compare older lane scoring.
@@ -127,7 +130,7 @@ Frozen algorithm contract: docs/algorithm-lock-v0.5.5.md
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, osu!mania sample conversion/report, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch dry-run smoke, osu!mania sample conversion/report, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -142,6 +145,13 @@ $($RuntimeDlls -join "`n")
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --dry-run --report (Join-Path $SmokeDir "sample_4k_to_10k.report.json") *> (Join-Path $SmokeDir "sample_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "osu!mania sample smoke failed" }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target 10 --dry-run *> (Join-Path $SmokeDir "batch_cli.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "CLI batch dry-run smoke failed" }
+    $BatchSmokeText = Get-Content -LiteralPath (Join-Path $SmokeDir "batch_cli.console.txt") -Raw
+    if ($BatchSmokeText -notmatch "Batch summary: succeeded=2 failed=0") {
+        throw "CLI batch dry-run smoke failed without the expected summary"
+    }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --expansion-policy preserve-tap-plus --dry-run --report (Join-Path $SmokeDir "profile_4k_to_10k.report.json") *> (Join-Path $SmokeDir "profile_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "auto-profile sample smoke failed" }

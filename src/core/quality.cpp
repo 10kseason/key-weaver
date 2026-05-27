@@ -512,7 +512,7 @@ double targetKSafetyScore(const QualityReport& report) {
 TargetKProfile targetKProfileFor(int sourceKeyCount, int targetKeyCount) {
     TargetKProfile profile;
     profile.targetKeys = targetKeyCount;
-    profile.profileName = "builtin_10k_profile";
+    profile.profileName = "builtin_" + std::to_string(std::max(0, targetKeyCount)) + "k_profile";
     profile.profileKind = "builtin";
     profile.windowMs = 2000;
     if (targetKeyCount <= 0) {

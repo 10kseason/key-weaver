@@ -15,6 +15,8 @@
 - Adaptive Growth Budget now reads the profile's 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` window features for Composer pressure instead of using chart-level summary fields; the Ray 7K-to-10K smoke chart now adds 420 notes with `createdJacks=0`, `nearTimeConflicts=0`, `lnConflictCount=0`, and `adaptiveBudgetAverageRatio=0.377974`.
 - Documented the frozen v0.5.5 high-key expansion contract in `docs/algorithm-lock-v0.5.5.md`, including bucket selection, no-`chartSummary` Composer pressure, Ray smoke baseline, and change-control rules.
 - Added `scripts/package_release.ps1` so 0.5.5 Windows release zips can be rebuilt with Release CMake, tests, GUI smoke, sample conversions, bundled profiles/scripts/samples, MinGW runtime DLLs, and SHA256 output.
+- Added drag-and-drop and batch conversion workflows: dragged files open in the GUI so the Target field controls the output key count, the Batch button converts loaded files beside their original charts when Output is blank, and CLI batch mode requires an explicit `--target` instead of assuming 10K.
+- Built-in Target-K report labels now reflect the requested target key count, so non-10K conversions no longer report a misleading `builtin_10k_profile` name.
 
 ## 0.5.3
 

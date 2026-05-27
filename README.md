@@ -26,6 +26,8 @@ Current scope:
 - v0.5.0 Playtest Calibration reports with FeelReport metrics and policy comparison JSON/CSV output
 - v0.5.0 Windows GUI playtest harness for one-off conversion, policy matrix runs, report summaries, and copied CLI commands
 - v0.5.1 GUI output/report defaults beside the selected input `.osu`
+- v0.5.5 drag-and-drop GUI loading plus batch conversion: dropped files use the GUI Target field, and blank Output writes each chart beside its original file
+- v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
 - v0.5.2 Preserve Tap Plus policy with key-growth budgets, hand-zone balance, and LN-heavy window additions
 - v0.5.1 no-created-jack invariant across assignment, repair, expansion, and final sanitization
 - v0.5.1 auto expansion default: preserve on same/lower key counts, preserve-tap-plus on higher key counts
@@ -104,7 +106,7 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --report dist/r
 Options:
 
 ```text
-KeyWeaver <input.osu|input.bms>
+KeyWeaver <input.osu|input.bms> [more inputs...]
   --source <number>       source key count, optional
   --target <number>       target key count, required
   --out <path>            output file path, defaults beside input as '<stem> KeyWeaverNK.<ext>'
@@ -149,6 +151,7 @@ KeyWeaver <input.osu|input.bms>
   --epsilon <ms>          same-time TimeSlice epsilon
   --dp                    reserve DP mode, reports SP fallback in v0.1
   --dry-run               convert in memory and report only
+  --batch                 treat positional chart inputs as a batch; outputs default beside each input
   --report <path>         write conversion report json
   --target-profile <json> use a Target-K reference profile JSON for K-likeness scoring
                           target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled
@@ -172,6 +175,7 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --expansion-pol
 build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --compare-policies preserve,preserve-tap-plus,echo-balanced,training-scaffold,harder-balanced --emit-feel-report --emit-diff-report --report dist/compare.json --report-csv dist/compare.csv
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 4 --report dist/report_7k_4k.json
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --dry-run
+build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch
 build/KeyWeaver.exe path/to/chart.bms --target 4 --dry-run
 ```
 
@@ -204,9 +208,12 @@ GUI scope:
 ```text
 - select input .osu or BMS-family chart
 - output beside the input chart by default, with optional folder override
-- optional source-key override and target key
+- drag one or more chart files onto an already-open GUI window to convert with the current Target field
+- drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads them so Target can be set before conversion
+- optional source-key override and target key; drag-and-drop and batch conversion use this Target field instead of assuming 10K
 - choose expansion/compress/profile options
 - run one conversion and parse report JSON
+- run batch conversion for dropped/loaded files
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
 - open output/report and copy the generated CLI command
 ```
@@ -223,7 +230,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - `--optimizer beam`, `--style dp`, and `--dp` are accepted as reserved options and report a fallback warning.
 - Strong compression can drop or roll notes under no-overlap policies. Default high-to-low `auto` compression uses `no-overlap-drop`, so overflow taps or holds are omitted when the target key count cannot represent the source chord/LN occupancy cleanly. This prioritizes low-key recreation over preserving every object. Use explicit `--compress-policy no-overlap-hybrid` to roll overflow holds when possible, or `--compress-policy no-overlap-roll` when tap overflow should also be rolled instead of deleted.
 - Converted osu!mania difficulty names append `KeyWeaverNK`, where `N` is the target key count, for example `KeyWeaver10K`. If `--out` is omitted, the `.osu` is written beside the input using the same marker and a numeric suffix when needed.
-- The GUI mirrors this local-output default: after selecting an input `.osu`, generated `.osu`, JSON, and CSV files default to that chart's folder unless the Output field is changed.
+- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. When multiple files are dropped, Output is blank by default and each chart writes beside its own source file; set Output to force every batch item into one folder.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
 - If `--expansion-policy` is omitted or set to `auto`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. Use explicit `--expansion-policy preserve` to disable deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.

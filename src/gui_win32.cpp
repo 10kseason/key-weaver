@@ -39,6 +39,7 @@ constexpr int kButtonCopyCommand = 115;
 constexpr int kListSummary = 116;
 constexpr int kEditLog = 117;
 constexpr int kStaticDetected = 118;
+constexpr int kButtonBatch = 119;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -92,6 +93,8 @@ struct AppState {
     std::filesystem::path lastOutputPath;
     std::filesystem::path lastReportPath;
     std::wstring lastCommand;
+    std::vector<std::filesystem::path> batchInputs;
+    bool suppressInputChange = false;
 };
 
 std::filesystem::path directoryForOpen(const std::filesystem::path& path) {
@@ -196,6 +199,12 @@ void setWindowText(HWND hwnd, const std::wstring& text) {
     SetWindowTextW(hwnd, text.c_str());
 }
 
+void setInputText(AppState& state, const std::wstring& text) {
+    state.suppressInputChange = true;
+    setWindowText(state.inputEdit, text);
+    state.suppressInputChange = false;
+}
+
 std::filesystem::path moduleDirectory() {
     std::array<wchar_t, MAX_PATH> buffer{};
     const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
@@ -266,6 +275,12 @@ std::wstring lowerAscii(std::wstring value) {
 bool isBmsFamilyPath(const std::filesystem::path& path) {
     const auto extension = lowerAscii(path.extension().wstring());
     return extension == L".bms" || extension == L".bme" || extension == L".bml" || extension == L".pms";
+}
+
+bool isSupportedChartPath(const std::filesystem::path& path) {
+    const auto extension = lowerAscii(path.extension().wstring());
+    return extension == L".osu" || extension == L".bms" || extension == L".bme" ||
+           extension == L".bml" || extension == L".pms";
 }
 
 std::wstring chartOutputExtension(const ToolOptions& options) {
@@ -833,6 +848,147 @@ void executeMatrix(AppState& state) {
     }
 }
 
+std::optional<std::filesystem::path> explicitOutputDir(const AppState& state) {
+    const auto outputDirText = trim(getWindowText(state.outputDirEdit));
+    if (outputDirText.empty()) {
+        return std::nullopt;
+    }
+    return absolutePath(std::filesystem::path(outputDirText));
+}
+
+std::vector<std::filesystem::path> batchInputsForState(const AppState& state) {
+    if (!state.batchInputs.empty()) {
+        return state.batchInputs;
+    }
+    const auto inputText = trim(getWindowText(state.inputEdit));
+    if (inputText.empty()) {
+        return {};
+    }
+    return {absolutePath(std::filesystem::path(inputText))};
+}
+
+void executeBatchConvert(AppState& state) {
+    auto baseOptions = readToolOptions(state);
+    const auto inputs = batchInputsForState(state);
+    if (inputs.empty()) {
+        MessageBoxW(state.hwnd, L"Drop or select at least one chart first.", L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
+    if (baseOptions.keyconvExe.empty() || !std::filesystem::exists(baseOptions.keyconvExe)) {
+        MessageBoxW(state.hwnd, L"KeyWeaver executable path is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
+    if (baseOptions.targetKeys.empty()) {
+        MessageBoxW(state.hwnd, L"Target key count is required.", L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
+
+    const auto forcedOutputDir = explicitOutputDir(state);
+    clearSummary(state);
+    appendLog(state, L"\r\nBatch convert: " + std::to_wstring(inputs.size()) +
+                     L" file(s), target " + baseOptions.targetKeys + L"K\r\n");
+
+    int succeeded = 0;
+    int failed = 0;
+    for (std::size_t index = 0; index < inputs.size(); ++index) {
+        ToolOptions options = baseOptions;
+        options.inputFile = absolutePath(inputs[index]);
+        if (!std::filesystem::exists(options.inputFile) || !isSupportedChartPath(options.inputFile)) {
+            ++failed;
+            addSummaryLine(state, L"[fail] " + options.inputFile.filename().wstring() + L" invalid input");
+            appendLog(state, L"[fail] " + options.inputFile.wstring() + L" invalid input\r\n");
+            continue;
+        }
+        options.outputDir = forcedOutputDir.has_value() ? *forcedOutputDir : options.inputFile.parent_path();
+        if (!options.outputDir.empty()) {
+            std::filesystem::create_directories(options.outputDir);
+        }
+
+        OutputPaths paths;
+        const std::wstring command = buildSingleCommand(options, paths);
+        state.lastCommand = command;
+        appendLog(state, L"\r\n[" + std::to_wstring(index + 1) + L"/" +
+                         std::to_wstring(inputs.size()) + L"] > " + command + L"\r\n");
+        const auto result = runProcess(command, options.keyconvExe.parent_path());
+        appendLog(state, widen(result.output) + L"\r\n");
+        if (result.exitCode != 0) {
+            ++failed;
+            addSummaryLine(state, L"[fail] " + options.inputFile.filename().wstring());
+            continue;
+        }
+
+        ++succeeded;
+        state.lastOutputPath = paths.outputChart;
+        state.lastReportPath = paths.reportJson;
+        const auto summary = parseReportSummary(paths.reportJson);
+        std::wostringstream line;
+        line << L"[ok] " << options.inputFile.filename().wstring();
+        if (summary.valid) {
+            line << L"  notes=" << summary.totalNotes << L" added=" << summary.addedNotes;
+        }
+        addSummaryLine(state, line.str());
+        appendLog(state, L"Output: " + paths.outputChart.wstring() + L"\r\n");
+    }
+
+    std::wostringstream done;
+    done << L"Batch done: ok=" << succeeded << L" fail=" << failed;
+    appendLog(state, done.str() + L"\r\n");
+    if (failed > 0) {
+        MessageBoxW(state.hwnd, done.str().c_str(), L"KeyWeaver batch", MB_ICONWARNING);
+    }
+}
+
+void loadDroppedFiles(AppState& state,
+                      std::vector<std::filesystem::path> files,
+                      bool runNow) {
+    files.erase(std::remove_if(files.begin(), files.end(), [](const std::filesystem::path& path) {
+                    return !isSupportedChartPath(path);
+                }),
+                files.end());
+    if (files.empty()) {
+        MessageBoxW(state.hwnd, L"Drop osu/BMS-family chart files.", L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
+
+    for (auto& file : files) {
+        file = absolutePath(file);
+    }
+    state.batchInputs = files;
+    setInputText(state, files.front().wstring());
+    if (files.size() == 1) {
+        setWindowText(state.outputDirEdit, files.front().parent_path().wstring());
+    } else {
+        setWindowText(state.outputDirEdit, L"");
+    }
+    updateDetectedSource(state);
+    appendLog(state, L"\r\nLoaded dropped chart(s): " + std::to_wstring(files.size()) + L"\r\n");
+    if (files.size() > 1) {
+        appendLog(state, L"Output field is blank: each chart writes beside its original file.\r\n");
+    }
+
+    if (!runNow) {
+        return;
+    }
+    if (files.size() == 1) {
+        executeSingleConvert(state);
+    } else {
+        executeBatchConvert(state);
+    }
+}
+
+std::vector<std::filesystem::path> filesFromDrop(HDROP drop) {
+    std::vector<std::filesystem::path> files;
+    const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    for (UINT index = 0; index < count; ++index) {
+        const UINT length = DragQueryFileW(drop, index, nullptr, 0);
+        std::wstring buffer(static_cast<std::size_t>(length) + 1, L'\0');
+        DragQueryFileW(drop, index, buffer.data(), length + 1);
+        buffer.resize(length);
+        files.emplace_back(buffer);
+    }
+    return files;
+}
+
 void createUi(AppState& state) {
     state.uiFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     const int labelX = 12;
@@ -895,11 +1051,12 @@ void createUi(AppState& state) {
     setComboSelection(state.streamProfileCombo, L"conservative");
     y += 40;
 
-    makeControl(state, L"BUTTON", L"Convert", BS_PUSHBUTTON, editX, y, 110, 28, kButtonConvert);
-    makeControl(state, L"BUTTON", L"Matrix", BS_PUSHBUTTON, editX + 118, y, 92, 28, kButtonMatrix);
-    makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, editX + 218, y, 120, 28, kButtonOpenOutput);
-    makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, editX + 346, y, 112, 28, kButtonOpenReport);
-    makeControl(state, L"BUTTON", L"Copy CLI", BS_PUSHBUTTON, editX + 466, y, 100, 28, kButtonCopyCommand);
+    makeControl(state, L"BUTTON", L"Convert", BS_PUSHBUTTON, editX, y, 96, 28, kButtonConvert);
+    makeControl(state, L"BUTTON", L"Batch", BS_PUSHBUTTON, editX + 104, y, 96, 28, kButtonBatch);
+    makeControl(state, L"BUTTON", L"Matrix", BS_PUSHBUTTON, editX + 208, y, 86, 28, kButtonMatrix);
+    makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, editX + 302, y, 112, 28, kButtonOpenOutput);
+    makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, editX + 422, y, 104, 28, kButtonOpenReport);
+    makeControl(state, L"BUTTON", L"Copy CLI", BS_PUSHBUTTON, editX + 534, y, 90, 28, kButtonCopyCommand);
     y += 42;
 
     makeControl(state, L"STATIC", L"Report / Matrix", 0, labelX, y + 4, 100, 20, -1);
@@ -926,13 +1083,28 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             state->hwnd = hwnd;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
             createUi(*state);
+            DragAcceptFiles(hwnd, TRUE);
             return 0;
         }
-        case WM_COMMAND:
+        case WM_DROPFILES:
+            if (state) {
+                HDROP drop = reinterpret_cast<HDROP>(wParam);
+                auto files = filesFromDrop(drop);
+                DragFinish(drop);
+                loadDroppedFiles(*state, std::move(files), true);
+                return 0;
+            }
+            break;
+        case WM_COMMAND: {
             if (!state) {
                 break;
             }
-            switch (LOWORD(wParam)) {
+            const auto controlId = LOWORD(wParam);
+            const auto notification = HIWORD(wParam);
+            if (controlId == kEditInput && notification == EN_CHANGE && !state->suppressInputChange) {
+                state->batchInputs.clear();
+            }
+            switch (controlId) {
                 case kButtonBrowseKeyconv: {
                     const auto path = browseOpenFile(hwnd, L"Select KeyWeaver.exe",
                                                      L"Executable\0*.exe\0All files\0*.*\0",
@@ -947,7 +1119,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                                      L"Supported charts\0*.osu;*.bms;*.bme;*.bml;*.pms\0osu! chart\0*.osu\0BMS family\0*.bms;*.bme;*.bml;*.pms\0All files\0*.*\0",
                                                      std::filesystem::path(getWindowText(state->inputEdit)));
                     if (path.has_value()) {
-                        setWindowText(state->inputEdit, path->wstring());
+                        state->batchInputs = {*path};
+                        setInputText(*state, path->wstring());
                         syncOutputDirToInput(*state);
                         updateDetectedSource(*state);
                     }
@@ -962,6 +1135,9 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 case kButtonConvert:
                     executeSingleConvert(*state);
+                    return 0;
+                case kButtonBatch:
+                    executeBatchConvert(*state);
                     return 0;
                 case kButtonMatrix:
                     executeMatrix(*state);
@@ -994,6 +1170,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     break;
             }
             break;
+        }
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -1003,7 +1180,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-int runGui() {
+int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     AppState state;
 
@@ -1034,6 +1211,10 @@ int runGui() {
 
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
+    if (!initialInputs.empty()) {
+        loadDroppedFiles(state, initialInputs, false);
+        appendLog(state, L"Choose Target keys, then press Convert or Batch.\r\n");
+    }
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0)) {
@@ -1092,5 +1273,11 @@ int main(int argc, char** argv) {
                                                                  : std::filesystem::path();
         return runSmoke(std::filesystem::path(args[2]), outputDir);
     }
-    return runGui();
+    std::vector<std::filesystem::path> initialInputs;
+    for (std::size_t index = 1; index < args.size(); ++index) {
+        if (!args[index].empty() && args[index].front() != L'-') {
+            initialInputs.emplace_back(args[index]);
+        }
+    }
+    return runGui(initialInputs);
 }

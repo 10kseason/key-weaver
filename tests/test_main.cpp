@@ -3060,6 +3060,50 @@ void testHighKeyTapPlusPrefersEighthBeatAdditions() {
     require(generated == 2, "20 percent high-key tap-plus should add two notes to ten source notes");
 }
 
+void testTenKeyTapPlusBoostsQuarterEighthDensityAboveEightKey() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 4;
+    keyconv::TimingPoint timing;
+    timing.time = 0;
+    timing.beatLength = 500.0;
+    timing.uninherited = true;
+    chart.timingPoints.push_back(timing);
+
+    const int times[] = {1110, 1190, 1250, 1330, 1410, 1500, 1610, 1690, 1810, 1910};
+    for (int i = 0; i < 10; ++i) {
+        keyconv::Note note;
+        note.id = "qd" + std::to_string(i);
+        note.time = times[i];
+        note.lane = i % 4;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    auto generatedTapPlusTime = [&](int targetKeyCount) {
+        keyconv::ConvertOptions options;
+        options.sourceKeyCount = 4;
+        options.targetKeyCount = targetKeyCount;
+        options.style = keyconv::ConversionStyle::Direct;
+        options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusLow;
+
+        const auto result = keyconv::convertChart(chart, options);
+        std::vector<int> generatedTimes;
+        for (const auto& note : result.chart.notes) {
+            if (note.id.rfind("gen:tap_plus:", 0) == 0) {
+                generatedTimes.push_back(note.time);
+            }
+        }
+        require(generatedTimes.size() == 1, "low tap-plus fixture should add exactly one note");
+        return generatedTimes.front();
+    };
+
+    require(generatedTapPlusTime(8) == 1250,
+            "8K tap-plus should keep the baseline first eighth-beat fill");
+    require(generatedTapPlusTime(10) == 1500,
+            "10K tap-plus should boost quarter-beat density above the 8K baseline");
+}
+
 void testHighKeyExtremeTrillAvoidsBothOuterEdges() {
     keyconv::Chart chart;
     chart.meta.sourceKeyCount = 7;
@@ -3506,6 +3550,8 @@ int main() {
          testPreserveConvertLaneDriftKeepsSourceJackTogether},
         {"auto-more expansion reports larger budget", testAutoMoreExpansionReportsLargerBudget},
         {"high-key tap-plus prefers eighth-beat additions", testHighKeyTapPlusPrefersEighthBeatAdditions},
+        {"10K tap-plus boosts quarter-eighth density above 8K",
+         testTenKeyTapPlusBoostsQuarterEighthDensityAboveEightKey},
         {"high-key extreme trill avoids both outer edges", testHighKeyExtremeTrillAvoidsBothOuterEdges},
         {"long source jack stays single lane playable", testLongSourceJackStaysSingleLanePlayable},
         {"chord-embedded long source jack stays single lane playable",

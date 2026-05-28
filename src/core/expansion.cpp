@@ -471,6 +471,10 @@ bool highKeyGeneratedTuningActive(const ConvertOptions& options) {
     return options.targetKeyCount >= 8 && options.targetKeyCount > options.sourceKeyCount;
 }
 
+bool tenKeyQuarterEighthDensityActive(const ConvertOptions& options) {
+    return options.targetKeyCount == 10 && options.targetKeyCount > options.sourceKeyCount;
+}
+
 bool evenKeyGeneratedPolicyActive(const ConvertOptions& options) {
     return highKeyGeneratedTuningActive(options) &&
            options.sourceKeyCount >= 2 && options.targetKeyCount >= 2 &&
@@ -532,6 +536,10 @@ std::optional<int> beatDivisionDeltaMs(int time, const std::vector<TimingPoint>&
     const int snapped = static_cast<int>(std::lround(static_cast<double>(grid->time) +
                                                      static_cast<double>(nearestIndex) * step));
     return std::abs(snapped - time);
+}
+
+std::optional<int> quarterBeatDeltaMs(int time, const std::vector<TimingPoint>& timingPoints) {
+    return beatDivisionDeltaMs(time, timingPoints, 1);
 }
 
 std::optional<int> eighthBeatDeltaMs(int time, const std::vector<TimingPoint>& timingPoints) {
@@ -1442,6 +1450,7 @@ void tuneHighKeyGeneratedCandidate(ExpansionCandidate& candidate, const Expansio
     }
 
     const int tolerance = std::max(2, context.options.expansionSnapToleranceMs);
+    const auto quarterDelta = quarterBeatDeltaMs(candidate.note.time, context.original.timingPoints);
     const auto eighthDelta = eighthBeatDeltaMs(candidate.note.time, context.original.timingPoints);
     const auto sixteenthDelta = sixteenthBeatDeltaMs(candidate.note.time, context.original.timingPoints);
     if (eighthDelta.has_value() && *eighthDelta <= tolerance) {
@@ -1458,6 +1467,18 @@ void tuneHighKeyGeneratedCandidate(ExpansionCandidate& candidate, const Expansio
         candidate.snapPriority = std::min(candidate.snapPriority, 0);
     }
 
+    if (tenKeyQuarterEighthDensityActive(context.options)) {
+        if (quarterDelta.has_value() && *quarterDelta <= tolerance) {
+            candidate.score += 4.0;
+            candidate.snapPriority = std::max(candidate.snapPriority, 4);
+        } else if (eighthDelta.has_value() && *eighthDelta <= tolerance) {
+            candidate.score += 2.5;
+            candidate.snapPriority = std::max(candidate.snapPriority, 4);
+        } else if (sixteenthDelta.has_value() && *sixteenthDelta <= tolerance) {
+            candidate.score -= 1.5;
+        }
+    }
+
     candidate.score += mirrorSymmetryScore(context, candidate.note.lane);
     candidate.score -= lightEdgePenalty(candidate.note.lane, context.options.targetKeyCount);
     candidate.score -= outerEdgeTrillPenalty(context.chart.notes,
@@ -1470,6 +1491,29 @@ void sortExpansionSlices(std::vector<SliceView>& slices, const ExpansionContext&
     std::stable_sort(slices.begin(), slices.end(), [&](const SliceView& lhs, const SliceView& rhs) {
         if (lhs.noteIndices.size() != rhs.noteIndices.size()) {
             return lhs.noteIndices.size() < rhs.noteIndices.size();
+        }
+        if (tenKeyQuarterEighthDensityActive(context.options)) {
+            const int tolerance = std::max(2, context.options.expansionSnapToleranceMs);
+            const auto leftQuarter = quarterBeatDeltaMs(lhs.time, context.original.timingPoints);
+            const auto rightQuarter = quarterBeatDeltaMs(rhs.time, context.original.timingPoints);
+            const auto leftEighth = eighthBeatDeltaMs(lhs.time, context.original.timingPoints);
+            const auto rightEighth = eighthBeatDeltaMs(rhs.time, context.original.timingPoints);
+            const bool leftQuarterAligned = leftQuarter.has_value() && *leftQuarter <= tolerance;
+            const bool rightQuarterAligned = rightQuarter.has_value() && *rightQuarter <= tolerance;
+            const bool leftEighthAligned = leftEighth.has_value() && *leftEighth <= tolerance;
+            const bool rightEighthAligned = rightEighth.has_value() && *rightEighth <= tolerance;
+            const int leftRank = leftQuarterAligned ? 2 : leftEighthAligned ? 1 : 0;
+            const int rightRank = rightQuarterAligned ? 2 : rightEighthAligned ? 1 : 0;
+            if (leftRank != rightRank) {
+                return leftRank > rightRank;
+            }
+            if (leftRank > 0) {
+                const int leftDelta = leftRank == 2 ? *leftQuarter : *leftEighth;
+                const int rightDelta = rightRank == 2 ? *rightQuarter : *rightEighth;
+                if (leftDelta != rightDelta) {
+                    return leftDelta < rightDelta;
+                }
+            }
         }
         if (highKeyGeneratedTuningActive(context.options)) {
             const auto leftDelta = eighthBeatDeltaMs(lhs.time, context.original.timingPoints);

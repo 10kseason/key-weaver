@@ -137,6 +137,28 @@ bool createsSourceDifferentRepeat(const std::vector<Note>& placed,
     return false;
 }
 
+bool hasNearbySourceLaneNeighbor(const std::vector<Note>& sourceNotes,
+                                 int sourceLane,
+                                 const std::string& noteId,
+                                 int time,
+                                 int thresholdMs) {
+    const int window = std::max(0, thresholdMs);
+    if (window <= 0) {
+        return false;
+    }
+
+    for (const auto& note : sourceNotes) {
+        if (note.id == noteId || note.sourceLane.value_or(note.lane) != sourceLane) {
+            continue;
+        }
+        const int dt = std::abs(note.time - time);
+        if (dt > 0 && dt <= window) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::optional<Note> lastPlacedBefore(const std::vector<Note>& placed, int time) {
     for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
         if (it->time < time) {
@@ -343,6 +365,15 @@ double sourceLaneAnchorScore(int targetLane, int anchorLane, int targetKeyCount)
 bool preserveLaneDriftActive(const AssignmentContext& context) {
     return context.preserveLaneDrift && context.style == ConversionStyle::Faithful &&
            context.targetKeyCount > context.sourceKeyCount && context.targetKeyCount > 1;
+}
+
+bool tenKeyLooseNonJackExpansionActive(int sourceKeyCount, int targetKeyCount, ConversionStyle style) {
+    return targetKeyCount == 10 && targetKeyCount > sourceKeyCount &&
+           (style == ConversionStyle::Playable || style == ConversionStyle::Training);
+}
+
+bool tenKeyLooseNonJackExpansionActive(const AssignmentContext& context) {
+    return tenKeyLooseNonJackExpansionActive(context.sourceKeyCount, context.targetKeyCount, context.style);
 }
 
 int preserveLaneDriftBaseLane(int sourceLane, const AssignmentContext& context) {
@@ -796,22 +827,29 @@ double scoreAssignment(const TimeSlice& slice,
         const bool sourceJackLike = hint != nullptr && hint->kind == PatternKind::Jack;
         const bool sourceRepeatNearby =
             recentSameSourceLane(context.placed, sourceLane, source.time, jackWindowMsForBalance).has_value();
+        const bool sourceRepeatNearAny =
+            sourceRepeatNearby ||
+            hasNearbySourceLaneNeighbor(sourceNotes, sourceLane, source.id, source.time, jackWindowMsForBalance);
         const auto sourceAnchor =
             recentSourceLaneAnchor(context.placed, sourceLane, source.time, context.targetKeyCount);
+        const bool looseTenKeyNonJack =
+            tenKeyLooseNonJackExpansionActive(context) && slice.chordSize == 1 && hint == nullptr &&
+            !sourceRepeatNearAny;
         const auto driftLane = preserveLaneDriftLane(sourceLane, source.time, context);
 
         score += context.weights.position *
                  (1.0 - std::abs(normalizedLane(sourceLane, context.sourceKeyCount) -
                                   normalizedLane(targetLane, context.targetKeyCount)));
         score += dualFivePanelScore(sourceLane, targetLane, hint, context);
-        if (!sourceJackLike && !sourceRepeatNearby && !sourceAnchor.has_value()) {
+        if (!sourceJackLike && !sourceRepeatNearby && (!sourceAnchor.has_value() || looseTenKeyNonJack)) {
+            const double densityScale = sourceAnchor.has_value() ? 0.9 : 1.5;
             score += context.weights.density *
                      expandedLaneBalanceScore(context.laneUse,
                                               sourceLane,
                                               context.sourceKeyCount,
                                               targetLane,
                                               context.targetKeyCount) *
-                     1.5;
+                     densityScale;
             if (context.targetKeyCount > context.sourceKeyCount) {
                 score += context.weights.handBalance *
                          handBalanceScore(context.laneUse, targetLane, context.targetKeyCount) *
@@ -821,6 +859,9 @@ double scoreAssignment(const TimeSlice& slice,
         score += gestureScore(source, targetLane, hint, context);
         if (!sourceJackLike && sourceAnchor.has_value()) {
             double anchorWeight = context.targetKeyCount > context.sourceKeyCount ? 0.85 : 2.25;
+            if (looseTenKeyNonJack) {
+                anchorWeight = 0.60;
+            }
             if (preserveLaneDriftActive(context) && !sourceRepeatNearby) {
                 anchorWeight = 0.30;
             }

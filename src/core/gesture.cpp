@@ -1,6 +1,7 @@
 #include "core/gesture.hpp"
 
 #include "core/mapping.hpp"
+#include "core/repeat.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -288,6 +289,67 @@ void addJackHints(GestureRail& rail,
     }
 }
 
+std::map<std::string, const Note*> sourceNotesById(const std::vector<Note>& notes) {
+    std::map<std::string, const Note*> result;
+    for (const auto& note : notes) {
+        if (!note.id.empty()) {
+            result[note.id] = &note;
+        }
+    }
+    return result;
+}
+
+std::vector<PhraseNote> phraseNotesForJackGroup(const Chart& chart, const JackGroup& group) {
+    const auto sourceById = sourceNotesById(chart.notes);
+    std::vector<PhraseNote> notes;
+    notes.reserve(group.noteIds.size());
+    for (const auto& id : group.noteIds) {
+        const auto found = sourceById.find(id);
+        if (found == sourceById.end()) {
+            continue;
+        }
+        PhraseNote phraseNote;
+        phraseNote.id = found->second->id;
+        phraseNote.sourceLane = found->second->sourceLane.value_or(found->second->lane);
+        phraseNote.time = found->second->time;
+        notes.push_back(std::move(phraseNote));
+    }
+    std::stable_sort(notes.begin(), notes.end(), [](const PhraseNote& lhs, const PhraseNote& rhs) {
+        if (lhs.time != rhs.time) {
+            return lhs.time < rhs.time;
+        }
+        return lhs.id < rhs.id;
+    });
+    return notes;
+}
+
+void addSourceJackGroupHints(GestureRail& rail,
+                             const Chart& chart,
+                             int sourceKeyCount,
+                             int targetKeyCount,
+                             int jackWindowMs,
+                             int& motifId) {
+    const auto groups = detectJackGroups(chart.notes, RepeatLaneMode::SourceLane, jackWindowMs);
+    for (const auto& group : groups) {
+        bool anyAlreadyHinted = false;
+        for (const auto& id : group.noteIds) {
+            if (rail.hintsByNoteId.count(id) > 0) {
+                anyAlreadyHinted = true;
+                break;
+            }
+        }
+        if (anyAlreadyHinted) {
+            continue;
+        }
+
+        auto notes = phraseNotesForJackGroup(chart, group);
+        if (notes.size() < 3) {
+            continue;
+        }
+        addJackHints(rail, notes, motifId++, sourceKeyCount, targetKeyCount);
+    }
+}
+
 std::map<std::string, Note> notesById(const std::vector<Note>& notes) {
     std::map<std::string, Note> result;
     for (const auto& note : notes) {
@@ -306,6 +368,24 @@ std::vector<Note> convertedNotesForToken(const Chart& original,
     std::vector<Note> result;
     for (const auto& phraseNote : phraseNotesForToken(original, slices, token)) {
         const auto found = convertedById.find(phraseNote.id);
+        if (found != convertedById.end()) {
+            result.push_back(found->second);
+        }
+    }
+    std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        if (a.time != b.time) {
+            return a.time < b.time;
+        }
+        return a.id < b.id;
+    });
+    return result;
+}
+
+std::vector<Note> convertedNotesForIds(const Chart& converted, const std::vector<std::string>& ids) {
+    const auto convertedById = notesById(converted.notes);
+    std::vector<Note> result;
+    for (const auto& id : ids) {
+        const auto found = convertedById.find(id);
         if (found != convertedById.end()) {
             result.push_back(found->second);
         }
@@ -447,6 +527,8 @@ GestureRail buildGestureRail(const Chart& chart,
         ++motifId;
     }
 
+    addSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId);
+
     return rail;
 }
 
@@ -472,6 +554,7 @@ GestureReport evaluateGesturePreservation(const Chart& original,
     const auto tokens = detectPatternTokens(slices, jackWindowMs);
     int preserved = 0;
     int detected = 0;
+    std::set<std::string> evaluatedJackNoteIds;
 
     for (const auto& token : tokens) {
         if (!isGestureToken(token.kind)) {
@@ -501,10 +584,48 @@ GestureReport evaluateGesturePreservation(const Chart& original,
             ok ? ++report.preservedTrills : ++report.brokenTrills;
         } else if (token.kind == PatternKind::Jack) {
             ++report.detectedJacks;
+            for (const auto& note : sourceNotes) {
+                evaluatedJackNoteIds.insert(note.id);
+            }
             ok = jackPreserved(targetNotes, sourceNotes.size() >= 5);
             ok ? ++report.preservedJacks : ++report.brokenJacks;
         }
 
+        ++detected;
+        if (ok) {
+            ++preserved;
+        }
+    }
+
+    const auto sourceJackGroups = detectJackGroups(original.notes, RepeatLaneMode::SourceLane, jackWindowMs);
+    for (const auto& group : sourceJackGroups) {
+        bool alreadyEvaluated = false;
+        for (const auto& id : group.noteIds) {
+            if (evaluatedJackNoteIds.count(id) > 0) {
+                alreadyEvaluated = true;
+                break;
+            }
+        }
+        if (alreadyEvaluated) {
+            continue;
+        }
+
+        const auto sourceNotes = phraseNotesForJackGroup(original, group);
+        const auto targetNotes = convertedNotesForIds(converted, group.noteIds);
+        if (sourceNotes.size() < 2 || targetNotes.size() < 2) {
+            continue;
+        }
+
+        if (!targetZoneMatchesSource(sourceNotes, targetNotes, sourceKeyCount, targetKeyCount)) {
+            ++report.handZoneBreaks;
+        }
+        if (laneScattered(PatternKind::Jack, targetNotes)) {
+            ++report.motifLaneScatterCount;
+        }
+
+        ++report.detectedJacks;
+        const bool ok = jackPreserved(targetNotes, group.hitCount >= 5);
+        ok ? ++report.preservedJacks : ++report.brokenJacks;
         ++detected;
         if (ok) {
             ++preserved;

@@ -662,6 +662,50 @@ void testSevenToTenSparseSourceLaneAnchor() {
     require(result.report.quality.lnConflictCount == 0, "source-lane anchoring should not create LN conflicts");
 }
 
+void testTenKeyNonJackSourceLaneAnchorRelaxesInsidePanel() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    for (int i = 0; i < 8; ++i) {
+        keyconv::Note note;
+        note.id = "relax" + std::to_string(i);
+        note.time = 1000 + i * 700;
+        note.lane = 1;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+    options.maxAddedNoteRatio = 0.0;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    std::set<int> unique(lanes.begin(), lanes.end());
+    require(unique.size() >= 2,
+            "10K non-jack source-lane anchors should loosen enough to use nearby lanes");
+    for (const int lane : lanes) {
+        require(lane >= 0 && lane <= 4,
+                "10K relaxed non-jack anchors should stay inside the source hand panel");
+    }
+    require(result.report.quality.sourceJackGroups == 0,
+            "10K non-jack relaxation fixture should stay outside the jack window");
+    require(result.report.quality.createdJacks == 0,
+            "10K non-jack relaxation should not create target jacks from different source lanes");
+}
+
+void testEightKeyPlayableCandidateRadiusRemainsStable() {
+    const auto eightKey = keyconv::generateCandidateLanes(1, 7, 8, keyconv::ConversionStyle::Playable);
+
+    require(eightKey.radius == 2, "8K playable candidate radius should keep the existing expansion width");
+    require(std::find(eightKey.candidates.begin(), eightKey.candidates.end(), 4) == eightKey.candidates.end(),
+            "8K playable candidates should not inherit 10K-only relaxation behavior");
+}
+
 void testSevenToTenNonGestureChordsStayInSourcePanels() {
     const auto lowChord = makeChart(7,
                                     {
@@ -3088,6 +3132,58 @@ void testLongSourceJackStaysSingleLanePlayable() {
     require(result.report.quality.brokenJacks == 0, "long source jack should not be reported broken");
 }
 
+void testChordEmbeddedLongSourceJackStaysSingleLanePlayable() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                     {2500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2500, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {3000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {3000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {3500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {3500, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.jackPreservePolicy = keyconv::JackPreservePolicy::PreservePlayable;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+
+    const std::set<std::string> jackIds{"n0", "n2", "n4", "n6", "n8", "n10"};
+    std::optional<int> jackLane;
+    int jackNotes = 0;
+    for (const auto& note : result.chart.notes) {
+        if (jackIds.count(note.id) == 0) {
+            continue;
+        }
+        if (!jackLane.has_value()) {
+            jackLane = note.lane;
+        }
+        require(note.lane == *jackLane,
+                "chord-embedded long source jack should stay on one lane in playable conversion");
+        ++jackNotes;
+    }
+    require(jackNotes == 6, "chord-embedded long jack test should inspect all repeated source notes");
+    require(result.report.quality.sourceJackGroups == 1,
+            "chord-embedded repeated source lane should be one source jack group");
+    require(result.report.quality.preservedJackGroups == 1,
+            "chord-embedded long source jack should report as preserved");
+    require(result.report.quality.detectedJacks >= 1,
+            "gesture rail should detect source-lane jack groups even when each repeat is inside a chord");
+    require(result.report.quality.brokenJacks == 0,
+            "chord-embedded long source jack should not be reported broken");
+}
+
 void testEvenKeyFastThirtySecondStairSuppressesAdditions() {
     auto chart = makeChart(4,
                            {
@@ -3326,6 +3422,9 @@ int main() {
         {"7K to 10K source anchors beat left-edge balance",
          testSevenToTenSourceAnchorsTakePriorityOverLeftEdgeBalance},
         {"7K to 10K sparse source-lane anchor", testSevenToTenSparseSourceLaneAnchor},
+        {"10K non-jack source-lane anchor relaxes inside panel",
+         testTenKeyNonJackSourceLaneAnchorRelaxesInsidePanel},
+        {"8K playable candidate radius remains stable", testEightKeyPlayableCandidateRadiusRemainsStable},
         {"7K to 10K non-gesture chords stay in source panels",
          testSevenToTenNonGestureChordsStayInSourcePanels},
         {"7K to 10K tap-plus hand-zone balance", testSevenToTenTapPlusHandZoneBalance},
@@ -3409,6 +3508,8 @@ int main() {
         {"high-key tap-plus prefers eighth-beat additions", testHighKeyTapPlusPrefersEighthBeatAdditions},
         {"high-key extreme trill avoids both outer edges", testHighKeyExtremeTrillAvoidsBothOuterEdges},
         {"long source jack stays single lane playable", testLongSourceJackStaysSingleLanePlayable},
+        {"chord-embedded long source jack stays single lane playable",
+         testChordEmbeddedLongSourceJackStaysSingleLanePlayable},
         {"even-key fast 32nd stair suppresses additions", testEvenKeyFastThirtySecondStairSuppressesAdditions},
         {"even-key left-only additions stay left hand", testEvenKeyLeftOnlyAdditionsStayLeftHand},
         {"stream superrandom relanes every note", testStreamSuperRandomRelanesEveryNote},

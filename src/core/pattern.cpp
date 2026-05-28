@@ -62,8 +62,10 @@ std::string toString(PatternKind kind) {
     return "single";
 }
 
-std::vector<PatternToken> detectPatternTokens(const std::vector<TimeSlice>& slices) {
+std::vector<PatternToken> detectPatternTokens(const std::vector<TimeSlice>& slices,
+                                              int jackWindowMs) {
     std::vector<PatternToken> tokens;
+    const int jackWindow = std::max(1, jackWindowMs);
 
     for (const auto& slice : slices) {
         if (slice.chordSize >= 2) {
@@ -86,7 +88,8 @@ std::vector<PatternToken> detectPatternTokens(const std::vector<TimeSlice>& slic
         }
 
         std::size_t j = i + 1;
-        while (j < slices.size() && singleLane(slices[j]) == lane && closeEnough(slices[j - 1], slices[j], 220)) {
+        while (j < slices.size() && singleLane(slices[j]) == lane &&
+               closeEnough(slices[j - 1], slices[j], jackWindow)) {
             ++j;
         }
 
@@ -186,4 +189,3 @@ std::vector<PatternToken> detectPatternTokens(const std::vector<TimeSlice>& slic
 }
 
 }  // namespace keyconv
-

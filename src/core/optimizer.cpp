@@ -111,11 +111,12 @@ int localRepairAssignments(std::vector<Note>& notes,
 OptimizationResult greedyOptimizeSlices(const Chart& chart, const ConvertOptions& options) {
     OptimizationResult result;
     const auto slices = buildTimeSlices(chart, options.sourceKeyCount, options.sameTimeEpsilonMs);
-    result.patterns = detectPatternTokens(slices);
+    result.patterns = detectPatternTokens(slices, options.jackWindowMs);
     const auto gestureRail = buildGestureRail(chart,
                                               options.sourceKeyCount,
                                               options.targetKeyCount,
                                               options.sameTimeEpsilonMs,
+                                              options.jackWindowMs,
                                               options.gestureRailEnabled);
 
     AssignmentContext context;

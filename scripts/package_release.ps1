@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.7",
+    [string]$Version = "0.5.8",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -123,8 +123,8 @@ The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family out
 Gesture Rail is on by default; use --gesture-rail off to compare older lane scoring.
 Preserve Tap Plus uses key-growth budgets and 10K hand-zone balancing.
 With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mid/high/chordHeavy/jackRisk windows for Composer pressure.
-Use --expansion-policy auto-low for conservative high-key generation capped at 12.5%.
-Use --expansion-policy auto-more for the larger high-key preserve-tap-plus growth budget.
+Use --expansion-policy auto-low/auto-normal/auto-more for high-key generated-note budgets of 10%/15%/20%.
+8K+ generated notes prefer 8th-beat source slices, avoid both-edge trill reinforcement, and favor mirror-lane symmetry.
 Use --preserve-convert for faithful mapping, strict source-jack preservation, no generated notes, and adjacent safe-lane drift.
 Use --stream-transform superrandom for deterministic per-note random lane assignment, or full-jitter for 1-15 ms per-note zure-style timing spread.
 Use --seed to vary deterministic stream-transform output.

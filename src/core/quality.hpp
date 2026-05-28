@@ -8,7 +8,8 @@ namespace keyconv {
 QualityReport computeQualityReport(const Chart& original,
                                    const Chart& converted,
                                    int sourceKeyCount,
-                                   int targetKeyCount);
+                                   int targetKeyCount,
+                                   int jackWindowMs = 500);
 
 TargetKProfile targetKProfileFor(int sourceKeyCount, int targetKeyCount);
 

@@ -61,16 +61,17 @@ double scoreBand(double value, double low, double ideal, double high) {
     return 0.0;
 }
 
-double jackRate(const std::vector<Note>& notes) {
+double jackRate(const std::vector<Note>& notes, int jackWindowMs) {
+    const int window = std::max(0, jackWindowMs);
     const auto sorted = sortedNotes(notes);
-    if (sorted.size() < 2) {
+    if (window <= 0 || sorted.size() < 2) {
         return 0.0;
     }
     int jackCount = 0;
     int eligible = 0;
     for (std::size_t i = 1; i < sorted.size(); ++i) {
         const int dt = sorted[i].time - sorted[i - 1].time;
-        if (dt > 0 && dt <= 180) {
+        if (dt > 0 && dt <= window) {
             ++eligible;
             if (sorted[i].lane == sorted[i - 1].lane) {
                 ++jackCount;
@@ -537,14 +538,15 @@ TargetKProfile targetKProfileFor(int sourceKeyCount, int targetKeyCount) {
 QualityReport computeQualityReport(const Chart& original,
                                    const Chart& converted,
                                    int sourceKeyCount,
-                                   int targetKeyCount) {
+                                   int targetKeyCount,
+                                   int jackWindowMs) {
     QualityReport report;
     const auto scan = detectCollisions(converted.notes);
     report.collisionCount = scan.sameTimeCollisions;
     report.lnConflictCount = scan.longNoteConflicts;
     const auto originalDistribution = calculateLaneDistribution(original.notes, sourceKeyCount);
-    report.jackRateBefore = jackRate(original.notes);
-    report.jackRateAfter = jackRate(converted.notes);
+    report.jackRateBefore = jackRate(original.notes, jackWindowMs);
+    report.jackRateAfter = jackRate(converted.notes, jackWindowMs);
     report.densityDelta = noteDensity(converted.notes) - noteDensity(original.notes);
     report.chordRateBefore = chordRate(original.notes);
     report.chordRateAfter = chordRate(converted.notes);
@@ -564,7 +566,7 @@ QualityReport computeQualityReport(const Chart& original,
     report.orderPreserveScore = orderScore(original, converted);
     report.spanPreserveScore = spanScore(original, converted, sourceKeyCount, targetKeyCount);
     report.patternPreserveScore = (report.orderPreserveScore + report.spanPreserveScore) / 2.0;
-    const auto jackValidation = validateJackPreservation(original, converted, 180, 2);
+    const auto jackValidation = validateJackPreservation(original, converted, jackWindowMs, 2);
     report.sourceJackGroups = jackValidation.sourceJackGroups;
     report.preservedJackGroups = jackValidation.preservedJackGroups;
     report.splitJackGroups = jackValidation.splitJackGroups;

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.8
+
+- Changed high-key generated-note presets to `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%.
+- Tuned 8K+ generated-note placement to prefer 8th-beat source slices, use 16th-beat slices as lower-priority fallbacks, reduce outer-lane additions, and favor whole-target mirror-lane symmetry.
+- Added even-key generation guards: 32nd-or-faster stair slices suppress generated notes, and one-hand source slices keep generated notes inside the matching target hand.
+- Raised default jack/repeat detection to 500 ms and made long source jack phrases stay on one target lane.
+- Limited generated tap-plus LNs to the local 16th-to-8th duration window; longer LN anchors now produce tap additions instead of long generated holds where possible.
+
 ## 0.5.7
 
 - Added Preserve Convert lane drift: strict source-jack/no-generated-note conversion can now move non-jack phrases through adjacent safe lanes instead of staying locked to one fixed skeleton.

@@ -48,7 +48,12 @@ void addGestureCandidates(LaneCandidateSet& set, const GestureHint* hint, int ta
         std::swap(set.preferredZoneStart, set.preferredZoneEnd);
     }
     addUnique(set.candidates, clampInt(hint->preferredLane, 0, targetKeyCount - 1));
-    if (hint->kind == PatternKind::Trill || hint->kind == PatternKind::Jack) {
+    if (hint->kind == PatternKind::Jack && hint->motifHitCount >= 5) {
+        set.preferredZoneStart = clampInt(hint->preferredLane, 0, targetKeyCount - 1);
+        set.preferredZoneEnd = set.preferredZoneStart;
+        set.candidates.clear();
+        addUnique(set.candidates, set.preferredZoneStart);
+    } else if (hint->kind == PatternKind::Trill || hint->kind == PatternKind::Jack) {
         for (int lane = hint->zoneStart; lane <= hint->zoneEnd; ++lane) {
             addUnique(set.candidates, clampInt(lane, 0, targetKeyCount - 1));
         }
@@ -194,8 +199,22 @@ bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
     return sourceKeyCount == 7 && targetKeyCount == 10;
 }
 
+bool useEvenHandSplit(int sourceKeyCount, int targetKeyCount) {
+    return sourceKeyCount >= 2 && targetKeyCount >= 2 &&
+           sourceKeyCount % 2 == 0 && targetKeyCount % 2 == 0;
+}
+
 std::pair<int, int> dualFiveZoneForSource(int sourceLane) {
     return sourceLane <= 3 ? std::pair<int, int>{0, 4} : std::pair<int, int>{5, 9};
+}
+
+std::pair<int, int> evenHandZoneForSource(int sourceLane, int sourceKeyCount, int targetKeyCount) {
+    const int sourceMid = std::max(1, sourceKeyCount / 2);
+    const int targetMid = std::max(1, targetKeyCount / 2);
+    if (sourceLane < sourceMid) {
+        return {0, targetMid - 1};
+    }
+    return {targetMid, targetKeyCount - 1};
 }
 
 int dualFiveBaseLaneForSource(int sourceLane, int targetKeyCount) {
@@ -216,6 +235,9 @@ std::pair<int, int> balanceZoneForSource(int sourceLane, int sourceKeyCount, int
     }
     if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
         return dualFiveZoneForSource(sourceLane);
+    }
+    if (useEvenHandSplit(sourceKeyCount, targetKeyCount)) {
+        return evenHandZoneForSource(sourceLane, sourceKeyCount, targetKeyCount);
     }
     if (sourceKeyCount <= 1) {
         return {0, targetKeyCount - 1};
@@ -362,6 +384,12 @@ bool roleHasHandVoice(PhraseRole role) {
     return role == PhraseRole::LeftHandVoice || role == PhraseRole::RightHandVoice;
 }
 
+bool bothOuterEdges(int lhs, int rhs, int targetKeyCount) {
+    return targetKeyCount >= 8 &&
+           ((lhs == 0 && rhs == targetKeyCount - 1) ||
+            (rhs == 0 && lhs == targetKeyCount - 1));
+}
+
 int expectedRoleHand(PhraseRole role) {
     return role == PhraseRole::RightHandVoice ? 1 : 0;
 }
@@ -505,6 +533,9 @@ double gestureScore(const Note& source,
             }
         }
     } else if (hint->kind == PatternKind::Trill) {
+        if (bothOuterEdges(previous->lane, targetLane, context.targetKeyCount)) {
+            score -= context.weights.gesture * 3.0;
+        }
         if (sourceSign != 0) {
             score += targetLane != previous->lane ? context.weights.gesture : -context.weights.gesture * 1.5;
         } else {
@@ -516,8 +547,12 @@ double gestureScore(const Note& source,
         }
     } else if (hint->kind == PatternKind::Jack) {
         const int laneDelta = std::abs(targetLane - previous->lane);
+        const bool longJack = hint->motifHitCount >= 5;
         if (context.style == ConversionStyle::Faithful) {
             score += laneDelta == 0 ? context.weights.gesture : -context.weights.gesture * 0.5;
+        } else if (longJack) {
+            score += laneDelta == 0 ? context.weights.gesture * 2.5
+                                    : -context.weights.gesture * (laneDelta == 1 ? 1.0 : 3.0);
         } else if (laneDelta == 1) {
             score += context.weights.gesture * 1.25;
         } else if (laneDelta == 0) {
@@ -650,6 +685,11 @@ LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK
                        : mapLaneDirect(sourceLane, sourceK, targetK);
     if (useDualFiveSplit(sourceK, targetK)) {
         const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
+        set.hasPreferredZone = true;
+        set.preferredZoneStart = zoneStart;
+        set.preferredZoneEnd = zoneEnd;
+    } else if (useEvenHandSplit(sourceK, targetK)) {
+        const auto [zoneStart, zoneEnd] = evenHandZoneForSource(sourceLane, sourceK, targetK);
         set.hasPreferredZone = true;
         set.preferredZoneStart = zoneStart;
         set.preferredZoneEnd = zoneEnd;
@@ -806,25 +846,31 @@ double scoreAssignment(const TimeSlice& slice,
         }
 
         const int jackWindowMs = std::max(0, context.jackWindowMs);
-        jackPenalty += recentJackPenalty(context.placed, source.time, targetLane, jackWindowMs);
+        if (!sourceJackLike) {
+            jackPenalty += recentJackPenalty(context.placed, source.time, targetLane, jackWindowMs);
+        }
         score -= unwantedCreatedJackPenalty(context.placed, sourceLane, source.time, targetLane, jackWindowMs) * 80.0;
         if (const auto sourceRepeat = recentSameSourceLane(context.placed, sourceLane, source.time, jackWindowMs);
             sourceRepeat.has_value()) {
             if (context.style == ConversionStyle::Faithful) {
                 score += context.weights.shape * (targetLane == sourceRepeat->lane ? 3.0 : -3.0);
             } else if (context.style == ConversionStyle::Playable || context.style == ConversionStyle::Training) {
-                const auto recentRepeatLanes =
-                    recentSameSourceTargetLanes(context.placed, sourceLane, source.time, jackWindowMs * 2);
-                if (recentRepeatLanes.size() >= 2 && recentRepeatLanes.count(targetLane) == 0) {
-                    score -= context.weights.shape * 3.0;
-                }
-                const int laneDelta = std::abs(targetLane - sourceRepeat->lane);
-                if (laneDelta == 0) {
-                    score += context.weights.shape * 0.75;
-                } else if (laneDelta == 1) {
-                    score += context.weights.shape * 0.50;
+                if (sourceJackLike && hint != nullptr && hint->motifHitCount >= 5) {
+                    score += context.weights.shape * (targetLane == sourceRepeat->lane ? 4.5 : -4.5);
                 } else {
-                    score -= context.weights.shape;
+                    const auto recentRepeatLanes =
+                        recentSameSourceTargetLanes(context.placed, sourceLane, source.time, jackWindowMs * 2);
+                    if (recentRepeatLanes.size() >= 2 && recentRepeatLanes.count(targetLane) == 0) {
+                        score -= context.weights.shape * 3.0;
+                    }
+                    const int laneDelta = std::abs(targetLane - sourceRepeat->lane);
+                    if (laneDelta == 0) {
+                        score += context.weights.shape * 0.75;
+                    } else if (laneDelta == 1) {
+                        score += context.weights.shape * 0.50;
+                    } else {
+                        score -= context.weights.shape;
+                    }
                 }
             }
         }

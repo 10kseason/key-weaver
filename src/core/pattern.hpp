@@ -33,7 +33,7 @@ struct PatternToken {
 };
 
 std::string toString(PatternKind kind);
-std::vector<PatternToken> detectPatternTokens(const std::vector<TimeSlice>& slices);
+std::vector<PatternToken> detectPatternTokens(const std::vector<TimeSlice>& slices,
+                                              int jackWindowMs = 500);
 
 }  // namespace keyconv
-

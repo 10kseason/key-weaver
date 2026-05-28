@@ -1,4 +1,4 @@
-# KeyWeaver v0.5.7
+# KeyWeaver v0.5.8
 
 C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
@@ -28,9 +28,10 @@ Current scope:
 - v0.5.1 GUI output/report defaults beside the selected input `.osu`
 - v0.5.5 drag-and-drop GUI loading plus batch conversion: dropped files use the GUI Target field, and blank Output writes each chart beside its original file
 - v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
-- v0.5.6 `auto-low` expansion for conservative high-key conversion capped at 12.5% generated notes
+- v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
-- v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus `auto-more` expansion and deterministic stream transforms (`superrandom`, `full-jitter`)
+- v0.5.8 high-key generated-note presets use 10%/15%/20% low/normal/more budgets, 8K+ additions prefer 8th-beat slices with 16th-beat fallback, suppress additions on 32nd-or-faster even-key stairs, reduce outer-lane fill pressure, preserve long source jacks on one lane, and limit generated LNs to 8th-to-16th durations
+- v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus deterministic stream transforms (`superrandom`, `full-jitter`)
 - v0.5.2 Preserve Tap Plus policy with key-growth budgets, hand-zone balance, and LN-heavy window additions
 - v0.5.1 no-created-jack invariant across assignment, repair, expansion, and final sanitization
 - v0.5.1 auto expansion default: preserve on same/lower key counts, preserve-tap-plus on higher key counts
@@ -67,10 +68,10 @@ cmake --build build --target keyconv_gui
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.5.7
+.\scripts\package_release.ps1 -Version 0.5.8
 ```
 
-The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.5.7-win64-<timestamp>.zip` plus a `.sha256` file.
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.5.8-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -120,8 +121,8 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --min-gap <ms>          minimum positive object distance, default 16
   --same-lane-min-gap <ms> minimum positive same-lane distance, default 20
   --jack-preserve-policy <p> preserve-strict | preserve-playable | avoid-new-jacks | smooth-all
-  --jack-window-ms <ms>   repeat/jack detection window, default 180
-  --strict-jack-window-ms <ms> strict jack reference window, default 120
+  --jack-window-ms <ms>   repeat/jack detection window, default 500
+  --strict-jack-window-ms <ms> strict jack reference window, default 500
   --max-jack-split-lanes <n> max lanes counted as a preserved split jack, default 2
   --gesture-rail <on|off> preserve detected stair/trill/jack gesture rails, default on
   --snap-roll             snap rolled notes to timing grid, default
@@ -243,18 +244,18 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. When multiple files are dropped, Output is blank by default and each chart writes beside its own source file; set Output to force every batch item into one folder.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
-- If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. Use `--expansion-policy auto-more` for the larger 45% high-key growth budget, `--expansion-policy auto-low` for the conservative 12.5% cap, or explicit `--expansion-policy preserve` to disable deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
-- `--expansion-policy preserve-tap-plus` preserves original taps/LNs and adds deterministic notes. On high-key 8K/10K conversion its default global budget scales with key growth from 18.75% up to 37.5% of source objects, so 7K-to-10K targets at most about 1.375x total note count before safety rejects. With `--target-profile`, adaptive growth budgeting redistributes that cap per 500-4000 ms profile window: low-density/under-expanded windows can spend more, while dense, chord-heavy, or LN-heavy windows spend less.
+- If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. High-key auto presets target generated-note budgets of `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%; explicit `--expansion-policy preserve` disables deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
+- `--expansion-policy preserve-tap-plus` preserves original taps/LNs and adds deterministic notes. On 8K+ high-key conversion, generated notes prefer source slices that land on the 8th-note beat grid, use 16th-beat slices as the lower-priority fallback, avoid making both outermost lanes into the alternating trill pair, and bias additions toward whole-target mirror-lane symmetry. With `--target-profile`, adaptive growth budgeting redistributes the global cap per 500-4000 ms profile window: low-density/under-expanded windows can spend more, while dense, chord-heavy, or LN-heavy windows spend less.
 - `--preserve-convert` is the strict preservation preset: faithful lane mapping, source-jack strict reporting, no playable jack split accounting, and `preserve` expansion. It now enables safe adjacent-lane drift for non-jack phrases so the output is not locked to one fixed lane skeleton. Use `--no-preserve-lane-drift` to restore the older fixed feel.
-- Tap-plus scans 2000 ms local windows. Tap-heavy slices still add taps, while LN-heavy windows only add holds on slices that already contain a source LN. Source taps are never converted into LNs, and generated holds stay near a same-time LN anchor with collision, LN-conflict, and no-created-jack guards still taking priority.
-- Higher-key `preserve-tap-plus` also balances target hand zones. For 10K, lanes 0-4 are treated as left hand and lanes 5-9 as right hand; reports include `leftHandNotes`, `rightHandNotes`, and `handBalanceRatio`.
-- Generated LNs are normalized to the nearest same-time adjacent LN duration so duplicated or tap-plus long notes keep matching lengths.
+- Tap-plus scans 2000 ms local windows. Tap-heavy slices still add taps, while LN-heavy windows only add holds on slices that already contain a source LN and whose anchor duration falls between the local 16th-note and 8th-note duration. Longer LN anchors are treated as tap-addition anchors instead of cloning long generated holds. Source taps are never converted into LNs, and generated holds stay near a same-time LN anchor with collision, LN-conflict, and no-created-jack guards still taking priority.
+- Higher-key `preserve-tap-plus` also balances target hand zones. For even-key to even-key conversion, one-hand source slices keep generated additions inside the matching target hand; when the source slice uses both hands, the full target lane range can be used. For 10K, lanes 0-4 are treated as left hand and lanes 5-9 as right hand; reports include `leftHandNotes`, `rightHandNotes`, and `handBalanceRatio`.
+- Generated LNs are normalized only to same-time adjacent LN durations that still fit the 8th-to-16th generation window; generated long-hold clones are converted back to taps.
 - Gesture Rail is enabled by default and biases greedy assignment toward phrase-level source intent: ascending/descending stairs stay monotonic, two-lane trills stay centered on two nearby lanes, and source jacks stay same-lane or adjacent-safe. Collision, LN conflict, distance, and no-created-jack safety checks still take priority. Use `--gesture-rail off` to compare against the older lane scoring. Check `detectedStairs`, `preservedStairs`, `brokenStairs`, `detectedTrills`, `preservedTrills`, `brokenTrills`, `detectedJacks`, `preservedJacks`, `brokenJacks`, `handZoneBreaks`, `motifDirectionFlips`, `motifLaneScatterCount`, `gesturePreservationScore`, and `gestureRailEnabled` in the JSON report.
 - 7K-to-10K playable mapping uses a dual-5K split rail: lower phrases are recomposed inside lanes 0-4 and upper phrases inside lanes 5-9, so target patterns behave more like two 5K panels than one stretched 7K layout.
 - The same source-panel guard applies outside detected motifs too: ordinary 7K low-register notes prefer lanes 0-4 and high-register notes prefer lanes 5-9 before lane-balance scoring can spread them across the center split. If every in-panel candidate is blocked by collision, LN conflict, or no-created-jack safety, assignment may still use an out-of-panel fallback.
 - The 7K-to-10K dual-5K rail also tags detected motifs as left-hand or right-hand voices. Within those motifs, assignment prefers compact same-panel motion unless the source gesture itself requires a larger move, which makes phrase ownership more stable and less like a stretched 7K lane scale.
 - Source-lane anchoring is part of playable assignment for higher-key output: once a source lane has established a recent target lane inside a phrase, later sparse notes from that same source lane prefer that target lane over lane-balance spreading. This keeps same-source-lane instrument feel stable unless collision, LN conflict, no-created-jack, or explicit gesture logic requires another lane.
-- Repeat-aware jack handling is enabled by default: source jack groups are reported, source jacks may be preserved or split by policy, source-different target repeats are hard-rejected during assignment/repair when an alternative exists, added-note candidates that would create no-source unwanted jacks are rejected, and final sanitization relanes or drops generated offenders before reporting unresolved pairs. Check `sourceJackGroups`, `preservedJackGroups`, `splitJackGroups`, `createdJacks`, `preventedJacks`, `createdJacksFromBaseMapping`, `createdJacksFromAddedNotes`, `preventedJacksByAssignment`, `preventedJacksByRepair`, `preventedJacksByExpansion`, `sanitizedCreatedJacks`, `unsolvedCreatedJacks`, `jackPreserveScore`, and `createdJackRate`.
+- Repeat-aware jack handling is enabled by default with a 500 ms repeat window: source jack groups are reported, source jacks may be preserved or split by policy, long source jack phrases are kept on one target lane, source-different target repeats are hard-rejected during assignment/repair when an alternative exists, added-note candidates that would create no-source unwanted jacks are rejected, and final sanitization relanes or drops generated offenders before reporting unresolved pairs. Check `sourceJackGroups`, `preservedJackGroups`, `splitJackGroups`, `createdJacks`, `preventedJacks`, `createdJacksFromBaseMapping`, `createdJacksFromAddedNotes`, `preventedJacksByAssignment`, `preventedJacksByRepair`, `preventedJacksByExpansion`, `sanitizedCreatedJacks`, `unsolvedCreatedJacks`, `jackPreserveScore`, and `createdJackRate`.
 - Expansion Composer applies explicit expansion policies in deterministic order with profile budget caps; check `expansionComposerProfile`, `targetAddedNoteRatio`, `budgetUsedRatio`, `adaptiveGrowthBudgetEnabled`, `adaptiveBudgetAverageRatio`, `adaptiveBudgetMinRatio`, `adaptiveBudgetMaxRatio`, `acceptedByComposer`, `rejectedByComposerBudget`, `rejectedByAdaptiveBudget`, and `rejectedByComposerSafety`.
 - Playtest Calibration comparison mode does not write converted `.osu` files; it compares policy reports only and keeps core conversion defaults unchanged.
 - The GUI playtest tool is a Windows harness around `KeyWeaver.exe`; it is not a realtime renderer, editor, audio player, BMS frontend, DP splitter, or beam-search UI.

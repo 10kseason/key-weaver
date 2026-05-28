@@ -26,8 +26,8 @@ struct ConvertOptions {
     int sameTimeEpsilonMs = 2;
     int minObjectGapMs = 16;
     int sameLaneMinGapMs = 20;
-    int jackWindowMs = 180;
-    int strictJackWindowMs = 120;
+    int jackWindowMs = 500;
+    int strictJackWindowMs = 500;
     bool allowPlayableJackSplit = true;
     int maxJackSplitLanes = 2;
     bool snapRolledNotes = true;

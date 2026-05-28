@@ -41,7 +41,7 @@ struct AssignmentContext {
     std::vector<int> laneUse;
     int sourceKeyCount = 0;
     int targetKeyCount = 0;
-    int jackWindowMs = 180;
+    int jackWindowMs = 500;
     ConversionStyle style = ConversionStyle::Playable;
     PpgWeights weights;
     bool preserveLaneDrift = false;

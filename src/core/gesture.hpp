@@ -25,6 +25,8 @@ struct GestureHint {
     int zoneStart = 0;
     int zoneEnd = 0;
     int direction = 0;
+    int motifHitCount = 0;
+    int motifDurationMs = 0;
 };
 
 struct GestureRail {
@@ -53,6 +55,7 @@ GestureRail buildGestureRail(const Chart& chart,
                              int sourceKeyCount,
                              int targetKeyCount,
                              int sameTimeEpsilonMs,
+                             int jackWindowMs,
                              bool enabled);
 
 const GestureHint* findGestureHint(const GestureRail* rail, const std::string& noteId);
@@ -62,6 +65,7 @@ GestureReport evaluateGesturePreservation(const Chart& original,
                                           int sourceKeyCount,
                                           int targetKeyCount,
                                           int sameTimeEpsilonMs,
-                                          bool gestureRailEnabled);
+                                          bool gestureRailEnabled,
+                                          int jackWindowMs = 500);
 
 }  // namespace keyconv

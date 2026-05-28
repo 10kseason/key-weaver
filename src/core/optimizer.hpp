@@ -18,7 +18,7 @@ struct OptimizationResult {
 OptimizationResult greedyOptimizeSlices(const Chart& chart, const ConvertOptions& options);
 int localRepairAssignments(std::vector<Note>& notes,
                            int targetKeyCount,
-                           int jackWindowMs = 180,
+                           int jackWindowMs = 500,
                            int* preventedJacksByRepair = nullptr);
 
 }  // namespace keyconv

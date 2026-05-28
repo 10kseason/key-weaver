@@ -1018,7 +1018,8 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     result.chart.notes = std::move(placed);
     result.chart.meta.version = convertedDifficultyName(chart.meta.version, options);
     fillReportCounts(result.report, result.chart.notes, options.targetKeyCount);
-    result.report.quality = computeQualityReport(chart, result.chart, options.sourceKeyCount, options.targetKeyCount);
+    result.report.quality =
+        computeQualityReport(chart, result.chart, options.sourceKeyCount, options.targetKeyCount, options.jackWindowMs);
     const auto finalNoOverlap = validateNoOverlap(result.chart.notes, options.targetKeyCount);
     const auto finalDistance =
         validateDistance(result.chart.notes, options, chart.timingPoints, compressionStats.rolledNoteIds);
@@ -1049,7 +1050,8 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
                                                            options.sourceKeyCount,
                                                            options.targetKeyCount,
                                                            options.sameTimeEpsilonMs,
-                                                           options.gestureRailEnabled);
+                                                           options.gestureRailEnabled,
+                                                           options.jackWindowMs);
     result.report.quality.detectedStairs = gestureReport.detectedStairs;
     result.report.quality.preservedStairs = gestureReport.preservedStairs;
     result.report.quality.brokenStairs = gestureReport.brokenStairs;

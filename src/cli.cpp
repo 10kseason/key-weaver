@@ -33,7 +33,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.5.7";
+constexpr const char* kToolVersion = "v0.5.8";
 
 #if defined(_WIN32)
 std::string utf8FromWide(std::wstring_view value) {
@@ -208,8 +208,8 @@ struct CliOptions {
     int sameTimeEpsilonMs = 2;
     int minObjectGapMs = 16;
     int sameLaneMinGapMs = 20;
-    int jackWindowMs = 180;
-    int strictJackWindowMs = 120;
+    int jackWindowMs = 500;
+    int strictJackWindowMs = 500;
     bool allowPlayableJackSplit = true;
     int maxJackSplitLanes = 2;
     bool snapRolledNotes = true;
@@ -263,8 +263,8 @@ void printHelp(std::ostream& out) {
     out << "  --min-gap <ms>          Minimum positive object distance. Default: 16.\n";
     out << "  --same-lane-min-gap <ms> Minimum positive same-lane distance. Default: 20.\n";
     out << "  --jack-preserve-policy <p> preserve-strict | preserve-playable | avoid-new-jacks | smooth-all. Default: preserve-playable.\n";
-    out << "  --jack-window-ms <ms>   Window for repeat/jack detection. Default: 180.\n";
-    out << "  --strict-jack-window-ms <ms> Strict jack reference window. Default: 120.\n";
+    out << "  --jack-window-ms <ms>   Window for repeat/jack detection. Default: 500.\n";
+    out << "  --strict-jack-window-ms <ms> Strict jack reference window. Default: 500.\n";
     out << "  --max-jack-split-lanes <n> Max target lanes counted as split jack. Default: 2.\n";
     out << "  --no-playable-jack-split Disallow playable jack split accounting.\n";
     out << "  --gesture-rail <on|off> Preserve detected stair/trill/jack gesture rails. Default: on.\n";
@@ -274,8 +274,7 @@ void printHelp(std::ostream& out) {
     out << "  --max-roll-ms <ms>      Maximum roll distance from original time. Default: 64.\n";
     out << "  --expansion-policy <p>  auto-more | auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random.\n";
     out << "                          Default auto-normal: preserve when target <= source, preserve-tap-plus when target > source.\n";
-    out << "                          auto-more uses the larger preserve-tap-plus growth budget for high-key conversion.\n";
-    out << "                          auto-low keeps the same preserve behavior but caps high-key generation at 12.5%.\n";
+    out << "                          high-key presets target low/normal/more added notes at 10%/15%/20%.\n";
     out << "  --max-added-ratio <n>   Max added notes as source-note ratio. Default: 0.45.\n";
     out << "  --max-added-per-slice <n> Max added notes per source slice. Default: 2.\n";
     out << "  --max-added-per-measure <n> Max added notes per approximate measure. Default: 16.\n";

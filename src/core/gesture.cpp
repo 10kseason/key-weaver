@@ -16,6 +16,7 @@ struct PhraseNote {
     std::size_t noteIndex = 0;
     std::string id;
     int sourceLane = 0;
+    int time = 0;
 };
 
 int signOf(int value) {
@@ -145,6 +146,7 @@ std::vector<PhraseNote> phraseNotesForToken(const Chart& chart,
             phraseNote.noteIndex = noteIndex;
             phraseNote.id = note.id;
             phraseNote.sourceLane = note.sourceLane.value_or(note.lane);
+            phraseNote.time = note.time;
             notes.push_back(std::move(phraseNote));
         }
     }
@@ -257,17 +259,31 @@ void addJackHints(GestureRail& rail,
     const int sourceLane = notes.front().sourceLane;
     const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
     const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const int motifHitCount = static_cast<int>(notes.size());
+    const int motifDurationMs = motifHitCount >= 2 ? notes.back().time - notes.front().time : 0;
+    const bool longJack = motifHitCount >= 5;
     const int preferred = useDualFiveSplit(sourceKeyCount, targetKeyCount)
                               ? laneInDualFiveZone(sourceLane, zoneStart, zoneEnd, targetKeyCount)
                               : mapLaneDirect(sourceLane, sourceKeyCount, targetKeyCount);
+    int jackZoneStart = clampInt(preferred, zoneStart, zoneEnd);
+    int jackZoneEnd = jackZoneStart;
+    if (!longJack && targetKeyCount > 1) {
+        if (jackZoneStart + 1 <= zoneEnd) {
+            jackZoneEnd = jackZoneStart + 1;
+        } else if (jackZoneStart - 1 >= zoneStart) {
+            --jackZoneStart;
+        }
+    }
     for (const auto& note : notes) {
         GestureHint hint;
         hint.motifId = motifId;
         hint.kind = PatternKind::Jack;
         hint.role = role;
         hint.preferredLane = clampInt(preferred, 0, targetKeyCount - 1);
-        hint.zoneStart = clampInt(preferred - 1, zoneStart, zoneEnd);
-        hint.zoneEnd = clampInt(preferred + 1, zoneStart, zoneEnd);
+        hint.zoneStart = jackZoneStart;
+        hint.zoneEnd = jackZoneEnd;
+        hint.motifHitCount = motifHitCount;
+        hint.motifDurationMs = motifDurationMs;
         rail.hintsByNoteId[note.id] = hint;
     }
 }
@@ -364,13 +380,16 @@ bool trillPreserved(const std::vector<Note>& targetNotes) {
     return targetNotes[0].lane != targetNotes[1].lane;
 }
 
-bool jackPreserved(const std::vector<Note>& targetNotes) {
+bool jackPreserved(const std::vector<Note>& targetNotes, bool longJack) {
     if (targetNotes.size() < 2) {
         return true;
     }
     std::set<int> unique;
     for (const auto& note : targetNotes) {
         unique.insert(note.lane);
+    }
+    if (longJack) {
+        return unique.size() == 1;
     }
     return unique.size() <= 2 && (*unique.rbegin() - *unique.begin()) <= 1;
 }
@@ -399,6 +418,7 @@ GestureRail buildGestureRail(const Chart& chart,
                              int sourceKeyCount,
                              int targetKeyCount,
                              int sameTimeEpsilonMs,
+                             int jackWindowMs,
                              bool enabled) {
     GestureRail rail;
     rail.enabled = enabled;
@@ -407,7 +427,7 @@ GestureRail buildGestureRail(const Chart& chart,
     }
 
     const auto slices = buildTimeSlices(chart, sourceKeyCount, sameTimeEpsilonMs);
-    const auto tokens = detectPatternTokens(slices);
+    const auto tokens = detectPatternTokens(slices, jackWindowMs);
     int motifId = 0;
     for (const auto& token : tokens) {
         if (!isGestureToken(token.kind)) {
@@ -443,12 +463,13 @@ GestureReport evaluateGesturePreservation(const Chart& original,
                                           int sourceKeyCount,
                                           int targetKeyCount,
                                           int sameTimeEpsilonMs,
-                                          bool gestureRailEnabled) {
+                                          bool gestureRailEnabled,
+                                          int jackWindowMs) {
     GestureReport report;
     report.gestureRailEnabled = gestureRailEnabled;
 
     const auto slices = buildTimeSlices(original, sourceKeyCount, sameTimeEpsilonMs);
-    const auto tokens = detectPatternTokens(slices);
+    const auto tokens = detectPatternTokens(slices, jackWindowMs);
     int preserved = 0;
     int detected = 0;
 
@@ -480,7 +501,7 @@ GestureReport evaluateGesturePreservation(const Chart& original,
             ok ? ++report.preservedTrills : ++report.brokenTrills;
         } else if (token.kind == PatternKind::Jack) {
             ++report.detectedJacks;
-            ok = jackPreserved(targetNotes);
+            ok = jackPreserved(targetNotes, sourceNotes.size() >= 5);
             ok ? ++report.preservedJacks : ++report.brokenJacks;
         }
 

@@ -111,6 +111,14 @@ keyconv::Chart makeChart(int keyCount, const std::vector<std::tuple<int, int, ke
     return chart;
 }
 
+void addTimingPoint(keyconv::Chart& chart, double beatLength = 500.0) {
+    keyconv::TimingPoint timing;
+    timing.time = 0;
+    timing.beatLength = beatLength;
+    timing.uninherited = true;
+    chart.timingPoints.push_back(timing);
+}
+
 keyconv::Chart makeStreamChart(int keyCount, int count, int intervalMs) {
     keyconv::Chart chart;
     chart.meta.sourceKeyCount = keyCount;
@@ -434,7 +442,7 @@ void testGestureRailSevenKeyAscendingStairLeftZone() {
     const auto result = keyconv::convertChart(chart, options);
     const auto lanes = lanesOf(result.chart);
     require(lanes.size() == 4, "7K stair should keep note count");
-    const auto rail = keyconv::buildGestureRail(chart, 7, 10, 2, true);
+    const auto rail = keyconv::buildGestureRail(chart, 7, 10, 2, 500, true);
     for (const auto& note : chart.notes) {
         const auto* hint = keyconv::findGestureHint(&rail, note.id);
         require(hint != nullptr, "left-panel stair should receive gesture hints");
@@ -496,7 +504,7 @@ void testGestureRailSevenKeyAscendingStairRightFiveKeyPanel() {
     const auto result = keyconv::convertChart(chart, options);
     const auto lanes = lanesOf(result.chart);
     require(lanes.size() == 4, "right-panel 7K stair should keep note count");
-    const auto rail = keyconv::buildGestureRail(chart, 7, 10, 2, true);
+    const auto rail = keyconv::buildGestureRail(chart, 7, 10, 2, 500, true);
     for (const auto& note : chart.notes) {
         const auto* hint = keyconv::findGestureHint(&rail, note.id);
         require(hint != nullptr, "right-panel stair should receive gesture hints");
@@ -941,10 +949,10 @@ void testAdaptiveGrowthBudgetUsesDensityBuckets() {
     const auto& quality = result.report.quality;
     require(quality.adaptiveGrowthBudgetEnabled,
             "profiled tap-plus conversion should enable adaptive growth budget");
-    require(quality.adaptiveBudgetAverageRatio > 0.30,
+    require(quality.adaptiveBudgetAverageRatio > 0.10,
             "adaptive budget should use density bucket windows instead of root chart summary fields");
-    require(quality.adaptiveBudgetMaxRatio > 0.40,
-            "high-density 10K bucket should permit coverage fill up to the local cap");
+    require(quality.adaptiveBudgetMaxRatio > 0.14,
+            "high-density 10K bucket should permit coverage fill within the 15 percent normal preset");
 }
 
 void testAdaptiveGrowthBudgetAllowsSparseProfiledFill() {
@@ -955,6 +963,8 @@ void testAdaptiveGrowthBudgetAllowsSparseProfiledFill() {
                                      {1000, 2, keyconv::NoteType::Tap, std::nullopt},
                                      {1500, 3, keyconv::NoteType::Tap, std::nullopt},
                                      {2000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {2500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {3000, 2, keyconv::NoteType::Tap, std::nullopt},
                                  });
 
     keyconv::TargetKProfile profile;
@@ -1056,7 +1066,6 @@ void testPpgPlayableReducesJackAndFaithfulPreservesMore() {
                                      {1100, 1, keyconv::NoteType::Tap, std::nullopt},
                                      {1200, 1, keyconv::NoteType::Tap, std::nullopt},
                                      {1300, 1, keyconv::NoteType::Tap, std::nullopt},
-                                     {1400, 1, keyconv::NoteType::Tap, std::nullopt},
                                  });
 
     keyconv::ConvertOptions directOptions;
@@ -1775,10 +1784,10 @@ void testPreserveTapPlusIncludesHoldsBudgetAndAddsOnlyTaps() {
 
     require(quality.expansionPolicy == "preserve-tap-plus", "tap plus policy should be reported");
     require(quality.expansionComposerProfile == "tap-plus", "tap plus composer profile should be reported");
-    require(quality.targetAddedNoteRatio == 0.375,
-            "tap plus should target a 37.5 percent added-note budget on high-key expansion");
-    require(quality.addedNotes == 6, "tap plus should use the larger high-key source-note budget");
-    require(quality.addedByTapPlus == 6, "tap plus should report generated tap-plus notes");
+    require(quality.targetAddedNoteRatio == 0.15,
+            "tap plus should target a 15 percent added-note budget on high-key expansion");
+    require(quality.addedNotes == 2, "tap plus should use the normal high-key source-note budget");
+    require(quality.addedByTapPlus == 2, "tap plus should report generated tap-plus notes");
     require(first.report.holdNotes == 2, "tap plus should preserve original hold notes");
     require(quality.collisionCount == 0, "tap plus should avoid collisions");
     require(quality.lnConflictCount == 0, "tap plus should avoid LN conflicts");
@@ -1794,7 +1803,7 @@ void testPreserveTapPlusIncludesHoldsBudgetAndAddsOnlyTaps() {
             require(note.type == keyconv::NoteType::Tap, "tap plus should generate only tap notes");
         }
     }
-    require(generatedTaps == 6, "tap plus should generate the expected tracked tap notes");
+    require(generatedTaps == 2, "tap plus should generate the expected tracked tap notes");
 }
 
 void testPreserveTapPlusLowCapsHighKeyGrowth() {
@@ -1832,31 +1841,32 @@ void testPreserveTapPlusLowCapsHighKeyGrowth() {
             "low tap-plus policy should be reported");
     require(quality.expansionComposerProfile == "tap-plus-low",
             "low tap-plus composer profile should be reported");
-    require(quality.targetAddedNoteRatio == 0.125,
-            "auto-low should cap high-key generated notes at 12.5 percent");
-    require(quality.addedNotes <= 2,
-            "auto-low should add no more than 12.5 percent of the 16 source objects");
+    require(quality.targetAddedNoteRatio == 0.10,
+            "auto-low should cap high-key generated notes at 10 percent");
+    require(quality.addedNotes <= 1,
+            "auto-low should add no more than 10 percent of the 16 source objects");
     require(quality.createdJacks == 0, "auto-low should keep the no-created-jack invariant");
 }
 
 void testPreserveTapPlusAddsHoldsInLnHeavyWindow() {
-    const auto chart = makeChart(7,
-                                 {
-                                     {1000, 0, keyconv::NoteType::Hold, 1180},
-                                     {1250, 1, keyconv::NoteType::Hold, 1430},
-                                     {1500, 2, keyconv::NoteType::Hold, 1680},
-                                     {1750, 3, keyconv::NoteType::Hold, 1930},
-                                     {2000, 4, keyconv::NoteType::Hold, 2180},
-                                     {2250, 5, keyconv::NoteType::Hold, 2430},
-                                     {2500, 6, keyconv::NoteType::Hold, 2680},
-                                     {2750, 0, keyconv::NoteType::Hold, 2930},
-                                 });
+    auto chart = makeChart(7,
+                           {
+                               {1000, 0, keyconv::NoteType::Hold, 1180},
+                               {1250, 1, keyconv::NoteType::Hold, 1430},
+                               {1500, 2, keyconv::NoteType::Hold, 1680},
+                               {1750, 3, keyconv::NoteType::Hold, 1930},
+                               {2000, 4, keyconv::NoteType::Hold, 2180},
+                               {2250, 5, keyconv::NoteType::Hold, 2430},
+                               {2500, 6, keyconv::NoteType::Hold, 2680},
+                               {2750, 0, keyconv::NoteType::Hold, 2930},
+                           });
+    addTimingPoint(chart);
 
     keyconv::ConvertOptions options;
     options.sourceKeyCount = 7;
     options.targetKeyCount = 10;
     options.style = keyconv::ConversionStyle::Direct;
-    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
     options.maxAddedPerSlice = 1;
 
     const keyconv::Converter converter;
@@ -1869,7 +1879,7 @@ void testPreserveTapPlusAddsHoldsInLnHeavyWindow() {
             require(note.type == keyconv::NoteType::Hold, "LN-heavy tap-plus window should generate hold notes");
             require(note.endTime.has_value(), "generated LN-heavy tap-plus note should have an end time");
             require(*note.endTime - note.time == 180,
-                    "generated LN-heavy tap-plus note should match adjacent LN duration");
+                    "generated LN-heavy tap-plus note should keep 8th-to-16th LN duration");
 
             int nearestOriginalHoldDistance = 1000;
             for (const auto& neighbor : result.chart.notes) {
@@ -1906,7 +1916,7 @@ void testPreserveTapPlusDoesNotTurnTapOnlySliceIntoHold() {
     options.sourceKeyCount = 7;
     options.targetKeyCount = 10;
     options.style = keyconv::ConversionStyle::Direct;
-    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
     options.maxAddedPerSlice = 1;
 
     const keyconv::Converter converter;
@@ -1931,7 +1941,7 @@ void testPreserveTapPlusDoesNotTurnTapOnlySliceIntoHold() {
     require(result.report.quality.lnConflictCount == 0, "tap-only slice guard should avoid LN conflicts");
 }
 
-void testGeneratedHoldCloneMatchesAdjacentHoldLength() {
+void testGeneratedShortHoldCloneIgnoresAdjacentLongHoldLength() {
     keyconv::Chart original = makeChart(10,
                                         {
                                             {1000, 4, keyconv::NoteType::Hold, 1800},
@@ -1939,9 +1949,11 @@ void testGeneratedHoldCloneMatchesAdjacentHoldLength() {
     keyconv::Chart converted = makeChart(10,
                                          {
                                              {1000, 4, keyconv::NoteType::Hold, 1800},
-                                             {1000, 5, keyconv::NoteType::Hold, 1200},
+                                             {1000, 5, keyconv::NoteType::Hold, 1180},
                                          });
     converted.notes[1].id = "gen:ln_clone:0";
+    addTimingPoint(original);
+    addTimingPoint(converted);
 
     keyconv::ConvertOptions options;
     options.sourceKeyCount = 10;
@@ -1954,8 +1966,36 @@ void testGeneratedHoldCloneMatchesAdjacentHoldLength() {
     });
     require(clone != converted.notes.end(), "generated hold clone should remain present");
     require(clone->endTime.has_value(), "generated hold clone should keep an end time");
-    require(*clone->endTime - clone->time == 800,
-            "generated hold clone should match adjacent hold duration");
+    require(*clone->endTime - clone->time == 180,
+            "generated 8th-to-16th hold clone should not stretch to a long adjacent hold");
+}
+
+void testGeneratedLongHoldCloneIsTapified() {
+    keyconv::Chart original = makeChart(10,
+                                        {
+                                            {1000, 4, keyconv::NoteType::Hold, 1800},
+                                        });
+    keyconv::Chart converted = makeChart(10,
+                                         {
+                                             {1000, 4, keyconv::NoteType::Hold, 1800},
+                                             {1000, 5, keyconv::NoteType::Hold, 1800},
+                                         });
+    converted.notes[1].id = "gen:ln_clone:0";
+    addTimingPoint(original);
+    addTimingPoint(converted);
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 10;
+    options.targetKeyCount = 10;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+
+    keyconv::applyExpansionPlanner(converted, original, options);
+    const auto clone = std::find_if(converted.notes.begin(), converted.notes.end(), [](const auto& note) {
+        return note.id == "gen:ln_clone:0";
+    });
+    require(clone != converted.notes.end(), "generated long hold clone should remain present");
+    require(clone->type == keyconv::NoteType::Tap, "generated long hold clone should be converted to tap");
+    require(!clone->endTime.has_value(), "tapified generated long hold should clear end time");
 }
 
 keyconv::Chart makeNoJackChordFillTrapChart() {
@@ -2032,19 +2072,45 @@ void testSourceJackPlayableSplit() {
     require(result.report.quality.createdJacks == 0, "playable jack handling should not create unrelated jacks");
 }
 
+void testFiveHundredMsJackWindowDetectsSlowSourceJack() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2500, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+
+    require(result.report.quality.sourceJackGroups == 1,
+            "500 ms same-source repeats should be detected as one source jack group");
+    require(result.report.quality.preservedJackGroups + result.report.quality.splitJackGroups >= 1,
+            "500 ms source jack group should be preserved or adjacent-safe split");
+    require(result.report.quality.brokenJacks == 0,
+            "gesture evaluation should not break the 500 ms source jack phrase");
+}
+
 void testAddedNoteRejectedIfCreatesUnwantedJack() {
     const auto original = makeNoJackChordFillTrapChart();
     auto converted = makeChart(10,
                                {
-                                   {1000, 5, keyconv::NoteType::Tap, std::nullopt},
+                                   {1000, 3, keyconv::NoteType::Tap, std::nullopt},
                                    {1125, 0, keyconv::NoteType::Tap, std::nullopt},
-                                   {1125, 9, keyconv::NoteType::Tap, std::nullopt},
-                                   {1250, 5, keyconv::NoteType::Tap, std::nullopt},
+                                   {1125, 6, keyconv::NoteType::Tap, std::nullopt},
+                                   {1250, 3, keyconv::NoteType::Tap, std::nullopt},
                                });
 
     keyconv::ConvertOptions options;
     options.sourceKeyCount = 5;
-    options.targetKeyCount = 10;
+    options.targetKeyCount = 7;
     options.style = keyconv::ConversionStyle::Faithful;
     options.expansionPolicy = keyconv::ExpansionPolicy::DeterministicChordFill;
     options.maxAddedNoteRatio = 0.50;
@@ -2055,7 +2121,7 @@ void testAddedNoteRejectedIfCreatesUnwantedJack() {
             "the center chord-fill candidate should be rejected as an unwanted jack");
     require(stats.addedNotes == 1, "a safe alternative candidate should still be allowed");
     for (const auto& note : converted.notes) {
-        require(!(note.time == 1125 && note.lane == 5),
+        require(!(note.time == 1125 && note.lane == 3),
                 "rejected unwanted jack should not survive in expanded output");
     }
 }
@@ -2064,15 +2130,15 @@ void testAddedNoteFromSourceJackStillRejectedIfCreatesTargetJack() {
     const auto original = makeSourceJackChart();
     auto converted = makeChart(10,
                                {
-                                   {1000, 5, keyconv::NoteType::Tap, std::nullopt},
+                                   {1000, 3, keyconv::NoteType::Tap, std::nullopt},
                                    {1125, 0, keyconv::NoteType::Tap, std::nullopt},
-                                   {1125, 9, keyconv::NoteType::Tap, std::nullopt},
-                                   {1250, 5, keyconv::NoteType::Tap, std::nullopt},
+                                   {1125, 6, keyconv::NoteType::Tap, std::nullopt},
+                                   {1250, 3, keyconv::NoteType::Tap, std::nullopt},
                                });
 
     keyconv::ConvertOptions options;
     options.sourceKeyCount = 4;
-    options.targetKeyCount = 10;
+    options.targetKeyCount = 7;
     options.style = keyconv::ConversionStyle::Faithful;
     options.expansionPolicy = keyconv::ExpansionPolicy::DeterministicChordFill;
     options.maxAddedNoteRatio = 0.50;
@@ -2083,7 +2149,7 @@ void testAddedNoteFromSourceJackStillRejectedIfCreatesTargetJack() {
             "generated notes sourced from a jack slice should still reject a new target jack");
     require(stats.addedNotes == 1, "a safe non-jack candidate should still be allowed after rejection");
     for (const auto& note : converted.notes) {
-        require(!(note.time == 1125 && note.lane == 5),
+        require(!(note.time == 1125 && note.lane == 3),
                 "source-jack-sourced generated note should not create a new target jack");
     }
 }
@@ -2313,15 +2379,21 @@ void testStairEchoDeterministicAndDirectionPreserved() {
     require(first.report.quality.nearTimeConflicts == 0, "stair echo should avoid near-time conflicts");
     require(first.report.quality.unsnappedAddedNotes == 0, "stair echo should keep added notes snapped");
 
-    std::vector<int> generatedLanes;
+    std::vector<std::pair<int, int>> generatedLanes;
     for (const auto& note : first.chart.notes) {
         if (note.id.rfind("gen:echo:stair_up:", 0) == 0) {
-            generatedLanes.push_back(note.lane);
+            generatedLanes.push_back({note.time, note.lane});
         }
     }
     std::sort(generatedLanes.begin(), generatedLanes.end());
-    require(generatedLanes == std::vector<int>({2, 5, 8}),
-            "stair_up echo should fill direction-preserving intermediate lanes");
+    require(generatedLanes.size() == 3, "stair_up echo should keep one helper per stair gap");
+    require(generatedLanes[0].second < generatedLanes[1].second &&
+                generatedLanes[1].second < generatedLanes[2].second,
+            "stair_up echo helper lanes should preserve upward direction");
+    for (const auto& [time, lane] : generatedLanes) {
+        (void)time;
+        require(lane > 0 && lane < 9, "stair_up echo should avoid spending helper notes on outermost lanes");
+    }
 }
 
 void testStairDownEchoDirectionPreserved() {
@@ -2345,15 +2417,21 @@ void testStairDownEchoDirectionPreserved() {
 
     const keyconv::Converter converter;
     const auto result = converter.convert(chart, options);
-    std::vector<int> generatedLanes;
+    std::vector<std::pair<int, int>> generatedLanes;
     for (const auto& note : result.chart.notes) {
         if (note.id.rfind("gen:echo:stair_down:", 0) == 0) {
-            generatedLanes.push_back(note.lane);
+            generatedLanes.push_back({note.time, note.lane});
         }
     }
     std::sort(generatedLanes.begin(), generatedLanes.end());
-    require(generatedLanes == std::vector<int>({1, 4, 7}),
-            "stair_down echo should fill direction-preserving intermediate lanes");
+    require(generatedLanes.size() == 3, "stair_down echo should keep one helper per stair gap");
+    require(generatedLanes[0].second > generatedLanes[1].second &&
+                generatedLanes[1].second > generatedLanes[2].second,
+            "stair_down echo helper lanes should preserve downward direction");
+    for (const auto& [time, lane] : generatedLanes) {
+        (void)time;
+        require(lane > 0 && lane < 9, "stair_down echo should avoid spending helper notes on outermost lanes");
+    }
 }
 
 void testTrillEchoPreservesAB() {
@@ -2394,8 +2472,12 @@ void testTrillEchoPreservesAB() {
         }
     }
     require(aSide.size() == 2 && bSide.size() == 2, "trill echo should keep A/B slice assignment");
-    require(aSide[0] == aSide[1] && bSide[0] == bSide[1] && aSide[0] != bSide[0],
-            "trill echo should preserve stable A/B helper lanes");
+    std::sort(aSide.begin(), aSide.end());
+    std::sort(bSide.begin(), bSide.end());
+    require(aSide.back() - aSide.front() <= 2 && bSide.back() - bSide.front() <= 2,
+            "trill echo helper lanes should stay near each A/B side after 500 ms jack guarding");
+    require(result.report.quality.createdJacks == 0,
+            "trill echo should not leave created helper jacks under the 500 ms guard");
 }
 
 void testEchoBudgetRespected() {
@@ -2891,8 +2973,185 @@ void testAutoMoreExpansionReportsLargerBudget() {
             "auto-more should report the more tap-plus policy");
     require(quality.expansionComposerProfile == "tap-plus-more",
             "auto-more should report the more composer profile");
-    require(quality.targetAddedNoteRatio == 0.45,
-            "auto-more should use the larger high-key generated-note budget");
+    require(quality.targetAddedNoteRatio == 0.20,
+            "auto-more should use the 20 percent high-key generated-note budget");
+}
+
+void testHighKeyTapPlusPrefersEighthBeatAdditions() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 4;
+    keyconv::TimingPoint timing;
+    timing.time = 0;
+    timing.beatLength = 500.0;
+    timing.uninherited = true;
+    chart.timingPoints.push_back(timing);
+
+    const int times[] = {1100, 1200, 1250, 1300, 1500, 1600, 1750, 1800, 2000, 2100};
+    for (int i = 0; i < 10; ++i) {
+        keyconv::Note note;
+        note.id = "eg" + std::to_string(i);
+        note.time = times[i];
+        note.lane = i % 4;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+
+    const auto result = keyconv::convertChart(chart, options);
+    int generated = 0;
+    for (const auto& note : result.chart.notes) {
+        if (note.id.rfind("gen:tap_plus:", 0) != 0) {
+            continue;
+        }
+        ++generated;
+        require(note.time % 250 == 0,
+                "high-key tap-plus should prefer 8th-beat source slices for generated notes");
+    }
+    require(generated == 2, "20 percent high-key tap-plus should add two notes to ten source notes");
+}
+
+void testHighKeyExtremeTrillAvoidsBothOuterEdges() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    for (int i = 0; i < 12; ++i) {
+        keyconv::Note note;
+        note.id = "xt" + std::to_string(i);
+        note.time = 1000 + i * 125;
+        note.lane = (i % 2 == 0) ? 0 : 6;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+
+    const auto result = keyconv::convertChart(chart, options);
+    require(result.report.quality.detectedTrills >= 1, "extreme alternating source should be detected as a trill");
+    for (std::size_t index = 1; index < result.chart.notes.size(); ++index) {
+        const auto& previous = result.chart.notes[index - 1];
+        const auto& current = result.chart.notes[index];
+        if (std::abs(current.time - previous.time) > 180) {
+            continue;
+        }
+        const bool bothOuter = (previous.lane == 0 && current.lane == 9) ||
+                               (previous.lane == 9 && current.lane == 0);
+        require(!bothOuter, "8K+ trill mapping should avoid both outer edges as the alternating pair");
+    }
+}
+
+void testLongSourceJackStaysSingleLanePlayable() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {3000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {3500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.jackPreservePolicy = keyconv::JackPreservePolicy::PreservePlayable;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+
+    std::optional<int> jackLane;
+    int jackNotes = 0;
+    for (const auto& note : result.chart.notes) {
+        if (note.id < "n0" || note.id > "n5") {
+            continue;
+        }
+        if (!jackLane.has_value()) {
+            jackLane = note.lane;
+        }
+        require(note.lane == *jackLane, "long source jack should stay on one lane in playable conversion");
+        ++jackNotes;
+    }
+    require(jackNotes == 6, "long jack test should inspect all converted jack notes");
+    require(result.report.quality.sourceJackGroups == 1, "long same-source repeat should be one source jack group");
+    require(result.report.quality.preservedJackGroups == 1, "long source jack should report as preserved");
+    require(result.report.quality.brokenJacks == 0, "long source jack should not be reported broken");
+}
+
+void testEvenKeyFastThirtySecondStairSuppressesAdditions() {
+    auto chart = makeChart(4,
+                           {
+                               {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1062, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1125, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1187, 3, keyconv::NoteType::Tap, std::nullopt},
+                               {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1312, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1375, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1437, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1562, 3, keyconv::NoteType::Tap, std::nullopt},
+                               {1625, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1687, 1, keyconv::NoteType::Tap, std::nullopt},
+                           });
+    addTimingPoint(chart);
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+    options.maxAddedPerSlice = 2;
+
+    const auto result = keyconv::convertChart(chart, options);
+    require(result.report.quality.addedNotes == 0,
+            "32nd-or-faster even-key stair slices should suppress generated notes");
+}
+
+void testEvenKeyLeftOnlyAdditionsStayLeftHand() {
+    auto chart = makeChart(4,
+                           {
+                               {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1250, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1750, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {2250, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2500, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {2750, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {3000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {3250, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {3500, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {3750, 1, keyconv::NoteType::Tap, std::nullopt},
+                           });
+    addTimingPoint(chart);
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+
+    const auto result = keyconv::convertChart(chart, options);
+    int generated = 0;
+    for (const auto& note : result.chart.notes) {
+        if (note.id.rfind("gen:tap_plus:", 0) != 0) {
+            continue;
+        }
+        ++generated;
+        require(note.lane < 5, "left-hand-only even-key source slices should add notes in the left target hand");
+    }
+    require(generated > 0, "left-only even-key chart should still receive generated notes");
 }
 
 void testStreamSuperRandomRelanesEveryNote() {
@@ -3109,10 +3368,13 @@ int main() {
         {"preserve tap plus low caps high-key growth", testPreserveTapPlusLowCapsHighKeyGrowth},
         {"preserve tap plus adds holds in LN-heavy window", testPreserveTapPlusAddsHoldsInLnHeavyWindow},
         {"preserve tap plus does not turn tap-only slice into hold", testPreserveTapPlusDoesNotTurnTapOnlySliceIntoHold},
-        {"generated hold clone matches adjacent hold length", testGeneratedHoldCloneMatchesAdjacentHoldLength},
+        {"generated short hold clone ignores adjacent long hold length",
+         testGeneratedShortHoldCloneIgnoresAdjacentLongHoldLength},
+        {"generated long hold clone is tapified", testGeneratedLongHoldCloneIsTapified},
         {"no-jack input does not create jack", testNoJackInputDoesNotCreateJack},
         {"source jack preserved faithful", testSourceJackPreservedFaithful},
         {"source jack playable split", testSourceJackPlayableSplit},
+        {"500ms jack window detects slow source jack", testFiveHundredMsJackWindowDetectsSlowSourceJack},
         {"added note rejected if creates unwanted jack", testAddedNoteRejectedIfCreatesUnwantedJack},
         {"added note from source jack still rejected if creates target jack",
          testAddedNoteFromSourceJackStillRejectedIfCreatesTargetJack},
@@ -3144,6 +3406,11 @@ int main() {
         {"preserve convert lane drift keeps source jack together",
          testPreserveConvertLaneDriftKeepsSourceJackTogether},
         {"auto-more expansion reports larger budget", testAutoMoreExpansionReportsLargerBudget},
+        {"high-key tap-plus prefers eighth-beat additions", testHighKeyTapPlusPrefersEighthBeatAdditions},
+        {"high-key extreme trill avoids both outer edges", testHighKeyExtremeTrillAvoidsBothOuterEdges},
+        {"long source jack stays single lane playable", testLongSourceJackStaysSingleLanePlayable},
+        {"even-key fast 32nd stair suppresses additions", testEvenKeyFastThirtySecondStairSuppressesAdditions},
+        {"even-key left-only additions stay left hand", testEvenKeyLeftOnlyAdditionsStayLeftHand},
         {"stream superrandom relanes every note", testStreamSuperRandomRelanesEveryNote},
         {"stream superrandom keeps chord distinct", testStreamSuperRandomKeepsChordDistinct},
         {"full jitter offsets same-time chords", testFullJitterOffsetsSameTimeChords},

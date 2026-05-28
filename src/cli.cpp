@@ -4,21 +4,25 @@
 #include <keyconv/format/osu_exporter.hpp>
 #include <keyconv/format/osu_parser.hpp>
 #include <keyconv/quality_report.hpp>
+#include <keyconv/reconvert_guard.hpp>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -34,6 +38,11 @@ namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
 constexpr const char* kToolVersion = "v0.6.0";
+
+class ConvertedInputError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 #if defined(_WIN32)
 std::string utf8FromWide(std::wstring_view value) {
@@ -243,6 +252,7 @@ struct CliOptions {
     bool emitDiffReport = false;
     std::optional<std::filesystem::path> reportCsv;
     bool batchMode = false;
+    std::optional<int> jobs;
     bool preserveConvert = false;
     bool verbose = false;
     bool help = false;
@@ -306,6 +316,7 @@ void printHelp(std::ostream& out) {
     out << "  --dp                    Reserve DP mode; this version reports fallback to SP PPG.\n";
     out << "  --dry-run               Convert in memory and report only; do not write output.\n";
     out << "  --batch                 Treat positional chart inputs as a batch. Outputs default beside each input.\n";
+    out << "  --jobs <number>         Batch worker count override. Default: detected CPU thread count.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
@@ -409,6 +420,48 @@ std::string lowerAscii(std::string value) {
 bool isBmsPath(const std::filesystem::path& path) {
     const auto extension = lowerAscii(path.extension().string());
     return extension == ".bms" || extension == ".bme" || extension == ".bml" || extension == ".pms";
+}
+
+std::optional<std::string> convertedMarkerReason(std::string_view field, std::string_view text) {
+    const auto kind = keyconv::convertedChartMarkerKind(text);
+    if (kind == keyconv::ConvertedChartMarkerKind::None) {
+        return std::nullopt;
+    }
+    std::string reason(field);
+    reason += " has ";
+    reason += keyconv::convertedChartMarkerLabel(kind);
+    return reason;
+}
+
+std::optional<std::string> convertedPathMarkerReason(const std::filesystem::path& input) {
+    return convertedMarkerReason("filename", displayPath(input.filename()));
+}
+
+std::optional<std::string> convertedMetadataMarkerReason(const keyconv::Chart& chart) {
+    if (chart.meta.creator.has_value()) {
+        if (auto reason = convertedMarkerReason("creator", *chart.meta.creator)) {
+            return reason;
+        }
+    }
+    if (chart.meta.version.has_value()) {
+        if (auto reason = convertedMarkerReason("difficulty", *chart.meta.version)) {
+            return reason;
+        }
+    }
+    return std::nullopt;
+}
+
+void throwIfConvertedInput(const std::filesystem::path& input) {
+    if (auto reason = convertedPathMarkerReason(input)) {
+        throw ConvertedInputError("already-converted chart marker detected: " + *reason);
+    }
+}
+
+void throwIfConvertedInput(const std::filesystem::path& input, const keyconv::Chart& chart) {
+    throwIfConvertedInput(input);
+    if (auto reason = convertedMetadataMarkerReason(chart)) {
+        throw ConvertedInputError("already-converted chart marker detected: " + *reason);
+    }
 }
 
 std::filesystem::path defaultChartExtension(const std::filesystem::path& input, int targetKeys) {
@@ -638,6 +691,8 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.dryRun = true;
         } else if (arg == "--batch") {
             options.batchMode = true;
+        } else if (arg == "--jobs") {
+            options.jobs = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--report") {
             options.report = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--target-profile") {
@@ -1071,6 +1126,12 @@ void validateOptions(const CliOptions& options) {
     }
     if (batch && options.comparePolicies.has_value()) {
         throw std::runtime_error("--compare-policies is only valid for one input");
+    }
+    if (options.jobs.has_value() && *options.jobs < 1) {
+        throw std::runtime_error("--jobs must be at least 1");
+    }
+    if (!batch && options.jobs.has_value()) {
+        throw std::runtime_error("--jobs is only valid for batch mode");
     }
     if (!batch && isBmsPath(options.input) && options.out.has_value() && !isBmsPath(*options.out)) {
         throw std::runtime_error("BMS input can only write BMS-family output (.bms, .bme, .bml, .pms)");
@@ -1590,7 +1651,11 @@ void printPolicyComparison(const std::vector<PolicyComparisonRow>& rows,
     }
 }
 
-int runSingleConversion(const CliOptions& cli, const std::filesystem::path& input) {
+int runSingleConversion(const CliOptions& cli,
+                        const std::filesystem::path& input,
+                        std::ostream& out = std::cout,
+                        std::mutex* outputMutex = nullptr) {
+    throwIfConvertedInput(input);
     const auto inputText = readFile(input);
     const bool bmsInput = isBmsPath(input);
     if (bmsInput && cli.out.has_value() && !isBmsPath(*cli.out)) {
@@ -1600,6 +1665,7 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     const keyconv::ParseOptions parseOptions{cli.source};
     auto chart = bmsInput ? keyconv::parseBms(inputText, parseOptions)
                           : keyconv::parseOsu(inputText, parseOptions);
+    throwIfConvertedInput(input, chart);
 
     keyconv::ConvertOptions convertOptions;
     convertOptions.sourceKeyCount = cli.source.value_or(chart.meta.sourceKeyCount);
@@ -1667,26 +1733,26 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
 
     if (cli.comparePolicies.has_value()) {
         const auto rows = runPolicyComparison(chart, convertOptions, *cli.comparePolicies);
-        std::cout << kToolName << " " << kToolVersion << "\n";
-        std::cout << "Input: " << displayPath(input) << "\n";
-        std::cout << "Mode: " << (bmsInput ? "BMS policy comparison" : "osu!mania policy comparison") << "\n";
-        std::cout << "Source keys: " << convertOptions.sourceKeyCount << "\n";
-        std::cout << "Target keys: " << convertOptions.targetKeyCount << "\n\n";
+        out << kToolName << " " << kToolVersion << "\n";
+        out << "Input: " << displayPath(input) << "\n";
+        out << "Mode: " << (bmsInput ? "BMS policy comparison" : "osu!mania policy comparison") << "\n";
+        out << "Source keys: " << convertOptions.sourceKeyCount << "\n";
+        out << "Target keys: " << convertOptions.targetKeyCount << "\n\n";
         if (convertOptions.targetKProfile.has_value()) {
-            std::cout << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
-                      << convertOptions.targetKProfile->sourceName << " ("
-                      << convertOptions.targetKProfile->sampleCount << " charts)\n";
+            out << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
+                << convertOptions.targetKProfile->sourceName << " ("
+                << convertOptions.targetKProfile->sampleCount << " charts)\n";
         }
-        printPolicyComparison(rows, cli.emitFeelReport, cli.emitDiffReport, std::cout);
+        printPolicyComparison(rows, cli.emitFeelReport, cli.emitDiffReport, out);
 
         if (cli.report.has_value()) {
             writeFile(*cli.report,
                       comparisonToJson(rows, convertOptions.sourceKeyCount, convertOptions.targetKeyCount));
-            std::cout << "Comparison report written: " << displayPath(*cli.report) << "\n";
+            out << "Comparison report written: " << displayPath(*cli.report) << "\n";
         }
         if (cli.reportCsv.has_value()) {
             writeFile(*cli.reportCsv, comparisonToCsv(rows));
-            std::cout << "Comparison CSV written: " << displayPath(*cli.reportCsv) << "\n";
+            out << "Comparison CSV written: " << displayPath(*cli.reportCsv) << "\n";
         }
 
         if (cli.verbose) {
@@ -1694,9 +1760,9 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
                 if (row.report.warnings.empty()) {
                     continue;
                 }
-                std::cout << "\nVerbose warnings for " << row.policy << ":\n";
+                out << "\nVerbose warnings for " << row.policy << ":\n";
                 for (const auto& warning : row.report.warnings) {
-                    std::cout << "- " << warning << "\n";
+                    out << "- " << warning << "\n";
                 }
             }
         }
@@ -1707,128 +1773,262 @@ int runSingleConversion(const CliOptions& cli, const std::filesystem::path& inpu
     const keyconv::Converter converter;
     const auto result = converter.convert(chart, convertOptions);
     auto outputPath = cli.out;
-    if (!cli.dryRun && !outputPath.has_value()) {
+    if (!cli.dryRun && !outputPath.has_value() && outputMutex == nullptr) {
         outputPath = defaultOutputPath(input, convertOptions);
     }
 
-    std::cout << kToolName << " " << kToolVersion << "\n";
-    std::cout << "Input: " << displayPath(input) << "\n";
-    std::cout << "Mode: " << (bmsInput ? "BMS" : "osu!mania") << "\n";
-    std::cout << "Source keys: " << convertOptions.sourceKeyCount << "\n";
-    std::cout << "Target keys: " << convertOptions.targetKeyCount << "\n";
-    std::cout << "Style: " << keyconv::toString(convertOptions.style) << "\n";
-    std::cout << "Collision policy: " << keyconv::toString(convertOptions.collisionPolicy) << "\n";
-    std::cout << "Compress policy: " << keyconv::toString(convertOptions.compressPolicy) << "\n";
-    std::cout << "Distance policy: " << keyconv::toString(convertOptions.distancePolicy) << "\n";
-    std::cout << "Expansion policy: " << keyconv::toString(convertOptions.expansionPolicy) << "\n";
-    std::cout << "Echo policy: " << keyconv::toString(convertOptions.echoPolicy) << "\n";
-    std::cout << "Stream echo profile: " << keyconv::toString(convertOptions.streamEchoProfile) << "\n";
-    std::cout << "Stream transform: " << keyconv::toString(convertOptions.streamTransformPolicy) << "\n";
-    std::cout << "Seed: " << convertOptions.seed << "\n";
-    std::cout << "Echo diagnostics: " << (convertOptions.echoDiagnostics ? "yes" : "no") << "\n";
-    std::cout << "Optimizer: " << keyconv::toString(convertOptions.optimizer) << "\n";
-    std::cout << "Same-time epsilon: " << convertOptions.sameTimeEpsilonMs << " ms\n";
-    std::cout << "Min object gap: " << convertOptions.minObjectGapMs << " ms\n";
-    std::cout << "Same-lane min gap: " << convertOptions.sameLaneMinGapMs << " ms\n";
-    std::cout << "Jack preserve policy: " << keyconv::toString(convertOptions.jackPreservePolicy) << "\n";
-    std::cout << "Gesture rail: " << (convertOptions.gestureRailEnabled ? "on" : "off") << "\n";
-    std::cout << "Jack window: " << convertOptions.jackWindowMs << " ms\n";
-    std::cout << "Strict jack window: " << convertOptions.strictJackWindowMs << " ms\n";
-    std::cout << "Playable jack split: " << (convertOptions.allowPlayableJackSplit ? "yes" : "no") << "\n";
-    std::cout << "Max jack split lanes: " << convertOptions.maxJackSplitLanes << "\n";
-    std::cout << "Snap rolled notes: " << (convertOptions.snapRolledNotes ? "yes" : "no") << "\n";
-    std::cout << "Snap tolerance: " << convertOptions.snapToleranceMs << " ms\n";
-    std::cout << "Max roll: " << convertOptions.maxRollMs << " ms\n";
-    std::cout << "Max added ratio: " << convertOptions.maxAddedNoteRatio << "\n";
-    std::cout << "Max added per slice: " << convertOptions.maxAddedPerSlice << "\n";
-    std::cout << "Max added per measure: " << convertOptions.maxAddedPerMeasure << "\n";
-    std::cout << "Expansion min gap: " << convertOptions.expansionMinGapMs << " ms\n";
-    std::cout << "Expansion same-lane min gap: " << convertOptions.expansionSameLaneMinGapMs << " ms\n";
-    std::cout << "Snap added notes: " << (convertOptions.snapAddedNotes ? "yes" : "no") << "\n";
-    std::cout << "Expansion snap tolerance: " << convertOptions.expansionSnapToleranceMs << " ms\n";
-    std::cout << "Max echo ratio: " << convertOptions.maxEchoAddedRatio << "\n";
-    std::cout << "Max echo per pattern: " << convertOptions.maxEchoPerPattern << "\n";
-    std::cout << "Max echo per measure: " << convertOptions.maxEchoPerMeasure << "\n";
-    std::cout << "Max echo per slice: " << convertOptions.maxEchoPerSlice << "\n";
-    std::cout << "Echo min gap: " << convertOptions.echoMinGapMs << " ms\n";
-    std::cout << "Echo same-lane min gap: " << convertOptions.echoSameLaneMinGapMs << " ms\n";
-    std::cout << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
-    std::cout << "Preserve convert: " << (cli.preserveConvert ? "yes" : "no") << "\n";
-    std::cout << "Preserve lane drift: " << (convertOptions.preserveLaneDrift ? "yes" : "no") << "\n";
+    out << kToolName << " " << kToolVersion << "\n";
+    out << "Input: " << displayPath(input) << "\n";
+    out << "Mode: " << (bmsInput ? "BMS" : "osu!mania") << "\n";
+    out << "Source keys: " << convertOptions.sourceKeyCount << "\n";
+    out << "Target keys: " << convertOptions.targetKeyCount << "\n";
+    out << "Style: " << keyconv::toString(convertOptions.style) << "\n";
+    out << "Collision policy: " << keyconv::toString(convertOptions.collisionPolicy) << "\n";
+    out << "Compress policy: " << keyconv::toString(convertOptions.compressPolicy) << "\n";
+    out << "Distance policy: " << keyconv::toString(convertOptions.distancePolicy) << "\n";
+    out << "Expansion policy: " << keyconv::toString(convertOptions.expansionPolicy) << "\n";
+    out << "Echo policy: " << keyconv::toString(convertOptions.echoPolicy) << "\n";
+    out << "Stream echo profile: " << keyconv::toString(convertOptions.streamEchoProfile) << "\n";
+    out << "Stream transform: " << keyconv::toString(convertOptions.streamTransformPolicy) << "\n";
+    out << "Seed: " << convertOptions.seed << "\n";
+    out << "Echo diagnostics: " << (convertOptions.echoDiagnostics ? "yes" : "no") << "\n";
+    out << "Optimizer: " << keyconv::toString(convertOptions.optimizer) << "\n";
+    out << "Same-time epsilon: " << convertOptions.sameTimeEpsilonMs << " ms\n";
+    out << "Min object gap: " << convertOptions.minObjectGapMs << " ms\n";
+    out << "Same-lane min gap: " << convertOptions.sameLaneMinGapMs << " ms\n";
+    out << "Jack preserve policy: " << keyconv::toString(convertOptions.jackPreservePolicy) << "\n";
+    out << "Gesture rail: " << (convertOptions.gestureRailEnabled ? "on" : "off") << "\n";
+    out << "Jack window: " << convertOptions.jackWindowMs << " ms\n";
+    out << "Strict jack window: " << convertOptions.strictJackWindowMs << " ms\n";
+    out << "Playable jack split: " << (convertOptions.allowPlayableJackSplit ? "yes" : "no") << "\n";
+    out << "Max jack split lanes: " << convertOptions.maxJackSplitLanes << "\n";
+    out << "Snap rolled notes: " << (convertOptions.snapRolledNotes ? "yes" : "no") << "\n";
+    out << "Snap tolerance: " << convertOptions.snapToleranceMs << " ms\n";
+    out << "Max roll: " << convertOptions.maxRollMs << " ms\n";
+    out << "Max added ratio: " << convertOptions.maxAddedNoteRatio << "\n";
+    out << "Max added per slice: " << convertOptions.maxAddedPerSlice << "\n";
+    out << "Max added per measure: " << convertOptions.maxAddedPerMeasure << "\n";
+    out << "Expansion min gap: " << convertOptions.expansionMinGapMs << " ms\n";
+    out << "Expansion same-lane min gap: " << convertOptions.expansionSameLaneMinGapMs << " ms\n";
+    out << "Snap added notes: " << (convertOptions.snapAddedNotes ? "yes" : "no") << "\n";
+    out << "Expansion snap tolerance: " << convertOptions.expansionSnapToleranceMs << " ms\n";
+    out << "Max echo ratio: " << convertOptions.maxEchoAddedRatio << "\n";
+    out << "Max echo per pattern: " << convertOptions.maxEchoPerPattern << "\n";
+    out << "Max echo per measure: " << convertOptions.maxEchoPerMeasure << "\n";
+    out << "Max echo per slice: " << convertOptions.maxEchoPerSlice << "\n";
+    out << "Echo min gap: " << convertOptions.echoMinGapMs << " ms\n";
+    out << "Echo same-lane min gap: " << convertOptions.echoSameLaneMinGapMs << " ms\n";
+    out << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
+    out << "Preserve convert: " << (cli.preserveConvert ? "yes" : "no") << "\n";
+    out << "Preserve lane drift: " << (convertOptions.preserveLaneDrift ? "yes" : "no") << "\n";
     if (convertOptions.targetKProfile.has_value()) {
-        std::cout << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
-                  << convertOptions.targetKProfile->sourceName << " ("
-                  << convertOptions.targetKProfile->sampleCount << " charts";
+        out << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
+            << convertOptions.targetKProfile->sourceName << " ("
+            << convertOptions.targetKProfile->sampleCount << " charts";
         if (!convertOptions.targetKProfile->authorToken.empty()) {
-            std::cout << ", author " << convertOptions.targetKProfile->authorToken;
+            out << ", author " << convertOptions.targetKProfile->authorToken;
         }
-        std::cout << ")\n";
+        out << ")\n";
     }
     if (convertOptions.dpMode) {
-        std::cout << "DP mode: requested\n";
+        out << "DP mode: requested\n";
     }
-    std::cout << "\n";
-    std::cout << keyconv::reportToText(result.report) << "\n";
+    out << "\n";
+    out << keyconv::reportToText(result.report) << "\n";
     if (cli.echoDiagnostics) {
-        printEchoDiagnostics(result.report, std::cout);
-        std::cout << "\n";
+        printEchoDiagnostics(result.report, out);
+        out << "\n";
     }
 
     if (!cli.dryRun) {
         const auto outputText = bmsInput ? keyconv::exportBms(result.chart, convertOptions.targetKeyCount)
                                          : keyconv::exportOsu(result.chart, convertOptions.targetKeyCount);
-        writeFile(*outputPath, outputText);
-        std::cout << "Output written: " << displayPath(*outputPath) << "\n";
+        if (!outputPath.has_value() && outputMutex != nullptr) {
+            std::lock_guard<std::mutex> lock(*outputMutex);
+            outputPath = defaultOutputPath(input, convertOptions);
+            writeFile(*outputPath, outputText);
+        } else {
+            writeFile(*outputPath, outputText);
+        }
+        out << "Output written: " << displayPath(*outputPath) << "\n";
     } else {
-        std::cout << "Dry run: output file not written\n";
+        out << "Dry run: output file not written\n";
     }
 
     if (cli.report.has_value()) {
         writeFile(*cli.report, keyconv::reportToJson(result.report));
-        std::cout << "Report written: " << displayPath(*cli.report) << "\n";
+        out << "Report written: " << displayPath(*cli.report) << "\n";
     }
 
     if (cli.verbose && !result.report.warnings.empty()) {
-        std::cout << "\nVerbose warnings:\n";
+        out << "\nVerbose warnings:\n";
         for (const auto& warning : result.report.warnings) {
-            std::cout << "- " << warning << "\n";
+            out << "- " << warning << "\n";
         }
     }
 
     return 0;
 }
 
+std::size_t batchWorkerCount(std::size_t jobCount, const std::optional<int>& requestedJobs) {
+    if (jobCount <= 1) {
+        return jobCount;
+    }
+    if (requestedJobs.has_value()) {
+        return std::clamp<std::size_t>(static_cast<std::size_t>(*requestedJobs), 1, jobCount);
+    }
+
+    const unsigned hardware = std::thread::hardware_concurrency();
+    const std::size_t workers = hardware == 0 ? 4 : static_cast<std::size_t>(hardware);
+    return std::clamp<std::size_t>(workers, 1, jobCount);
+}
+
+struct BatchItemResult {
+    std::size_t index = 0;
+    std::filesystem::path input;
+    int exitCode = 1;
+    bool skipped = false;
+    std::string output;
+    std::string error;
+};
+
+BatchItemResult runBatchItem(const CliOptions& cli,
+                             std::size_t index,
+                             const std::filesystem::path& input,
+                             std::mutex& outputMutex) {
+    BatchItemResult result;
+    result.index = index;
+    result.input = input;
+
+    try {
+        CliOptions item = cli;
+        item.input = input;
+        item.inputs = {input};
+        item.batchMode = false;
+        item.out.reset();
+        item.report.reset();
+        item.reportCsv.reset();
+        item.comparePolicies.reset();
+
+        std::ostringstream out;
+        result.exitCode = runSingleConversion(item, input, out, &outputMutex);
+        result.output = out.str();
+    } catch (const ConvertedInputError& error) {
+        result.exitCode = 0;
+        result.skipped = true;
+        result.output = "Skipped already-converted chart: " + displayPath(input) +
+                        " (" + error.what() + ")\n";
+    } catch (const std::exception& error) {
+        result.exitCode = 1;
+        result.error = "Batch item failed: " + displayPath(input) + ": " + error.what();
+    }
+
+    return result;
+}
+
 int runBatchConversion(const CliOptions& cli) {
     int succeeded = 0;
     int failed = 0;
+    int skipped = 0;
+    const std::size_t workerCount = batchWorkerCount(cli.inputs.size(), cli.jobs);
     std::cout << kToolName << " " << kToolVersion << "\n";
     std::cout << "Batch mode: " << cli.inputs.size() << " input(s)\n";
     std::cout << "Target keys: " << *cli.target << "\n";
     std::cout << "Output: beside each input chart\n";
-
-    for (std::size_t index = 0; index < cli.inputs.size(); ++index) {
-        const auto& input = cli.inputs[index];
-        std::cout << "\n[" << (index + 1) << "/" << cli.inputs.size() << "] "
-                  << displayPath(input) << "\n";
-        try {
-            CliOptions item = cli;
-            item.input = input;
-            item.inputs = {input};
-            item.batchMode = false;
-            item.out.reset();
-            item.report.reset();
-            item.reportCsv.reset();
-            item.comparePolicies.reset();
-            runSingleConversion(item, input);
-            ++succeeded;
-        } catch (const std::exception& error) {
-            ++failed;
-            std::cerr << "Batch item failed: " << displayPath(input) << ": "
-                      << error.what() << "\n";
-        }
+    std::cout << "Workers: " << workerCount << (cli.jobs.has_value() ? "" : " (auto)") << "\n";
+    if (workerCount > 1) {
+        std::cout << "Log order: completion order\n";
     }
 
-    std::cout << "\nBatch summary: succeeded=" << succeeded << " failed=" << failed << "\n";
+    if (workerCount <= 1) {
+        for (std::size_t index = 0; index < cli.inputs.size(); ++index) {
+            const auto& input = cli.inputs[index];
+            std::cout << "\n[" << (index + 1) << "/" << cli.inputs.size() << "] "
+                      << displayPath(input) << "\n";
+            try {
+                CliOptions item = cli;
+                item.input = input;
+                item.inputs = {input};
+                item.batchMode = false;
+                item.out.reset();
+                item.report.reset();
+                item.reportCsv.reset();
+                item.comparePolicies.reset();
+                runSingleConversion(item, input);
+                ++succeeded;
+            } catch (const ConvertedInputError& error) {
+                ++skipped;
+                std::cout << "Skipped already-converted chart: " << displayPath(input)
+                          << " (" << error.what() << ")\n";
+            } catch (const std::exception& error) {
+                ++failed;
+                std::cerr << "Batch item failed: " << displayPath(input) << ": "
+                          << error.what() << "\n";
+            }
+            const std::size_t done = index + 1;
+            const std::size_t percent = (done * 100) / cli.inputs.size();
+            std::cout << "Progress: " << percent << "% done, "
+                      << (cli.inputs.size() - done) << " left\n";
+        }
+
+        std::cout << "\nBatch summary: succeeded=" << succeeded << " failed=" << failed
+                  << " skipped=" << skipped << "\n";
+        return failed == 0 ? 0 : 1;
+    }
+
+    std::atomic<std::size_t> nextIndex{0};
+    std::atomic<std::size_t> parallelCompleted{0};
+    std::atomic<int> parallelSucceeded{0};
+    std::atomic<int> parallelFailed{0};
+    std::atomic<int> parallelSkipped{0};
+    std::mutex outputMutex;
+    std::mutex logMutex;
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for (std::size_t worker = 0; worker < workerCount; ++worker) {
+        workers.emplace_back([&]() {
+            for (;;) {
+                const std::size_t index = nextIndex.fetch_add(1);
+                if (index >= cli.inputs.size()) {
+                    break;
+                }
+                auto result = runBatchItem(cli, index, cli.inputs[index], outputMutex);
+                if (result.skipped) {
+                    ++parallelSkipped;
+                } else if (result.exitCode == 0) {
+                    ++parallelSucceeded;
+                } else {
+                    ++parallelFailed;
+                }
+                const std::size_t done = parallelCompleted.fetch_add(1) + 1;
+                const std::size_t percent = (done * 100) / cli.inputs.size();
+
+                std::lock_guard<std::mutex> lock(logMutex);
+                std::cout << "\n[" << (result.index + 1) << "/" << cli.inputs.size() << "] "
+                          << displayPath(result.input) << "\n";
+                if (!result.output.empty()) {
+                    std::cout << result.output;
+                    if (result.output.back() != '\n') {
+                        std::cout << "\n";
+                    }
+                }
+                if (result.exitCode != 0 && !result.error.empty()) {
+                    std::cerr << result.error << "\n";
+                }
+                std::cout << "Progress: " << percent << "% done, "
+                          << (cli.inputs.size() - done) << " left\n";
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    succeeded = parallelSucceeded.load();
+    failed = parallelFailed.load();
+    skipped = parallelSkipped.load();
+
+    std::cout << "\nBatch summary: succeeded=" << succeeded << " failed=" << failed
+              << " skipped=" << skipped << "\n";
     return failed == 0 ? 0 : 1;
 }
 

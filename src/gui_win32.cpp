@@ -4,6 +4,8 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <keyconv/reconvert_guard.hpp>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -11,6 +13,7 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <fstream>
 #include <iomanip>
@@ -47,7 +50,7 @@ constexpr int kStaticDetected = 118;
 constexpr int kButtonBatch = 119;
 constexpr int kCheckPreserveConvert = 120;
 constexpr int kCheckDebugReports = 121;
-constexpr bool kGuiBatchLocked = true;
+constexpr int kStaticStatus = 122;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -100,6 +103,7 @@ struct AppState {
     HWND debugReportsCheck = nullptr;
     HWND batchButton = nullptr;
     HWND detectedLabel = nullptr;
+    HWND statusLabel = nullptr;
     HWND summaryList = nullptr;
     HWND logEdit = nullptr;
     HFONT uiFont = nullptr;
@@ -212,6 +216,19 @@ void setWindowText(HWND hwnd, const std::wstring& text) {
     SetWindowTextW(hwnd, text.c_str());
 }
 
+bool pumpPendingUiMessages() {
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        if (msg.message == WM_QUIT) {
+            PostQuitMessage(static_cast<int>(msg.wParam));
+            return false;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    return true;
+}
+
 void setInputText(AppState& state, const std::wstring& text) {
     state.suppressInputChange = true;
     setWindowText(state.inputEdit, text);
@@ -285,6 +302,16 @@ std::wstring lowerAscii(std::wstring value) {
     return value;
 }
 
+std::string lowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        if (ch >= 'A' && ch <= 'Z') {
+            return static_cast<char>(ch - 'A' + 'a');
+        }
+        return static_cast<char>(ch);
+    });
+    return value;
+}
+
 bool isBmsFamilyPath(const std::filesystem::path& path) {
     const auto extension = lowerAscii(path.extension().wstring());
     return extension == L".bms" || extension == L".bme" || extension == L".bml" || extension == L".pms";
@@ -298,6 +325,84 @@ bool isSupportedChartPath(const std::filesystem::path& path) {
     const auto extension = lowerAscii(path.extension().wstring());
     return extension == L".osu" || extension == L".bms" || extension == L".bme" ||
            extension == L".bml" || extension == L".pms";
+}
+
+std::optional<std::wstring> convertedMarkerReason(std::wstring_view field, std::wstring_view text) {
+    const auto kind = keyconv::convertedChartMarkerKind(text);
+    if (kind == keyconv::ConvertedChartMarkerKind::None) {
+        return std::nullopt;
+    }
+    std::wstring reason(field);
+    reason += L" has ";
+    reason += widen(std::string(keyconv::convertedChartMarkerLabel(kind)));
+    return reason;
+}
+
+std::optional<std::wstring> convertedPathMarkerReason(const std::filesystem::path& path) {
+    return convertedMarkerReason(L"filename", path.filename().wstring());
+}
+
+std::optional<std::wstring> convertedMetadataMarkerReason(const std::filesystem::path& path) {
+    if (!isSupportedChartPath(path)) {
+        return std::nullopt;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return std::nullopt;
+    }
+
+    std::string line;
+    int scanned = 0;
+    while (std::getline(in, line) && scanned++ < 500) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const std::string trimmed = trimAscii(line);
+        if (trimmed.empty()) {
+            continue;
+        }
+        if (isOsuPath(path)) {
+            if (trimmed == "[Difficulty]" || trimmed == "[Events]" || trimmed == "[TimingPoints]" ||
+                trimmed == "[HitObjects]") {
+                break;
+            }
+            const auto colon = trimmed.find(':');
+            if (colon == std::string::npos) {
+                continue;
+            }
+            const std::string key = lowerAscii(trimAscii(trimmed.substr(0, colon)));
+            if (key != "creator" && key != "version") {
+                continue;
+            }
+            if (auto reason = convertedMarkerReason(widen(key), widen(trimAscii(trimmed.substr(colon + 1))))) {
+                return reason;
+            }
+        } else {
+            if (trimmed.front() != '#') {
+                continue;
+            }
+            const auto split = trimmed.find_first_of(" \t");
+            const std::string key = lowerAscii(trimmed.substr(1, split == std::string::npos
+                                                                    ? std::string::npos
+                                                                    : split - 1));
+            if (key != "subtitle" && key != "subartist") {
+                continue;
+            }
+            const std::string value = split == std::string::npos ? std::string{} : trimAscii(trimmed.substr(split + 1));
+            if (auto reason = convertedMarkerReason(widen(key), widen(value))) {
+                return reason;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::wstring> convertedInputMarkerReason(const std::filesystem::path& path) {
+    if (auto reason = convertedPathMarkerReason(path)) {
+        return reason;
+    }
+    return convertedMetadataMarkerReason(path);
 }
 
 std::wstring chartOutputExtension(const ToolOptions& options) {
@@ -705,19 +810,26 @@ std::optional<int> parseSourceOverrideKeyCount(const std::wstring& value) {
     return static_cast<int>(parsed);
 }
 
-std::vector<std::filesystem::path> collectOsuFilesRecursively(const std::filesystem::path& root) {
-    std::vector<std::filesystem::path> files;
+struct FolderScanProgress {
+    std::size_t visitedFiles = 0;
+    std::size_t totalFiles = 0;
+    std::size_t chartFiles = 0;
+    bool counting = false;
+};
+
+using FolderScanProgressCallback = std::function<void(const FolderScanProgress&)>;
+
+std::size_t countRegularFilesRecursively(const std::filesystem::path& root,
+                                         const FolderScanProgressCallback& onProgress) {
     std::error_code error;
     if (!std::filesystem::exists(root, error)) {
-        return files;
+        return 0;
     }
     if (!std::filesystem::is_directory(root, error)) {
-        if (isOsuPath(root)) {
-            files.push_back(absolutePath(root));
-        }
-        return files;
+        return std::filesystem::is_regular_file(root, error) ? 1 : 0;
     }
 
+    std::size_t count = 0;
     const auto options = std::filesystem::directory_options::skip_permission_denied;
     for (std::filesystem::recursive_directory_iterator it(root, options, error), end; it != end; it.increment(error)) {
         if (error) {
@@ -729,10 +841,67 @@ std::vector<std::filesystem::path> collectOsuFilesRecursively(const std::filesys
             error.clear();
             continue;
         }
+        ++count;
+        if (onProgress && (count % 512) == 0) {
+            onProgress({count, 0, 0, true});
+        } else if ((count % 512) == 0) {
+            pumpPendingUiMessages();
+        }
+    }
+    if (onProgress) {
+        onProgress({count, 0, 0, true});
+    } else {
+        pumpPendingUiMessages();
+    }
+    return count;
+}
+
+std::vector<std::filesystem::path> collectOsuFilesRecursively(
+    const std::filesystem::path& root,
+    const FolderScanProgressCallback& onProgress = {}) {
+    std::vector<std::filesystem::path> files;
+    std::error_code error;
+    if (!std::filesystem::exists(root, error)) {
+        return files;
+    }
+    if (!std::filesystem::is_directory(root, error)) {
+        if (isOsuPath(root)) {
+            files.push_back(absolutePath(root));
+        }
+        if (onProgress) {
+            onProgress({1, 1, files.size(), false});
+        }
+        return files;
+    }
+
+    const std::size_t totalFiles = countRegularFilesRecursively(root, onProgress);
+    const auto options = std::filesystem::directory_options::skip_permission_denied;
+    std::size_t visitedFiles = 0;
+    for (std::filesystem::recursive_directory_iterator it(root, options, error), end; it != end; it.increment(error)) {
+        if (error) {
+            error.clear();
+            continue;
+        }
+        const auto& entry = *it;
+        if (!entry.is_regular_file(error)) {
+            error.clear();
+            continue;
+        }
+        ++visitedFiles;
         const auto path = entry.path();
         if (isOsuPath(path)) {
             files.push_back(absolutePath(path));
         }
+        if (onProgress && ((visitedFiles % 128) == 0 || visitedFiles == totalFiles)) {
+            onProgress({visitedFiles, totalFiles, files.size(), false});
+        } else if ((visitedFiles % 256) == 0) {
+            pumpPendingUiMessages();
+        }
+    }
+    if (onProgress) {
+        onProgress({visitedFiles, totalFiles, files.size(), false});
+    } else {
+        pumpPendingUiMessages();
     }
     std::stable_sort(files.begin(), files.end());
     return files;
@@ -811,6 +980,28 @@ void clearSummary(AppState& state) {
 
 void addSummaryLine(AppState& state, const std::wstring& text) {
     SendMessageW(state.summaryList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+}
+
+std::wstring progressText(std::size_t done, std::size_t total, const wchar_t* label) {
+    const std::size_t percent = total == 0 ? 100 : (done * 100) / total;
+    const std::size_t remaining = done >= total ? 0 : total - done;
+    std::wostringstream out;
+    out << label << L": " << percent << L"% done, " << remaining << L" left";
+    return out.str();
+}
+
+void setStatus(AppState& state, const std::wstring& text) {
+    if (state.statusLabel == nullptr) {
+        return;
+    }
+    setWindowText(state.statusLabel, text);
+    UpdateWindow(state.statusLabel);
+}
+
+void appendProgress(AppState& state, std::size_t done, std::size_t total, const wchar_t* label) {
+    const auto text = progressText(done, total, label);
+    setStatus(state, text);
+    appendLog(state, L"[progress] " + text + L"\r\n");
 }
 
 void showReportSummary(AppState& state, const ReportSummary& summary) {
@@ -958,16 +1149,36 @@ void executeSingleConvert(AppState& state) {
     if (!validateToolOptions(options, state.hwnd)) {
         return;
     }
+    if (auto reason = convertedInputMarkerReason(options.inputFile)) {
+        clearSummary(state);
+        addSummaryLine(state, L"[skip] already converted: " + options.inputFile.filename().wstring());
+        addSummaryLine(state, L"       " + *reason);
+        setStatus(state, L"Skipped: already converted");
+        appendLog(state, L"\r\n[skip] " + options.inputFile.wstring() +
+                         L" already converted (" + *reason + L")\r\n");
+        MessageBoxW(state.hwnd,
+                    L"This chart already has a converter marker, so KeyWeaver skipped it.",
+                    L"KeyWeaver GUI",
+                    MB_ICONINFORMATION);
+        return;
+    }
     if (!options.outputDir.empty()) {
         std::filesystem::create_directories(options.outputDir);
     }
     OutputPaths paths;
     const std::wstring command = buildSingleCommand(options, paths);
     state.lastCommand = command;
+    clearSummary(state);
+    addSummaryLine(state, L"Converting... 0% done, 1 left");
+    setStatus(state, L"Converting: 0% done, 1 left");
     appendLog(state, L"\r\n> " + command + L"\r\n");
+    UpdateWindow(state.hwnd);
     const auto result = runProcess(command, options.keyconvExe.parent_path());
     appendLog(state, widen(result.output) + L"\r\n");
     if (result.exitCode != 0) {
+        setStatus(state, L"Convert failed");
+        clearSummary(state);
+        addSummaryLine(state, L"Convert failed. See log output.");
         MessageBoxW(state.hwnd, L"Convert failed. See log output.", L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
@@ -979,6 +1190,7 @@ void executeSingleConvert(AppState& state) {
         clearSummary(state);
         addSummaryLine(state, L"Converted. Enable Debug JSON for metrics/report output.");
     }
+    appendProgress(state, 1, 1, L"Convert");
     appendLog(state, L"Output: " + paths.outputChart.wstring() + L"\r\n");
 }
 
@@ -993,10 +1205,13 @@ void executeMatrix(AppState& state) {
     OutputPaths paths;
     const std::wstring command = buildMatrixCommand(options, paths);
     state.lastCommand = command;
+    setStatus(state, L"Matrix: running");
     appendLog(state, L"\r\n> " + command + L"\r\n");
+    UpdateWindow(state.hwnd);
     const auto result = runProcess(command, options.keyconvExe.parent_path());
     appendLog(state, widen(result.output) + L"\r\n");
     if (result.exitCode != 0) {
+        setStatus(state, L"Matrix failed");
         MessageBoxW(state.hwnd, L"Policy matrix failed. See log output.", L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
@@ -1007,6 +1222,7 @@ void executeMatrix(AppState& state) {
     for (const auto& row : rows) {
         addSummaryLine(state, row);
     }
+    setStatus(state, L"Matrix: done");
 }
 
 std::optional<std::filesystem::path> explicitOutputDir(const AppState& state) {
@@ -1042,7 +1258,46 @@ std::vector<std::filesystem::path> chooseBatchFolderInputs(AppState& state) {
     setInputText(state, root.wstring());
     setWindowText(state.outputDirEdit, L"");
     state.batchInputs.clear();
-    return collectOsuFilesRecursively(root);
+    clearSummary(state);
+    addSummaryLine(state, L"Scanning folder...");
+    setStatus(state, L"Scanning: counting files");
+    appendLog(state, L"\r\nScanning folder: " + root.wstring() + L"\r\n");
+    UpdateWindow(state.hwnd);
+    std::size_t lastLogged = 0;
+    auto onProgress = [&](const FolderScanProgress& progress) {
+        if (progress.counting) {
+            const std::wstring text = L"Scanning: counting files, " +
+                                      std::to_wstring(progress.visitedFiles) + L" seen";
+            setStatus(state, text);
+            if (progress.visitedFiles == 0 ||
+                progress.visitedFiles - lastLogged >= 4096) {
+                appendLog(state, L"[progress] " + text + L"\r\n");
+                lastLogged = progress.visitedFiles;
+            }
+        } else {
+            const std::size_t done = progress.visitedFiles;
+            const std::size_t total = progress.totalFiles;
+            const std::size_t percent = total == 0 ? 100 : (done * 100) / total;
+            const std::size_t remaining = done >= total ? 0 : total - done;
+            std::wostringstream text;
+            text << L"Scanning: " << percent << L"% done, "
+                 << remaining << L" files left, "
+                 << progress.chartFiles << L" charts";
+            setStatus(state, text.str());
+            if (done == total || done - lastLogged >= 4096) {
+                appendLog(state, L"[progress] " + text.str() + L"\r\n");
+                lastLogged = done;
+            }
+        }
+        UpdateWindow(state.hwnd);
+        pumpPendingUiMessages();
+    };
+    auto files = collectOsuFilesRecursively(root, onProgress);
+    std::wostringstream done;
+    done << L"Scanning done: " << files.size() << L" charts";
+    setStatus(state, done.str());
+    appendLog(state, done.str() + L"\r\n");
+    return files;
 }
 
 struct BatchJob {
@@ -1069,7 +1324,7 @@ std::size_t batchWorkerCount(std::size_t jobCount) {
     }
     const unsigned hardware = std::thread::hardware_concurrency();
     const std::size_t workers = hardware == 0 ? 4 : static_cast<std::size_t>(hardware);
-    return std::clamp<std::size_t>(workers, 1, std::min<std::size_t>(8, jobCount));
+    return std::clamp<std::size_t>(workers, 1, jobCount);
 }
 
 BatchJobResult runBatchJob(BatchJob job) {
@@ -1110,15 +1365,6 @@ void applyBatchJobResult(AppState& state, const BatchJobResult& result, int& suc
 }
 
 void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
-    if (kGuiBatchLocked) {
-        appendLog(state, L"\r\nBatch is locked in this tester build. Use Convert for one chart at a time.\r\n");
-        MessageBoxW(state.hwnd,
-                    L"Batch is locked in this tester build. Use Convert for one chart at a time.",
-                    L"KeyWeaver GUI",
-                    MB_ICONINFORMATION);
-        return;
-    }
-
     auto baseOptions = readToolOptions(state);
     auto inputs = chooseFolderFirst ? chooseBatchFolderInputs(state) : batchInputsForState(state);
     const auto inputText = trim(getWindowText(state.inputEdit));
@@ -1150,6 +1396,7 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     const auto forcedOutputDir = explicitOutputDir(state);
     clearSummary(state);
     state.lastReportPath.clear();
+    setStatus(state, L"Batch: preparing");
     appendLog(state, L"\r\nBatch convert: " + std::to_wstring(inputs.size()) +
                      L" file(s), target " + baseOptions.targetKeys + L"K\r\n");
     if (sourceFilter.has_value()) {
@@ -1163,12 +1410,27 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     jobs.reserve(inputs.size());
     std::set<std::filesystem::path> reservedOutputPaths;
     for (std::size_t index = 0; index < inputs.size(); ++index) {
+        if ((index % 64) == 0) {
+            const auto text = progressText(index, inputs.size(), L"Batch prepare");
+            setStatus(state, text);
+            if ((index % 512) == 0) {
+                appendLog(state, L"[progress] " + text + L"\r\n");
+            }
+            pumpPendingUiMessages();
+        }
         ToolOptions options = baseOptions;
         options.inputFile = absolutePath(inputs[index]);
         if (!std::filesystem::exists(options.inputFile) || !isSupportedChartPath(options.inputFile)) {
             ++failed;
             addSummaryLine(state, L"[fail] " + options.inputFile.filename().wstring() + L" invalid input");
             appendLog(state, L"[fail] " + options.inputFile.wstring() + L" invalid input\r\n");
+            continue;
+        }
+        if (auto reason = convertedInputMarkerReason(options.inputFile)) {
+            ++skipped;
+            addSummaryLine(state, L"[skip] " + options.inputFile.filename().wstring() + L" already converted");
+            appendLog(state, L"[skip] " + options.inputFile.wstring() +
+                             L" already converted (" + *reason + L")\r\n");
             continue;
         }
         if (sourceFilter.has_value() && !matchesSourceOverride(options.inputFile, *sourceFilter)) {
@@ -1188,6 +1450,15 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
         const std::wstring command = buildSingleCommand(options, paths, &reservedOutputPaths);
         jobs.push_back({index, inputs.size(), options, paths, command});
     }
+    setStatus(state, L"Batch: launching workers");
+    pumpPendingUiMessages();
+    if (jobs.empty()) {
+        const std::wstring done = L"Batch done: ok=0 fail=" + std::to_wstring(failed) +
+                                  L" skip=" + std::to_wstring(skipped);
+        setStatus(state, done);
+        appendLog(state, done + L"\r\n");
+        return;
+    }
 
     const std::size_t workerCount = batchWorkerCount(jobs.size());
     if (workerCount > 1) {
@@ -1196,15 +1467,26 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     if (!baseOptions.debugReports) {
         appendLog(state, L"Debug JSON off: batch writes charts only.\r\n");
     }
+    appendProgress(state, static_cast<std::size_t>(skipped + failed), inputs.size(), L"Batch");
+    UpdateWindow(state.hwnd);
 
     std::deque<std::future<BatchJobResult>> running;
     auto launchJob = [&](const BatchJob& job) {
         running.push_back(std::async(std::launch::async, runBatchJob, job));
     };
     auto collectOne = [&]() {
+        while (running.front().wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
+            pumpPendingUiMessages();
+            Sleep(10);
+        }
         auto result = running.front().get();
         running.pop_front();
         applyBatchJobResult(state, result, succeeded, failed);
+        appendProgress(state,
+                       static_cast<std::size_t>(succeeded + failed + skipped),
+                       inputs.size(),
+                       L"Batch");
+        UpdateWindow(state.hwnd);
     };
 
     for (const auto& job : jobs) {
@@ -1219,6 +1501,7 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
 
     std::wostringstream done;
     done << L"Batch done: ok=" << succeeded << L" fail=" << failed << L" skip=" << skipped;
+    setStatus(state, done.str());
     appendLog(state, done.str() + L"\r\n");
     if (failed > 0) {
         MessageBoxW(state.hwnd, done.str().c_str(), L"KeyWeaver batch", MB_ICONWARNING);
@@ -1240,22 +1523,12 @@ void loadDroppedFiles(AppState& state,
     for (auto& file : files) {
         file = absolutePath(file);
     }
-    const auto loadedCount = files.size();
-    if (kGuiBatchLocked && files.size() > 1) {
-        files.resize(1);
-    }
     state.batchInputs = files;
     setInputText(state, files.front().wstring());
     setWindowText(state.outputDirEdit, files.front().parent_path().wstring());
     updateDetectedSource(state);
     appendLog(state, L"\r\nLoaded dropped chart(s): " + std::to_wstring(files.size()) + L"\r\n");
-    if (kGuiBatchLocked && loadedCount > 1) {
-        appendLog(state, L"Batch is locked in this tester build; extra dropped charts were ignored.\r\n");
-        MessageBoxW(state.hwnd,
-                    L"Batch is locked in this tester build. Loaded the first chart only.",
-                    L"KeyWeaver GUI",
-                    MB_ICONINFORMATION);
-    } else if (files.size() > 1) {
+    if (files.size() > 1) {
         appendLog(state, L"Output field is blank: each chart writes beside its original file.\r\n");
     }
 
@@ -1366,24 +1639,25 @@ void createUi(AppState& state) {
 
     makeControl(state, L"BUTTON", L"Convert", BS_PUSHBUTTON, editX, y, 96, 28, kButtonConvert);
     state.batchButton = makeControl(state, L"BUTTON", L"Batch", BS_PUSHBUTTON, editX + 104, y, 96, 28, kButtonBatch);
-    if (kGuiBatchLocked) {
-        EnableWindow(state.batchButton, FALSE);
-    }
     makeControl(state, L"BUTTON", L"Matrix", BS_PUSHBUTTON, editX + 208, y, 86, 28, kButtonMatrix);
     makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, editX + 302, y, 112, 28, kButtonOpenOutput);
     makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, editX + 422, y, 104, 28, kButtonOpenReport);
     makeControl(state, L"BUTTON", L"Copy CLI", BS_PUSHBUTTON, editX + 534, y, 90, 28, kButtonCopyCommand);
-    y += 42;
+    y += 36;
+
+    makeControl(state, L"STATIC", L"Status", 0, labelX, y + 4, 100, 20, -1);
+    state.statusLabel = makeControl(state, L"STATIC", L"Ready", 0, editX, y + 4, 644, 20, kStaticStatus);
+    y += 30;
 
     makeControl(state, L"STATIC", L"Report / Matrix", 0, labelX, y + 4, 100, 20, -1);
     state.summaryList = makeControl(state, L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_HSCROLL,
-                                    editX, y, 644, 130, kListSummary, WS_EX_CLIENTEDGE);
-    y += 142;
+                                    editX, y, 644, 118, kListSummary, WS_EX_CLIENTEDGE);
+    y += 130;
 
     makeControl(state, L"STATIC", L"Log", 0, labelX, y + 4, 100, 20, -1);
     state.logEdit = makeControl(state, L"EDIT", L"", ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
                                                    ES_READONLY | WS_VSCROLL | WS_HSCROLL,
-                                editX, y, 644, 190, kEditLog, WS_EX_CLIENTEDGE);
+                                editX, y, 644, 172, kEditLog, WS_EX_CLIENTEDGE);
 
     const auto exe = preferredKeyWeaverExe();
     setWindowText(state.keyconvEdit, exe.wstring());
@@ -1529,7 +1803,8 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
     UpdateWindow(hwnd);
     if (!initialInputs.empty()) {
         loadDroppedFiles(state, initialInputs, false);
-        appendLog(state, L"Choose Target keys, then press Convert. Batch is locked in this tester build.\r\n");
+        appendLog(state, L"Choose Target keys, then press Convert or Batch.\r\n");
+        setStatus(state, L"Ready");
     }
 
     MSG msg{};

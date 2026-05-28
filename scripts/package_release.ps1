@@ -103,6 +103,8 @@ try {
     foreach ($dir in @("samples", "profiles", "docs")) {
         Copy-Item -LiteralPath (Join-Path $Root $dir) -Destination (Join-Path $PackageDir $dir) -Recurse
     }
+    Get-ChildItem -LiteralPath (Join-Path $PackageDir "samples") -Filter "* KeyWeaver*.osu" -File |
+        Remove-Item -Force
     $PackageScriptsDir = Join-Path $PackageDir "scripts"
     New-Item -ItemType Directory -Force $PackageScriptsDir | Out-Null
     foreach ($scriptFile in @("build_target_k_profile.py", "package_release.ps1", "u_e_10k_curated_patterns.txt")) {
@@ -115,11 +117,11 @@ KeyWeaver v$Version Windows x64 package
 Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keyconv_gui.exe when both files are in this folder.
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
-Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert.
-GUI Batch is locked in this tester build; convert one chart at a time.
+Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
+GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
 Source override is passed to GUI conversions.
-Dropping files onto an already-open GUI window uses the current Target field; multi-file drops load the first supported chart only.
-CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart.
+Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
+CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart and auto-detects CPU worker count.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
 The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family output extension.
 Gesture Rail is on by default; use --gesture-rail off to compare older lane scoring.
@@ -137,7 +139,7 @@ Normal-mode algorithm contract: docs/algorithm-lock-v0.6.0.md
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -156,8 +158,11 @@ $($RuntimeDlls -join "`n")
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target 10 --dry-run *> (Join-Path $SmokeDir "batch_cli.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "CLI batch dry-run smoke failed" }
     $BatchSmokeText = Get-Content -LiteralPath (Join-Path $SmokeDir "batch_cli.console.txt") -Raw
-    if ($BatchSmokeText -notmatch "Batch summary: succeeded=2 failed=0") {
+    if ($BatchSmokeText -notmatch "Batch summary: succeeded=2 failed=0 skipped=0") {
         throw "CLI batch dry-run smoke failed without the expected summary"
+    }
+    if ($BatchSmokeText -notmatch "Progress: 100% done, 0 left") {
+        throw "CLI batch dry-run smoke failed without the expected progress output"
     }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 10 --expansion-policy auto-low --dry-run *> (Join-Path $SmokeDir "auto_low.console.txt")
@@ -181,6 +186,35 @@ $($RuntimeDlls -join "`n")
     $DifficultyMarkerText = Get-Content -LiteralPath $DifficultyMarkerOut -Raw
     if ($DifficultyMarkerText -notmatch "Version:4K KeyWeaver10K-sRan \(more\)") {
         throw "difficulty marker smoke failed without the expected Version marker"
+    }
+
+    $ReconvertGuardLog = Join-Path $SmokeDir "reconvert_guard_single.console.txt"
+    $ReconvertGuardStdout = Join-Path $SmokeDir "reconvert_guard_single.stdout.tmp"
+    $ReconvertGuardStderr = Join-Path $SmokeDir "reconvert_guard_single.stderr.tmp"
+    $QuotedDifficultyMarkerOut = '"' + ($DifficultyMarkerOut -replace '"', '\"') + '"'
+    $ReconvertGuardProcess = Start-Process -FilePath $Exe `
+        -ArgumentList @($QuotedDifficultyMarkerOut, "--target", "7", "--dry-run") `
+        -WorkingDirectory $PackageDir `
+        -Wait `
+        -PassThru `
+        -NoNewWindow `
+        -RedirectStandardOutput $ReconvertGuardStdout `
+        -RedirectStandardError $ReconvertGuardStderr
+    $ReconvertGuardExit = $ReconvertGuardProcess.ExitCode
+    $ReconvertGuardText = ((Get-Content -LiteralPath $ReconvertGuardStdout -Raw -ErrorAction SilentlyContinue) +
+                           (Get-Content -LiteralPath $ReconvertGuardStderr -Raw -ErrorAction SilentlyContinue))
+    Set-Content -LiteralPath $ReconvertGuardLog -Value $ReconvertGuardText -Encoding UTF8
+    Remove-Item -LiteralPath $ReconvertGuardStdout, $ReconvertGuardStderr -Force -ErrorAction SilentlyContinue
+    if ($ReconvertGuardExit -eq 0) { throw "reconversion guard single smoke unexpectedly succeeded" }
+    if ($ReconvertGuardText -notmatch "already-converted chart marker") {
+        throw "reconversion guard single smoke failed without the expected guard message"
+    }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") $DifficultyMarkerOut --target 10 --dry-run *> (Join-Path $SmokeDir "reconvert_guard_batch.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "reconversion guard batch smoke failed" }
+    $ReconvertGuardBatchText = Get-Content -LiteralPath (Join-Path $SmokeDir "reconvert_guard_batch.console.txt") -Raw
+    if ($ReconvertGuardBatchText -notmatch "Batch summary: succeeded=1 failed=0 skipped=1") {
+        throw "reconversion guard batch smoke failed without the expected skip summary"
     }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --expansion-policy preserve-tap-plus --dry-run --report (Join-Path $SmokeDir "profile_4k_to_10k.report.json") *> (Join-Path $SmokeDir "profile_4k_to_10k.console.txt")

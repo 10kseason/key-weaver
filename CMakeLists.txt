@@ -56,6 +56,7 @@ endif()
 if(WIN32)
     add_executable(keyconv_gui src/gui_win32.cpp)
     target_compile_features(keyconv_gui PRIVATE cxx_std_20)
+    target_include_directories(keyconv_gui PRIVATE include)
     target_link_libraries(keyconv_gui PRIVATE comdlg32 shell32 ole32 user32 gdi32)
 endif()
 

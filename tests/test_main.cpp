@@ -14,6 +14,7 @@
 #include "exporter/osu.hpp"
 #include "parser/bms.hpp"
 #include "parser/osu.hpp"
+#include "keyconv/reconvert_guard.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -3636,6 +3637,33 @@ void testDifficultyNameMarksExpansionAndStreamTransform() {
             "jitter low conversion should be visible in osu difficulty name");
 }
 
+void testConvertedChartMarkerGuard() {
+    using keyconv::ConvertedChartMarkerKind;
+
+    require(keyconv::convertedChartMarkerKind(std::string_view("Song [A7K]")) ==
+                ConvertedChartMarkerKind::AKey,
+            "A7K marker should be detected");
+    require(keyconv::convertedChartMarkerKind(std::string_view("Song (a10K)")) ==
+                ConvertedChartMarkerKind::AKey,
+            "a10K marker should be detected");
+    require(keyconv::convertedChartMarkerKind(std::string_view("Song [4to7c]")) ==
+                ConvertedChartMarkerKind::ToKeyC,
+            "4to7c marker should be detected");
+    require(keyconv::convertedChartMarkerKind(std::string_view("Song [7 to 10 c]")) ==
+                ConvertedChartMarkerKind::ToKeyC,
+            "spaced 7 to 10 c marker should be detected");
+    require(keyconv::convertedChartMarkerKind(std::string_view("Song (4K10C)")) ==
+                ConvertedChartMarkerKind::KeyC,
+            "4K10C marker should be detected");
+    require(keyconv::convertedChartMarkerKind(std::wstring_view(L"KeyWeaver10K")) ==
+                ConvertedChartMarkerKind::KeyWeaver,
+            "KeyWeaver marker should be detected for GUI wide strings");
+    require(!keyconv::hasConvertedChartMarker(std::string_view("mania10k")),
+            "plain mania10k text should not trip the aNK guard");
+    require(!keyconv::hasConvertedChartMarker(std::string_view("Simple 10K")),
+            "plain source key labels should not be treated as converted markers");
+}
+
 }  // namespace
 
 int main() {
@@ -3765,6 +3793,7 @@ int main() {
         {"full jitter offsets same-time chords", testFullJitterOffsetsSameTimeChords},
         {"difficulty name marks expansion and stream transform",
          testDifficultyNameMarksExpansionAndStreamTransform},
+        {"converted chart marker guard", testConvertedChartMarkerGuard},
     };
 
     try {

@@ -47,6 +47,7 @@ constexpr int kStaticDetected = 118;
 constexpr int kButtonBatch = 119;
 constexpr int kCheckPreserveConvert = 120;
 constexpr int kCheckDebugReports = 121;
+constexpr bool kGuiBatchLocked = true;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -97,6 +98,7 @@ struct AppState {
     HWND streamProfileCombo = nullptr;
     HWND preserveConvertCheck = nullptr;
     HWND debugReportsCheck = nullptr;
+    HWND batchButton = nullptr;
     HWND detectedLabel = nullptr;
     HWND summaryList = nullptr;
     HWND logEdit = nullptr;
@@ -1108,6 +1110,15 @@ void applyBatchJobResult(AppState& state, const BatchJobResult& result, int& suc
 }
 
 void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
+    if (kGuiBatchLocked) {
+        appendLog(state, L"\r\nBatch is locked in this tester build. Use Convert for one chart at a time.\r\n");
+        MessageBoxW(state.hwnd,
+                    L"Batch is locked in this tester build. Use Convert for one chart at a time.",
+                    L"KeyWeaver GUI",
+                    MB_ICONINFORMATION);
+        return;
+    }
+
     auto baseOptions = readToolOptions(state);
     auto inputs = chooseFolderFirst ? chooseBatchFolderInputs(state) : batchInputsForState(state);
     const auto inputText = trim(getWindowText(state.inputEdit));
@@ -1229,16 +1240,22 @@ void loadDroppedFiles(AppState& state,
     for (auto& file : files) {
         file = absolutePath(file);
     }
+    const auto loadedCount = files.size();
+    if (kGuiBatchLocked && files.size() > 1) {
+        files.resize(1);
+    }
     state.batchInputs = files;
     setInputText(state, files.front().wstring());
-    if (files.size() == 1) {
-        setWindowText(state.outputDirEdit, files.front().parent_path().wstring());
-    } else {
-        setWindowText(state.outputDirEdit, L"");
-    }
+    setWindowText(state.outputDirEdit, files.front().parent_path().wstring());
     updateDetectedSource(state);
     appendLog(state, L"\r\nLoaded dropped chart(s): " + std::to_wstring(files.size()) + L"\r\n");
-    if (files.size() > 1) {
+    if (kGuiBatchLocked && loadedCount > 1) {
+        appendLog(state, L"Batch is locked in this tester build; extra dropped charts were ignored.\r\n");
+        MessageBoxW(state.hwnd,
+                    L"Batch is locked in this tester build. Loaded the first chart only.",
+                    L"KeyWeaver GUI",
+                    MB_ICONINFORMATION);
+    } else if (files.size() > 1) {
         appendLog(state, L"Output field is blank: each chart writes beside its original file.\r\n");
     }
 
@@ -1348,7 +1365,10 @@ void createUi(AppState& state) {
     y += 32;
 
     makeControl(state, L"BUTTON", L"Convert", BS_PUSHBUTTON, editX, y, 96, 28, kButtonConvert);
-    makeControl(state, L"BUTTON", L"Batch", BS_PUSHBUTTON, editX + 104, y, 96, 28, kButtonBatch);
+    state.batchButton = makeControl(state, L"BUTTON", L"Batch", BS_PUSHBUTTON, editX + 104, y, 96, 28, kButtonBatch);
+    if (kGuiBatchLocked) {
+        EnableWindow(state.batchButton, FALSE);
+    }
     makeControl(state, L"BUTTON", L"Matrix", BS_PUSHBUTTON, editX + 208, y, 86, 28, kButtonMatrix);
     makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, editX + 302, y, 112, 28, kButtonOpenOutput);
     makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, editX + 422, y, 104, 28, kButtonOpenReport);
@@ -1509,7 +1529,7 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
     UpdateWindow(hwnd);
     if (!initialInputs.empty()) {
         loadDroppedFiles(state, initialInputs, false);
-        appendLog(state, L"Choose Target keys, then press Convert or Batch.\r\n");
+        appendLog(state, L"Choose Target keys, then press Convert. Batch is locked in this tester build.\r\n");
     }
 
     MSG msg{};

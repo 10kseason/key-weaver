@@ -31,7 +31,7 @@ Current scope:
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
 - v0.6.0 algorithm lock is documented at `docs/algorithm-lock-v0.6.0.md`, freezing the current generated-note, jack, LN, stream-transform, and safety contracts
-- v0.6.0 GUI Batch prompts for a songs/root folder, recursively converts `.osu` charts, and filters folder batches by Source override `CircleSize` when set
+- v0.6.0 GUI Batch is temporarily locked in tester builds; use single-chart Convert while batch conversion is reworked
 - v0.6.0 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
 - v0.5.8 high-key generated-note presets use 10%/15%/20% low/normal/more budgets, 8K+ additions prefer 8th-beat slices with 16th-beat fallback, suppress additions on 32nd-or-faster even-key stairs, reduce outer-lane fill pressure, preserve long source jacks on one lane, and limit generated LNs to 8th-to-16th durations
 - v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus deterministic stream transforms (`superrandom`, `full-jitter`)
@@ -222,12 +222,12 @@ GUI scope:
 ```text
 - select input .osu or BMS-family chart
 - output beside the input chart by default, with optional folder override
-- drag one or more chart files onto an already-open GUI window to convert with the current Target field
-- drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads them so Target can be set before conversion
-- optional source-key override and target key; Source override filters GUI folder batches to matching `.osu` `CircleSize` values and is also passed to conversion
+- drag a chart file onto an already-open GUI window to convert with the current Target field
+- drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads the first chart so Target can be set before conversion
+- optional source-key override and target key
 - choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
 - run one conversion and parse report JSON
-- press Batch to choose a songs/root folder and recursively convert matching `.osu` files; dropped multi-file batches still convert the loaded files
+- GUI Batch is temporarily locked in tester builds; convert one chart at a time
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
 - open output/report and copy the generated CLI command
 ```
@@ -244,7 +244,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - `--optimizer beam`, `--style dp`, and `--dp` are accepted as reserved options and report a fallback warning.
 - Strong compression can drop or roll notes under no-overlap policies. Default high-to-low `auto` compression uses `no-overlap-drop`, so overflow taps or holds are omitted when the target key count cannot represent the source chord/LN occupancy cleanly. This prioritizes low-key recreation over preserving every object. Use explicit `--compress-policy no-overlap-hybrid` to roll overflow holds when possible, or `--compress-policy no-overlap-roll` when tap overflow should also be rolled instead of deleted.
 - Converted osu!mania difficulty names append a KeyWeaver mode marker. The base is `KeyWeaverNK`, where `N` is the target key count, and high-key auto expansion adds `(more)`, `(normal)`, or `(low)`. Stream transforms add `-sRan` or `-jitter`, for example `KeyWeaver10K-sRan (more)` or `KeyWeaver10K-jitter (low)`. If `--out` is omitted, the `.osu` is written beside the input using the same marker and a numeric suffix when needed.
-- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. Pressing Batch opens a folder picker, recursively scans that folder for `.osu`, and writes each converted chart beside its own source unless Output is set. When Source override is set, folder batch skips `.osu` charts whose `CircleSize` does not match it.
+- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. GUI Batch is temporarily locked in tester builds; multi-file drops load only the first supported chart.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
 - If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. High-key auto presets target generated-note budgets of `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%; explicit `--expansion-policy preserve` disables deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.

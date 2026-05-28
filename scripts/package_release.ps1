@@ -115,10 +115,10 @@ KeyWeaver v$Version Windows x64 package
 Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keyconv_gui.exe when both files are in this folder.
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
-Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
-Press Batch in the GUI to choose a songs/root folder; it recursively converts matching .osu files and writes beside each original file when Output is blank.
-Source override filters GUI folder batches by .osu CircleSize before conversion.
-Dropping files onto an already-open GUI window uses the current Target field; multiple dropped files still write beside each original file when Output is blank.
+Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert.
+GUI Batch is locked in this tester build; convert one chart at a time.
+Source override is passed to GUI conversions.
+Dropping files onto an already-open GUI window uses the current Target field; multi-file drops load the first supported chart only.
 CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
 The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family output extension.

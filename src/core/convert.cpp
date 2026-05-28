@@ -9,6 +9,7 @@
 #include "core/optimizer.hpp"
 #include "core/quality.hpp"
 #include "core/repeat.hpp"
+#include "core/slice.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -63,6 +64,178 @@ std::vector<int> lanesForStyle(const Note& note, const ConvertOptions& options) 
     }
 
     return {mapLaneDirect(sourceLane, options.sourceKeyCount, options.targetKeyCount)};
+}
+
+bool eightKeySixLaneFastStairVacancyActive(const ConvertOptions& options) {
+    return options.sourceKeyCount == 6 && options.targetKeyCount == 8 &&
+           options.targetKeyCount > options.sourceKeyCount;
+}
+
+double beatLengthAtOrFallback(int time, std::vector<TimingPoint> timingPoints) {
+    std::stable_sort(timingPoints.begin(), timingPoints.end(), [](const TimingPoint& lhs, const TimingPoint& rhs) {
+        return lhs.time < rhs.time;
+    });
+
+    double beatLength = 500.0;
+    for (const auto& point : timingPoints) {
+        if (point.beatLength <= 0.0 || (point.uninherited.has_value() && !*point.uninherited)) {
+            continue;
+        }
+        if (point.time <= time) {
+            beatLength = point.beatLength;
+        } else {
+            break;
+        }
+    }
+    return beatLength;
+}
+
+std::optional<std::size_t> singleTapIndexForSlice(const TimeSlice& slice, const std::vector<Note>& notes) {
+    if (slice.noteIndices.size() != 1 || slice.noteIndices.front() >= notes.size()) {
+        return std::nullopt;
+    }
+    const auto noteIndex = slice.noteIndices.front();
+    return notes[noteIndex].type == NoteType::Tap ? std::optional<std::size_t>{noteIndex} : std::nullopt;
+}
+
+std::optional<int> sourceLaneForNoteIndex(const std::vector<Note>& notes, std::size_t noteIndex, int sourceKeyCount) {
+    if (noteIndex >= notes.size()) {
+        return std::nullopt;
+    }
+    const int sourceLane = notes[noteIndex].sourceLane.value_or(notes[noteIndex].lane);
+    if (sourceLane < 0 || sourceLane >= sourceKeyCount) {
+        return std::nullopt;
+    }
+    return sourceLane;
+}
+
+bool fastThirtySecondGap(int earlierTime,
+                         int laterTime,
+                         const std::vector<TimingPoint>& timingPoints,
+                         const ConvertOptions& options) {
+    const int gap = laterTime - earlierTime;
+    if (gap <= 0) {
+        return false;
+    }
+    const int maxGap = static_cast<int>(std::ceil(beatLengthAtOrFallback(laterTime, timingPoints) / 8.0)) +
+                       std::max(2, options.expansionSnapToleranceMs);
+    return gap <= maxGap;
+}
+
+std::optional<int> eightKeySixLaneFastStairLane(int sourceLane) {
+    constexpr int kLaneMap[] = {0, 2, 3, 4, 5, 7};
+    if (sourceLane < 0 || sourceLane >= static_cast<int>(sizeof(kLaneMap) / sizeof(kLaneMap[0]))) {
+        return std::nullopt;
+    }
+    return kLaneMap[sourceLane];
+}
+
+bool relaneWouldConflict(const std::vector<Note>& notes, std::size_t movingIndex, const Note& moved, int lane) {
+    for (std::size_t index = 0; index < notes.size(); ++index) {
+        if (index == movingIndex) {
+            continue;
+        }
+        const auto& other = notes[index];
+        if (other.lane != lane) {
+            continue;
+        }
+        if (other.time == moved.time) {
+            return true;
+        }
+        if (other.type == NoteType::Hold && other.endTime.has_value() &&
+            moved.time > other.time && moved.time <= *other.endTime) {
+            return true;
+        }
+        if (moved.type == NoteType::Hold && moved.endTime.has_value() &&
+            other.time > moved.time && other.time <= *moved.endTime) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int applyEightKeyFastStairSymmetricVacancies(std::vector<Note>& notes,
+                                             const ConvertOptions& options,
+                                             const std::vector<TimingPoint>& timingPoints) {
+    if (!eightKeySixLaneFastStairVacancyActive(options) || notes.size() < 3) {
+        return 0;
+    }
+
+    Chart sliced;
+    sliced.notes = notes;
+    const auto slices = buildTimeSlices(sliced, options.targetKeyCount, options.sameTimeEpsilonMs);
+    std::set<std::size_t> fastStairNoteIndices;
+    for (std::size_t index = 0; index + 2 < slices.size(); ++index) {
+        const auto noteA = singleTapIndexForSlice(slices[index], notes);
+        const auto noteB = singleTapIndexForSlice(slices[index + 1], notes);
+        const auto noteC = singleTapIndexForSlice(slices[index + 2], notes);
+        if (!noteA.has_value() || !noteB.has_value() || !noteC.has_value()) {
+            continue;
+        }
+        const auto laneA = sourceLaneForNoteIndex(notes, *noteA, options.sourceKeyCount);
+        const auto laneB = sourceLaneForNoteIndex(notes, *noteB, options.sourceKeyCount);
+        const auto laneC = sourceLaneForNoteIndex(notes, *noteC, options.sourceKeyCount);
+        if (!laneA.has_value() || !laneB.has_value() || !laneC.has_value()) {
+            continue;
+        }
+        const int firstDelta = *laneB - *laneA;
+        const int secondDelta = *laneC - *laneB;
+        if (firstDelta == 0 || secondDelta == 0 || (firstDelta > 0) != (secondDelta > 0)) {
+            continue;
+        }
+        if (!fastThirtySecondGap(slices[index].time, slices[index + 1].time, timingPoints, options) ||
+            !fastThirtySecondGap(slices[index + 1].time, slices[index + 2].time, timingPoints, options)) {
+            continue;
+        }
+        std::size_t runStart = index;
+        while (runStart > 0) {
+            const auto previous = singleTapIndexForSlice(slices[runStart - 1], notes);
+            const auto current = singleTapIndexForSlice(slices[runStart], notes);
+            if (!previous.has_value() || !current.has_value() ||
+                !fastThirtySecondGap(slices[runStart - 1].time, slices[runStart].time, timingPoints, options)) {
+                break;
+            }
+            --runStart;
+        }
+
+        std::size_t runEnd = index + 2;
+        while (runEnd + 1 < slices.size()) {
+            const auto current = singleTapIndexForSlice(slices[runEnd], notes);
+            const auto next = singleTapIndexForSlice(slices[runEnd + 1], notes);
+            if (!current.has_value() || !next.has_value() ||
+                !fastThirtySecondGap(slices[runEnd].time, slices[runEnd + 1].time, timingPoints, options)) {
+                break;
+            }
+            ++runEnd;
+        }
+
+        for (std::size_t runIndex = runStart; runIndex <= runEnd; ++runIndex) {
+            const auto noteIndex = singleTapIndexForSlice(slices[runIndex], notes);
+            if (noteIndex.has_value()) {
+                fastStairNoteIndices.insert(*noteIndex);
+            }
+        }
+    }
+
+    int changed = 0;
+    for (const auto noteIndex : fastStairNoteIndices) {
+        const auto sourceLane = sourceLaneForNoteIndex(notes, noteIndex, options.sourceKeyCount);
+        if (!sourceLane.has_value()) {
+            continue;
+        }
+        const auto targetLane = eightKeySixLaneFastStairLane(*sourceLane);
+        if (!targetLane.has_value() || notes[noteIndex].lane == *targetLane) {
+            continue;
+        }
+        Note moved = notes[noteIndex];
+        moved.lane = *targetLane;
+        if (relaneWouldConflict(notes, noteIndex, moved, *targetLane)) {
+            continue;
+        }
+        notes[noteIndex].lane = *targetLane;
+        ++changed;
+    }
+    return changed;
 }
 
 bool createsSourceDifferentRepeat(const std::vector<Note>& placed,
@@ -960,6 +1133,10 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
         preventedJacksByAssignment += optimized.preventedJacksByAssignment;
         preventedJacksByRepair += optimized.preventedJacksByRepair;
         placed = std::move(optimized.notes);
+    }
+
+    if (applyEightKeyFastStairSymmetricVacancies(placed, options, chart.timingPoints) > 0) {
+        placed = sortedNotes(std::move(placed));
     }
 
     createdJacksFromBaseMapping =

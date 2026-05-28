@@ -3352,6 +3352,55 @@ void testEvenKeyFastThirtySecondStairSuppressesAdditions() {
             "32nd-or-faster even-key stair slices should suppress generated notes");
 }
 
+void testEightKeyFastSixLaneStairKeepsSymmetricVacancies() {
+    auto chart = makeChart(6,
+                           {
+                               {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1062, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1125, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1187, 3, keyconv::NoteType::Tap, std::nullopt},
+                               {1250, 4, keyconv::NoteType::Tap, std::nullopt},
+                               {1312, 5, keyconv::NoteType::Tap, std::nullopt},
+                               {1375, 4, keyconv::NoteType::Tap, std::nullopt},
+                               {1437, 3, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1562, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1625, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1687, 1, keyconv::NoteType::Tap, std::nullopt},
+                           });
+    addTimingPoint(chart);
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 6;
+    options.targetKeyCount = 8;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+    options.maxAddedPerSlice = 2;
+
+    const auto result = keyconv::convertChart(chart, options);
+    std::set<int> usedLanes;
+    for (const auto& note : result.chart.notes) {
+        if (note.id.rfind("gen:", 0) == 0) {
+            continue;
+        }
+        usedLanes.insert(note.lane);
+    }
+
+    const std::set<int> expected{0, 2, 3, 4, 5, 7};
+    std::string actualLanes;
+    for (const int lane : usedLanes) {
+        if (!actualLanes.empty()) {
+            actualLanes += ",";
+        }
+        actualLanes += std::to_string(lane);
+    }
+    require(usedLanes == expected,
+            "6K to 8K fast stair should leave lanes 2 and 7 empty in one-indexed 8K; actual=" +
+                actualLanes);
+    require(result.report.quality.addedNotes == 0,
+            "8K fast stair symmetric-vacancy fixture should still suppress generated notes");
+}
+
 void testEvenKeyLeftOnlyAdditionsStayLeftHand() {
     auto chart = makeChart(4,
                            {
@@ -3654,6 +3703,8 @@ int main() {
         {"chord-embedded long source jack stays single lane playable",
          testChordEmbeddedLongSourceJackStaysSingleLanePlayable},
         {"even-key fast 32nd stair suppresses additions", testEvenKeyFastThirtySecondStairSuppressesAdditions},
+        {"8K fast 6-lane stair keeps symmetric vacancies",
+         testEightKeyFastSixLaneStairKeepsSymmetricVacancies},
         {"even-key left-only additions stay left hand", testEvenKeyLeftOnlyAdditionsStayLeftHand},
         {"stream superrandom relanes every note", testStreamSuperRandomRelanesEveryNote},
         {"stream superrandom keeps chord distinct", testStreamSuperRandomKeepsChordDistinct},

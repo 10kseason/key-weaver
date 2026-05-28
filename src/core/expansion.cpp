@@ -362,9 +362,39 @@ std::set<int> fastStairSuppressedTimes(const std::vector<Note>& notes,
         const int maxGapBC = static_cast<int>(std::ceil(beatLengthAtOrFallback(timeC, timingPoints) / 8.0)) +
                              std::max(2, options.expansionSnapToleranceMs);
         if (gapAB <= maxGapAB && gapBC <= maxGapBC) {
-            suppressed.insert(timeA);
-            suppressed.insert(timeB);
-            suppressed.insert(timeC);
+            std::size_t runStart = index;
+            while (runStart > 0 &&
+                   singleSourceLaneForSlice(slices[runStart - 1], notes).has_value() &&
+                   singleSourceLaneForSlice(slices[runStart], notes).has_value()) {
+                const int leftTime = slices[runStart - 1].time;
+                const int rightTime = slices[runStart].time;
+                const int maxGap =
+                    static_cast<int>(std::ceil(beatLengthAtOrFallback(rightTime, timingPoints) / 8.0)) +
+                    std::max(2, options.expansionSnapToleranceMs);
+                if (rightTime - leftTime <= 0 || rightTime - leftTime > maxGap) {
+                    break;
+                }
+                --runStart;
+            }
+
+            std::size_t runEnd = index + 2;
+            while (runEnd + 1 < slices.size() &&
+                   singleSourceLaneForSlice(slices[runEnd], notes).has_value() &&
+                   singleSourceLaneForSlice(slices[runEnd + 1], notes).has_value()) {
+                const int leftTime = slices[runEnd].time;
+                const int rightTime = slices[runEnd + 1].time;
+                const int maxGap =
+                    static_cast<int>(std::ceil(beatLengthAtOrFallback(rightTime, timingPoints) / 8.0)) +
+                    std::max(2, options.expansionSnapToleranceMs);
+                if (rightTime - leftTime <= 0 || rightTime - leftTime > maxGap) {
+                    break;
+                }
+                ++runEnd;
+            }
+
+            for (std::size_t runIndex = runStart; runIndex <= runEnd; ++runIndex) {
+                suppressed.insert(slices[runIndex].time);
+            }
         }
     }
     return suppressed;

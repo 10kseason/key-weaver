@@ -3104,6 +3104,38 @@ void testTenKeyTapPlusBoostsQuarterEighthDensityAboveEightKey() {
             "10K tap-plus should boost quarter-beat density above the 8K baseline");
 }
 
+void testEightKeyTapPlusReducesOneHandDenimWebAdditions() {
+    auto chart = makeChart(4,
+                           {
+                               {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1250, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1250, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1750, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1750, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {2000, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2250, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {2250, 1, keyconv::NoteType::Tap, std::nullopt},
+                           });
+    addTimingPoint(chart);
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 8;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+    options.maxAddedPerSlice = 2;
+
+    const auto result = keyconv::convertChart(chart, options);
+    require(result.report.quality.addedNotes == 0,
+            "8K tap-plus should skip generated notes that turn a one-hand two-lane chord into a denim web");
+    require(result.report.quality.rejectedExpansionCandidates > 0,
+            "8K denim web guard should reject the unsafe generated-note candidates");
+}
+
 void testHighKeyExtremeTrillAvoidsBothOuterEdges() {
     keyconv::Chart chart;
     chart.meta.sourceKeyCount = 7;
@@ -3552,6 +3584,8 @@ int main() {
         {"high-key tap-plus prefers eighth-beat additions", testHighKeyTapPlusPrefersEighthBeatAdditions},
         {"10K tap-plus boosts quarter-eighth density above 8K",
          testTenKeyTapPlusBoostsQuarterEighthDensityAboveEightKey},
+        {"8K tap-plus reduces one-hand denim web additions",
+         testEightKeyTapPlusReducesOneHandDenimWebAdditions},
         {"high-key extreme trill avoids both outer edges", testHighKeyExtremeTrillAvoidsBothOuterEdges},
         {"long source jack stays single lane playable", testLongSourceJackStaysSingleLanePlayable},
         {"chord-embedded long source jack stays single lane playable",

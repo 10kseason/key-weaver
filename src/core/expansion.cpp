@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <iterator>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -922,6 +923,9 @@ bool candidateLess(const ExpansionCandidate& lhs, const ExpansionCandidate& rhs)
     return lhs.ordinal < rhs.ordinal;
 }
 
+class ExpansionContext;
+bool shouldRejectByDenimWebGuard(const ExpansionCandidate& candidate, const ExpansionContext& context);
+
 class ExpansionContext {
 public:
     ExpansionContext(Chart& convertedChart, const Chart& originalChart, const ConvertOptions& convertOptions)
@@ -961,6 +965,12 @@ public:
         }
 
         if (suppressAddAtTime(candidate.note.time)) {
+            ++stats.rejectedExpansionCandidates;
+            ++stats.rejectedByComposerSafety;
+            return false;
+        }
+
+        if (shouldRejectByDenimWebGuard(candidate, *this)) {
             ++stats.rejectedExpansionCandidates;
             ++stats.rejectedByComposerSafety;
             return false;
@@ -1561,6 +1571,141 @@ int counterHandForSlice(const SliceView& slice, const std::vector<Note>& notes, 
         return 0;
     }
     return -1;
+}
+
+bool denimWebGuardActive(const ConvertOptions& options) {
+    return options.targetKeyCount == 8 && options.targetKeyCount > options.sourceKeyCount;
+}
+
+bool denimWebCandidateType(const ExpansionCandidate& candidate) {
+    return candidate.ruleName == "tap_plus" && candidate.note.type == NoteType::Tap;
+}
+
+std::vector<int> sameTimeHandLanes(const std::vector<Note>& notes,
+                                   int time,
+                                   int hand,
+                                   int targetKeyCount,
+                                   int epsilonMs) {
+    std::set<int> lanes;
+    for (const auto& note : notes) {
+        if (std::abs(note.time - time) > epsilonMs) {
+            continue;
+        }
+        if (note.lane < 0 || note.lane >= targetKeyCount ||
+            handForLane(note.lane, targetKeyCount) != hand) {
+            continue;
+        }
+        lanes.insert(note.lane);
+    }
+    return {lanes.begin(), lanes.end()};
+}
+
+std::vector<int> sameTimeHandLanesWithCandidate(const std::vector<Note>& notes,
+                                                const ExpansionCandidate& candidate,
+                                                const ConvertOptions& options) {
+    const int hand = handForLane(candidate.note.lane, options.targetKeyCount);
+    std::set<int> lanes;
+    const auto current =
+        sameTimeHandLanes(notes, candidate.note.time, hand, options.targetKeyCount, options.sameTimeEpsilonMs);
+    lanes.insert(current.begin(), current.end());
+    if (candidate.note.lane >= 0 && candidate.note.lane < options.targetKeyCount) {
+        lanes.insert(candidate.note.lane);
+    }
+    return {lanes.begin(), lanes.end()};
+}
+
+std::vector<int> previousSameHandChordLanes(const std::vector<Note>& notes,
+                                            int time,
+                                            int hand,
+                                            const ConvertOptions& options,
+                                            const std::vector<TimingPoint>& timingPoints) {
+    const int tolerance = std::max(2, options.expansionSnapToleranceMs);
+    const int windowMs =
+        std::max(125, static_cast<int>(std::ceil(beatLengthAtOrFallback(time, timingPoints) / 2.0)) + tolerance);
+    std::optional<int> bestTime;
+    int bestDelta = std::numeric_limits<int>::max();
+    for (const auto& note : notes) {
+        if (note.lane < 0 || note.lane >= options.targetKeyCount ||
+            handForLane(note.lane, options.targetKeyCount) != hand) {
+            continue;
+        }
+        const int delta = time - note.time;
+        if (delta <= options.sameTimeEpsilonMs || delta > windowMs || delta >= bestDelta) {
+            continue;
+        }
+        bestTime = note.time;
+        bestDelta = delta;
+    }
+    if (!bestTime.has_value()) {
+        return {};
+    }
+    return sameTimeHandLanes(notes, *bestTime, hand, options.targetKeyCount, options.sameTimeEpsilonMs);
+}
+
+bool laneSetsInterleave(const std::vector<int>& lhs, const std::vector<int>& rhs) {
+    if (lhs.size() < 2 || rhs.size() < 2) {
+        return false;
+    }
+    std::set<int> left(lhs.begin(), lhs.end());
+    std::set<int> right(rhs.begin(), rhs.end());
+    std::vector<int> combined;
+    std::set_union(left.begin(), left.end(), right.begin(), right.end(), std::back_inserter(combined));
+    if (combined.size() < 4) {
+        return false;
+    }
+
+    int previousMask = 0;
+    int transitions = 0;
+    for (const int lane : combined) {
+        int mask = 0;
+        if (left.count(lane) > 0) {
+            mask |= 1;
+        }
+        if (right.count(lane) > 0) {
+            mask |= 2;
+        }
+        if (mask == 3) {
+            continue;
+        }
+        if (previousMask != 0 && previousMask != mask) {
+            ++transitions;
+        }
+        previousMask = mask;
+    }
+    if (transitions >= 3) {
+        return true;
+    }
+
+    const bool disjoint = std::none_of(left.begin(), left.end(), [&](int lane) {
+        return right.count(lane) > 0;
+    });
+    if (!disjoint) {
+        return false;
+    }
+    return *left.begin() < *right.rbegin() && *right.begin() < *left.rbegin();
+}
+
+bool shouldRejectByDenimWebGuard(const ExpansionCandidate& candidate, const ExpansionContext& context) {
+    if (!denimWebGuardActive(context.options) || !denimWebCandidateType(candidate)) {
+        return false;
+    }
+    if (candidate.note.lane < 0 || candidate.note.lane >= context.options.targetKeyCount) {
+        return false;
+    }
+
+    const int hand = handForLane(candidate.note.lane, context.options.targetKeyCount);
+    const auto current = sameTimeHandLanesWithCandidate(context.chart.notes, candidate, context.options);
+    if (current.size() >= 3) {
+        return true;
+    }
+
+    const auto previous =
+        previousSameHandChordLanes(context.chart.notes,
+                                   candidate.note.time,
+                                   hand,
+                                   context.options,
+                                   context.original.timingPoints);
+    return laneSetsInterleave(previous, current);
 }
 
 std::vector<LnAnchor> holdAnchorsForSlice(const SliceView& slice, const std::vector<Note>& notes) {

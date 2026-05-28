@@ -1454,6 +1454,103 @@ double mirrorSymmetryScore(const ExpansionContext& context, int lane) {
     return std::max(-8.0, std::min(8.0, static_cast<double>(mirrorUse - laneUse) * 1.75));
 }
 
+int positiveModulo(int value, int divisor) {
+    if (divisor <= 0) {
+        return 0;
+    }
+    const int result = value % divisor;
+    return result < 0 ? result + divisor : result;
+}
+
+int circularDistance(int lhs, int rhs, int width) {
+    if (width <= 0) {
+        return 0;
+    }
+    const int delta = std::abs(lhs - rhs);
+    return std::min(delta, width - delta);
+}
+
+int beatIndexAtOrFallback(int time, const std::vector<TimingPoint>& timingPoints) {
+    const auto grid = explicitGridAt(time, timingPoints);
+    const int gridTime = grid.has_value() ? grid->time : 0;
+    const double beatLength = grid.has_value() && grid->beatLength > 0.0
+                                  ? grid->beatLength
+                                  : static_cast<double>(kFallbackBeatLengthMs);
+    if (beatLength <= 0.0) {
+        return 0;
+    }
+    return static_cast<int>(std::floor((static_cast<double>(time - gridTime) / beatLength) + 1e-6));
+}
+
+int sameTimeHandLaneCountForCandidate(const ExpansionCandidate& candidate, const ExpansionContext& context) {
+    if (candidate.note.lane < 0 || candidate.note.lane >= context.options.targetKeyCount) {
+        return 0;
+    }
+    const int hand = handForLane(candidate.note.lane, context.options.targetKeyCount);
+    std::set<int> lanes;
+    for (const auto& note : context.chart.notes) {
+        if (std::abs(note.time - candidate.note.time) > context.options.sameTimeEpsilonMs) {
+            continue;
+        }
+        if (note.lane < 0 || note.lane >= context.options.targetKeyCount ||
+            handForLane(note.lane, context.options.targetKeyCount) != hand) {
+            continue;
+        }
+        lanes.insert(note.lane);
+    }
+    return static_cast<int>(lanes.size());
+}
+
+double tenKeyDenimBeatShiftScore(const ExpansionCandidate& candidate, const ExpansionContext& context) {
+    if (!tenKeyQuarterEighthDensityActive(context.options) ||
+        candidate.ruleName != "tap_plus" ||
+        candidate.note.type != NoteType::Tap ||
+        sameTimeHandLaneCountForCandidate(candidate, context) < 2) {
+        return 0.0;
+    }
+
+    const int handStart = handForLane(candidate.note.lane, context.options.targetKeyCount) == 0
+                              ? 0
+                              : handBoundary(context.options.targetKeyCount);
+    const int handEnd = handForLane(candidate.note.lane, context.options.targetKeyCount) == 0
+                            ? handBoundary(context.options.targetKeyCount)
+                            : context.options.targetKeyCount;
+    const int handWidth = handEnd - handStart;
+    if (handWidth <= 1) {
+        return 0.0;
+    }
+    const int localLane = candidate.note.lane - handStart;
+    if (localLane < 0 || localLane >= handWidth) {
+        return 0.0;
+    }
+
+    const int beatIndex = beatIndexAtOrFallback(candidate.note.time, context.original.timingPoints);
+    const int globalPreferredLane = positiveModulo(2 + beatIndex, context.options.targetKeyCount);
+    const int panelPreferredLane =
+        handStart + positiveModulo(1 + beatIndex / 2 + (handStart == 0 ? 0 : 2), handWidth);
+
+    const int globalDistance =
+        circularDistance(candidate.note.lane, globalPreferredLane, context.options.targetKeyCount);
+    const int panelDistance = circularDistance(localLane, panelPreferredLane - handStart, handWidth);
+    const int recentWindow =
+        static_cast<int>(std::lround(beatLengthAtOrFallback(candidate.note.time, context.original.timingPoints) * 2.0)) +
+        std::max(2, context.options.expansionSnapToleranceMs);
+    double recentGeneratedLanePenalty = 0.0;
+    for (const auto& note : context.chart.notes) {
+        if (note.lane != candidate.note.lane || note.id.rfind("gen:tap_plus:", 0) != 0) {
+            continue;
+        }
+        const int delta = candidate.note.time - note.time;
+        if (delta > context.options.sameTimeEpsilonMs && delta <= recentWindow) {
+            recentGeneratedLanePenalty = 12.0;
+            break;
+        }
+    }
+    return 10.0 - static_cast<double>(globalDistance) * 2.5 +
+           6.0 - static_cast<double>(panelDistance) * 3.0 -
+           recentGeneratedLanePenalty;
+}
+
 void tuneHighKeyGeneratedCandidate(ExpansionCandidate& candidate, const ExpansionContext& context) {
     if (!highKeyGeneratedTuningActive(context.options)) {
         return;
@@ -1489,6 +1586,7 @@ void tuneHighKeyGeneratedCandidate(ExpansionCandidate& candidate, const Expansio
         }
     }
 
+    candidate.score += tenKeyDenimBeatShiftScore(candidate, context);
     candidate.score += mirrorSymmetryScore(context, candidate.note.lane);
     candidate.score -= lightEdgePenalty(candidate.note.lane, context.options.targetKeyCount);
     candidate.score -= outerEdgeTrillPenalty(context.chart.notes,

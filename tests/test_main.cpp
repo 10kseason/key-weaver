@@ -3104,6 +3104,68 @@ void testTenKeyTapPlusBoostsQuarterEighthDensityAboveEightKey() {
             "10K tap-plus should boost quarter-beat density above the 8K baseline");
 }
 
+void testTenKeyDenimTapPlusShiftsEachBeat() {
+    auto chart = makeChart(4,
+                           {
+                               {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {2000, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2500, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {2500, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {3000, 0, keyconv::NoteType::Tap, std::nullopt},
+                               {3000, 1, keyconv::NoteType::Tap, std::nullopt},
+                           });
+    keyconv::TimingPoint timing;
+    timing.time = 1000;
+    timing.beatLength = 500.0;
+    timing.uninherited = true;
+    chart.timingPoints.push_back(timing);
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+    options.maxAddedNoteRatio = 0.50;
+    options.maxAddedPerSlice = 1;
+
+    const auto result = keyconv::convertChart(chart, options);
+    std::map<int, int> generatedLaneByTime;
+    for (const auto& note : result.chart.notes) {
+        if (note.id.rfind("gen:tap_plus:", 0) == 0) {
+            generatedLaneByTime[note.time] = note.lane;
+        }
+    }
+
+    require(generatedLaneByTime.size() >= 3,
+            "10K denim beat-shift fixture should generate helper notes on multiple beats");
+    require(generatedLaneByTime.count(1000) == 1 &&
+                generatedLaneByTime.count(1500) == 1 &&
+                generatedLaneByTime.count(2000) == 1,
+            "10K denim beat-shift fixture should cover consecutive whole-beat anchors");
+
+    for (const auto& [time, lane] : generatedLaneByTime) {
+        (void)time;
+        require(lane >= 0 && lane < 5,
+                "10K left-hand denim helpers should stay inside the left 5K panel");
+    }
+
+    const std::vector<int> beatAnchors = {1000, 1500, 2000, 2500, 3000};
+    for (std::size_t index = 1; index < beatAnchors.size(); ++index) {
+        const auto previous = generatedLaneByTime.find(beatAnchors[index - 1]);
+        const auto current = generatedLaneByTime.find(beatAnchors[index]);
+        if (previous != generatedLaneByTime.end() && current != generatedLaneByTime.end()) {
+            require(previous->second != current->second,
+                    "10K denim helper should shift on consecutive whole-beat anchors");
+        }
+    }
+    require(generatedLaneByTime.at(1000) != generatedLaneByTime.at(2000),
+            "10K denim helper should also shift the 5K panel phase every two beats");
+}
+
 void testEightKeyTapPlusReducesOneHandDenimWebAdditions() {
     auto chart = makeChart(4,
                            {
@@ -3584,6 +3646,7 @@ int main() {
         {"high-key tap-plus prefers eighth-beat additions", testHighKeyTapPlusPrefersEighthBeatAdditions},
         {"10K tap-plus boosts quarter-eighth density above 8K",
          testTenKeyTapPlusBoostsQuarterEighthDensityAboveEightKey},
+        {"10K denim tap-plus shifts each beat", testTenKeyDenimTapPlusShiftsEachBeat},
         {"8K tap-plus reduces one-hand denim web additions",
          testEightKeyTapPlusReducesOneHandDenimWebAdditions},
         {"high-key extreme trill avoids both outer edges", testHighKeyExtremeTrillAvoidsBothOuterEdges},

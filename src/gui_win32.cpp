@@ -9,14 +9,18 @@
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
+#include <future>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -42,6 +46,7 @@ constexpr int kEditLog = 117;
 constexpr int kStaticDetected = 118;
 constexpr int kButtonBatch = 119;
 constexpr int kCheckPreserveConvert = 120;
+constexpr int kCheckDebugReports = 121;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -58,6 +63,7 @@ struct ToolOptions {
     std::wstring compressPolicy = L"auto";
     std::wstring streamTransform = L"off";
     bool preserveConvert = false;
+    bool debugReports = false;
 };
 
 struct OutputPaths {
@@ -90,6 +96,7 @@ struct AppState {
     HWND compressCombo = nullptr;
     HWND streamProfileCombo = nullptr;
     HWND preserveConvertCheck = nullptr;
+    HWND debugReportsCheck = nullptr;
     HWND detectedLabel = nullptr;
     HWND summaryList = nullptr;
     HWND logEdit = nullptr;
@@ -343,7 +350,9 @@ std::wstring keyWeaverConversionMarker(const ToolOptions& options) {
     return marker;
 }
 
-std::filesystem::path makeOutputBase(const ToolOptions& options, const std::wstring& suffix) {
+std::filesystem::path makeOutputBase(const ToolOptions& options,
+                                     const std::wstring& suffix,
+                                     std::set<std::filesystem::path>* reservedPaths = nullptr) {
     const std::wstring stem = options.inputFile.stem().wstring();
     const auto outputDir = options.outputDir.empty() ? options.inputFile.parent_path() : options.outputDir;
     const auto chartExtension = chartOutputExtension(options);
@@ -365,7 +374,17 @@ std::filesystem::path makeOutputBase(const ToolOptions& options, const std::wstr
         json += L".json";
         std::filesystem::path csv = base;
         csv += L".csv";
-        if (!std::filesystem::exists(chart) && !std::filesystem::exists(json) && !std::filesystem::exists(csv)) {
+        const bool reserved = reservedPaths != nullptr &&
+                              (reservedPaths->count(chart) > 0 ||
+                               reservedPaths->count(json) > 0 ||
+                               reservedPaths->count(csv) > 0);
+        if (!reserved && !std::filesystem::exists(chart) && !std::filesystem::exists(json) &&
+            !std::filesystem::exists(csv)) {
+            if (reservedPaths != nullptr) {
+                reservedPaths->insert(chart);
+                reservedPaths->insert(json);
+                reservedPaths->insert(csv);
+            }
             return base;
         }
     }
@@ -389,12 +408,17 @@ std::wstring expansionPolicyCliValue(const std::wstring& value) {
     return value;
 }
 
-std::wstring buildSingleCommand(const ToolOptions& options, OutputPaths& paths) {
-    const auto base = makeOutputBase(options, L"");
+std::wstring buildSingleCommand(ToolOptions options,
+                                OutputPaths& paths,
+                                std::set<std::filesystem::path>* reservedPaths = nullptr) {
+    const auto base = makeOutputBase(options, L"", reservedPaths);
     paths.outputChart = base;
     paths.outputChart += chartOutputExtension(options);
-    paths.reportJson = base;
-    paths.reportJson += L".json";
+    paths.reportJson.clear();
+    if (options.debugReports) {
+        paths.reportJson = base;
+        paths.reportJson += L".json";
+    }
 
     std::wstring command = quoteArg(options.keyconvExe);
     appendArg(command, quoteArg(options.inputFile));
@@ -419,8 +443,10 @@ std::wstring buildSingleCommand(const ToolOptions& options, OutputPaths& paths) 
     }
     appendArg(command, L"--out");
     appendArg(command, quoteArg(paths.outputChart));
-    appendArg(command, L"--report");
-    appendArg(command, quoteArg(paths.reportJson));
+    if (options.debugReports) {
+        appendArg(command, L"--report");
+        appendArg(command, quoteArg(paths.reportJson));
+    }
     return command;
 }
 
@@ -822,6 +848,8 @@ ToolOptions readToolOptions(const AppState& state) {
     options.streamTransform = comboText(state.streamProfileCombo);
     options.preserveConvert =
         SendMessageW(state.preserveConvertCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    options.debugReports =
+        SendMessageW(state.debugReportsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
     return options;
 }
 
@@ -943,7 +971,12 @@ void executeSingleConvert(AppState& state) {
     }
     state.lastOutputPath = paths.outputChart;
     state.lastReportPath = paths.reportJson;
-    showReportSummary(state, parseReportSummary(paths.reportJson));
+    if (options.debugReports) {
+        showReportSummary(state, parseReportSummary(paths.reportJson));
+    } else {
+        clearSummary(state);
+        addSummaryLine(state, L"Converted. Enable Debug JSON for metrics/report output.");
+    }
     appendLog(state, L"Output: " + paths.outputChart.wstring() + L"\r\n");
 }
 
@@ -1010,6 +1043,70 @@ std::vector<std::filesystem::path> chooseBatchFolderInputs(AppState& state) {
     return collectOsuFilesRecursively(root);
 }
 
+struct BatchJob {
+    std::size_t index = 0;
+    std::size_t total = 0;
+    ToolOptions options;
+    OutputPaths paths;
+    std::wstring command;
+};
+
+struct BatchJobResult {
+    std::size_t index = 0;
+    std::size_t total = 0;
+    std::filesystem::path inputFile;
+    OutputPaths paths;
+    std::wstring command;
+    ProcessResult process;
+    ReportSummary summary;
+};
+
+std::size_t batchWorkerCount(std::size_t jobCount) {
+    if (jobCount <= 1) {
+        return jobCount;
+    }
+    const unsigned hardware = std::thread::hardware_concurrency();
+    const std::size_t workers = hardware == 0 ? 4 : static_cast<std::size_t>(hardware);
+    return std::clamp<std::size_t>(workers, 1, std::min<std::size_t>(8, jobCount));
+}
+
+BatchJobResult runBatchJob(BatchJob job) {
+    BatchJobResult result;
+    result.index = job.index;
+    result.total = job.total;
+    result.inputFile = job.options.inputFile;
+    result.paths = job.paths;
+    result.command = job.command;
+    result.process = runProcess(job.command, job.options.keyconvExe.parent_path());
+    if (result.process.exitCode == 0 && job.options.debugReports && !job.paths.reportJson.empty()) {
+        result.summary = parseReportSummary(job.paths.reportJson);
+    }
+    return result;
+}
+
+void applyBatchJobResult(AppState& state, const BatchJobResult& result, int& succeeded, int& failed) {
+    appendLog(state, L"\r\n[" + std::to_wstring(result.index + 1) + L"/" +
+                     std::to_wstring(result.total) + L"] > " + result.command + L"\r\n");
+    appendLog(state, widen(result.process.output) + L"\r\n");
+    if (result.process.exitCode != 0) {
+        ++failed;
+        addSummaryLine(state, L"[fail] " + result.inputFile.filename().wstring());
+        return;
+    }
+
+    ++succeeded;
+    state.lastCommand = result.command;
+    state.lastOutputPath = result.paths.outputChart;
+    state.lastReportPath = result.paths.reportJson;
+    std::wostringstream line;
+    line << L"[ok] " << result.inputFile.filename().wstring();
+    if (result.summary.valid) {
+        line << L"  notes=" << result.summary.totalNotes << L" added=" << result.summary.addedNotes;
+    }
+    addSummaryLine(state, line.str());
+    appendLog(state, L"Output: " + result.paths.outputChart.wstring() + L"\r\n");
+}
+
 void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     auto baseOptions = readToolOptions(state);
     auto inputs = chooseFolderFirst ? chooseBatchFolderInputs(state) : batchInputsForState(state);
@@ -1041,6 +1138,7 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
 
     const auto forcedOutputDir = explicitOutputDir(state);
     clearSummary(state);
+    state.lastReportPath.clear();
     appendLog(state, L"\r\nBatch convert: " + std::to_wstring(inputs.size()) +
                      L" file(s), target " + baseOptions.targetKeys + L"K\r\n");
     if (sourceFilter.has_value()) {
@@ -1050,6 +1148,9 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     int succeeded = 0;
     int failed = 0;
     int skipped = 0;
+    std::vector<BatchJob> jobs;
+    jobs.reserve(inputs.size());
+    std::set<std::filesystem::path> reservedOutputPaths;
     for (std::size_t index = 0; index < inputs.size(); ++index) {
         ToolOptions options = baseOptions;
         options.inputFile = absolutePath(inputs[index]);
@@ -1073,29 +1174,36 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
         }
 
         OutputPaths paths;
-        const std::wstring command = buildSingleCommand(options, paths);
-        state.lastCommand = command;
-        appendLog(state, L"\r\n[" + std::to_wstring(index + 1) + L"/" +
-                         std::to_wstring(inputs.size()) + L"] > " + command + L"\r\n");
-        const auto result = runProcess(command, options.keyconvExe.parent_path());
-        appendLog(state, widen(result.output) + L"\r\n");
-        if (result.exitCode != 0) {
-            ++failed;
-            addSummaryLine(state, L"[fail] " + options.inputFile.filename().wstring());
-            continue;
-        }
+        const std::wstring command = buildSingleCommand(options, paths, &reservedOutputPaths);
+        jobs.push_back({index, inputs.size(), options, paths, command});
+    }
 
-        ++succeeded;
-        state.lastOutputPath = paths.outputChart;
-        state.lastReportPath = paths.reportJson;
-        const auto summary = parseReportSummary(paths.reportJson);
-        std::wostringstream line;
-        line << L"[ok] " << options.inputFile.filename().wstring();
-        if (summary.valid) {
-            line << L"  notes=" << summary.totalNotes << L" added=" << summary.addedNotes;
+    const std::size_t workerCount = batchWorkerCount(jobs.size());
+    if (workerCount > 1) {
+        appendLog(state, L"Parallel workers: " + std::to_wstring(workerCount) + L"\r\n");
+    }
+    if (!baseOptions.debugReports) {
+        appendLog(state, L"Debug JSON off: batch writes charts only.\r\n");
+    }
+
+    std::deque<std::future<BatchJobResult>> running;
+    auto launchJob = [&](const BatchJob& job) {
+        running.push_back(std::async(std::launch::async, runBatchJob, job));
+    };
+    auto collectOne = [&]() {
+        auto result = running.front().get();
+        running.pop_front();
+        applyBatchJobResult(state, result, succeeded, failed);
+    };
+
+    for (const auto& job : jobs) {
+        while (running.size() >= workerCount) {
+            collectOne();
         }
-        addSummaryLine(state, line.str());
-        appendLog(state, L"Output: " + paths.outputChart.wstring() + L"\r\n");
+        launchJob(job);
+    }
+    while (!running.empty()) {
+        collectOne();
     }
 
     std::wostringstream done;
@@ -1226,8 +1334,17 @@ void createUi(AppState& state) {
                                              180,
                                              22,
                                              kCheckPreserveConvert);
-    makeControl(state, L"STATIC", L"faithful mapping, strict source jacks, no generated notes", 0,
-                editX + 190, y + 2, 420, 20, -1);
+    makeControl(state, L"STATIC", L"faithful mapping, strict source jacks", 0,
+                editX + 190, y + 2, 300, 20, -1);
+    state.debugReportsCheck = makeControl(state,
+                                          L"BUTTON",
+                                          L"Debug JSON",
+                                          BS_AUTOCHECKBOX,
+                                          editX + 500,
+                                          y,
+                                          124,
+                                          22,
+                                          kCheckDebugReports);
     y += 32;
 
     makeControl(state, L"BUTTON", L"Convert", BS_PUSHBUTTON, editX, y, 96, 28, kButtonConvert);
@@ -1410,6 +1527,7 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
     options.keyconvExe = preferredKeyWeaverExe();
     options.inputFile = absolutePath(input);
     options.outputDir = outputDir.empty() ? options.inputFile.parent_path() : absolutePath(outputDir);
+    options.debugReports = true;
     std::filesystem::create_directories(options.outputDir);
 
     OutputPaths singlePaths;
@@ -1423,6 +1541,28 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
     if (!summary.valid || summary.totalNotes <= 0) {
         std::cerr << "GUI smoke failed to parse single-convert report\n";
         return 1;
+    }
+
+    ToolOptions noReportOptions = options;
+    noReportOptions.outputDir = options.outputDir / L"normal_no_json";
+    noReportOptions.debugReports = false;
+    std::filesystem::create_directories(noReportOptions.outputDir);
+    OutputPaths noReportPaths;
+    const auto noReportCommand = buildSingleCommand(noReportOptions, noReportPaths);
+    const auto noReport = runProcess(noReportCommand, noReportOptions.keyconvExe.parent_path());
+    if (noReport.exitCode != 0) {
+        std::cerr << noReport.output;
+        return 1;
+    }
+    if (!noReportPaths.reportJson.empty()) {
+        std::cerr << "GUI smoke expected normal conversion to omit JSON report path\n";
+        return 1;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(noReportOptions.outputDir)) {
+        if (lowerAscii(entry.path().extension().wstring()) == L".json") {
+            std::cerr << "GUI smoke expected normal conversion to skip JSON report output\n";
+            return 1;
+        }
     }
 
     OutputPaths matrixPaths;

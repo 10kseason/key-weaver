@@ -30,6 +30,7 @@ Current scope:
 - v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
+- v0.6.0 algorithm lock is documented at `docs/algorithm-lock-v0.6.0.md`, freezing the current generated-note, jack, LN, stream-transform, and safety contracts
 - v0.6.0 GUI Batch prompts for a songs/root folder, recursively converts `.osu` charts, and filters folder batches by Source override `CircleSize` when set
 - v0.6.0 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
 - v0.5.8 high-key generated-note presets use 10%/15%/20% low/normal/more budgets, 8K+ additions prefer 8th-beat slices with 16th-beat fallback, suppress additions on 32nd-or-faster even-key stairs, reduce outer-lane fill pressure, preserve long source jacks on one lane, and limit generated LNs to 8th-to-16th durations
@@ -50,7 +51,7 @@ Current scope:
 - v0.5.5 profile-guided Adaptive Growth Budget for `preserve-tap-plus`, using 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` Target-K profile windows to open or throttle local fill while keeping a global added-note cap
 - v0.5.5 broad style-profile workflow validated on a 628-chart u_e + CircusGalop 10K reference set, with a sanitized reusable profile committed at `profiles/keyweaver_10k_broad_style_v1.json`
 - v0.5.5 automatically loads the bundled broad 10K style profile for target-10 conversions when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; `--target-profile` overrides it
-- v0.5.5 algorithm lock is documented at `docs/algorithm-lock-v0.5.5.md`; Composer/Repair local pressure is fixed to density-bucket window features, not `chartSummary`
+- v0.5.5 algorithm lock remains historical context at `docs/algorithm-lock-v0.5.5.md`; the current frozen contract is `docs/algorithm-lock-v0.6.0.md`
 
 Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, seeded random remix, burst echo synthesis, or DP stream splitting.
 
@@ -214,7 +215,7 @@ The broad profile scanner accepts osu!mania `CircleSize:10` charts whose `Creato
 
 Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables an adaptive-growth-budget pass: the global added-note cap stays in place, but Composer pressure is based on the 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` features rather than chart-level summaries.
 
-The frozen v0.5.5 algorithm contract is in `docs/algorithm-lock-v0.5.5.md`. Treat it as the baseline for future 10K conversion tuning: any change to bucket selection, local pressure, anchor/coverage balance, or safety guard behavior should update that document and the matching tests.
+The frozen v0.6.0 algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. Treat it as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, jack/LN handling, stream transforms, or safety guard behavior should update that document and the matching tests.
 
 GUI scope:
 

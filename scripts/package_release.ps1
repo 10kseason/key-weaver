@@ -132,7 +132,7 @@ Use --stream-transform superrandom for deterministic per-note random lane assign
 Use --seed to vary deterministic stream-transform output.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
-Normal-mode algorithm contract: docs/algorithm-lock-v0.5.5.md
+Normal-mode algorithm contract: docs/algorithm-lock-v0.6.0.md
 
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")

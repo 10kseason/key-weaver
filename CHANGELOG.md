@@ -2,6 +2,7 @@
 
 ## 0.6.0
 
+- Documented the frozen v0.6.0 algorithm contract in `docs/algorithm-lock-v0.6.0.md`.
 - Added GUI folder batch flow: pressing Batch now prompts for a songs/root folder, recursively collects `.osu` charts, and converts them.
 - Added GUI Source override filtering for folder batches, so only `.osu` files whose `CircleSize` matches the requested source key count are converted.
 - Tuned 10K tap-plus generation to use stronger quarter/eighth-beat density pressure than the 8K+ baseline while keeping source jack phrases protected.

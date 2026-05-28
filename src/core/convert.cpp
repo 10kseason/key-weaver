@@ -71,6 +71,11 @@ bool eightKeySixLaneFastStairVacancyActive(const ConvertOptions& options) {
            options.targetKeyCount > options.sourceKeyCount;
 }
 
+bool eightKeyUnintendedJackGuardActive(const ConvertOptions& options) {
+    return options.targetKeyCount == 8 && options.targetKeyCount > options.sourceKeyCount &&
+           options.jackWindowMs > 0;
+}
+
 double beatLengthAtOrFallback(int time, std::vector<TimingPoint> timingPoints) {
     std::stable_sort(timingPoints.begin(), timingPoints.end(), [](const TimingPoint& lhs, const TimingPoint& rhs) {
         return lhs.time < rhs.time;
@@ -130,41 +135,17 @@ std::optional<int> eightKeySixLaneFastStairLane(int sourceLane) {
     return kLaneMap[sourceLane];
 }
 
-bool relaneWouldConflict(const std::vector<Note>& notes, std::size_t movingIndex, const Note& moved, int lane) {
-    for (std::size_t index = 0; index < notes.size(); ++index) {
-        if (index == movingIndex) {
-            continue;
-        }
-        const auto& other = notes[index];
-        if (other.lane != lane) {
-            continue;
-        }
-        if (other.time == moved.time) {
-            return true;
-        }
-        if (other.type == NoteType::Hold && other.endTime.has_value() &&
-            moved.time > other.time && moved.time <= *other.endTime) {
-            return true;
-        }
-        if (moved.type == NoteType::Hold && moved.endTime.has_value() &&
-            other.time > moved.time && other.time <= *moved.endTime) {
-            return true;
-        }
-    }
-    return false;
-}
-
-int applyEightKeyFastStairSymmetricVacancies(std::vector<Note>& notes,
-                                             const ConvertOptions& options,
-                                             const std::vector<TimingPoint>& timingPoints) {
+std::set<std::size_t> eightKeyFastStairNoteIndices(const std::vector<Note>& notes,
+                                                   const ConvertOptions& options,
+                                                   const std::vector<TimingPoint>& timingPoints) {
+    std::set<std::size_t> fastStairNoteIndices;
     if (!eightKeySixLaneFastStairVacancyActive(options) || notes.size() < 3) {
-        return 0;
+        return fastStairNoteIndices;
     }
 
     Chart sliced;
     sliced.notes = notes;
     const auto slices = buildTimeSlices(sliced, options.targetKeyCount, options.sameTimeEpsilonMs);
-    std::set<std::size_t> fastStairNoteIndices;
     for (std::size_t index = 0; index + 2 < slices.size(); ++index) {
         const auto noteA = singleTapIndexForSlice(slices[index], notes);
         const auto noteB = singleTapIndexForSlice(slices[index + 1], notes);
@@ -216,6 +197,37 @@ int applyEightKeyFastStairSymmetricVacancies(std::vector<Note>& notes,
             }
         }
     }
+    return fastStairNoteIndices;
+}
+
+bool relaneWouldConflict(const std::vector<Note>& notes, std::size_t movingIndex, const Note& moved, int lane) {
+    for (std::size_t index = 0; index < notes.size(); ++index) {
+        if (index == movingIndex) {
+            continue;
+        }
+        const auto& other = notes[index];
+        if (other.lane != lane) {
+            continue;
+        }
+        if (other.time == moved.time) {
+            return true;
+        }
+        if (other.type == NoteType::Hold && other.endTime.has_value() &&
+            moved.time > other.time && moved.time <= *other.endTime) {
+            return true;
+        }
+        if (moved.type == NoteType::Hold && moved.endTime.has_value() &&
+            other.time > moved.time && other.time <= *moved.endTime) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int applyEightKeyFastStairSymmetricVacancies(std::vector<Note>& notes,
+                                             const ConvertOptions& options,
+                                             const std::vector<TimingPoint>& timingPoints) {
+    const auto fastStairNoteIndices = eightKeyFastStairNoteIndices(notes, options, timingPoints);
 
     int changed = 0;
     for (const auto noteIndex : fastStairNoteIndices) {
@@ -606,6 +618,199 @@ std::optional<int> compressionDropIndexForPair(const std::vector<Note>& notes,
         }
     }
     return std::nullopt;
+}
+
+std::map<std::string, int> sourceJackGroupById(const Chart& original, int jackWindowMs) {
+    std::map<std::string, int> groupById;
+    for (const auto& group : detectJackGroups(original.notes, RepeatLaneMode::SourceLane, jackWindowMs)) {
+        for (const auto& id : group.noteIds) {
+            if (!id.empty()) {
+                groupById[id] = group.id;
+            }
+        }
+    }
+    return groupById;
+}
+
+bool sourceJackGroupAllowsPair(const std::map<std::string, int>& groupById,
+                               const Note& first,
+                               const Note& second) {
+    if (first.id.empty() || second.id.empty() ||
+        isGeneratedNoteId(first.id) || isGeneratedNoteId(second.id)) {
+        return false;
+    }
+    const auto firstGroup = groupById.find(first.id);
+    const auto secondGroup = groupById.find(second.id);
+    return firstGroup != groupById.end() &&
+           secondGroup != groupById.end() &&
+           firstGroup->second == secondGroup->second;
+}
+
+std::vector<CreatedJackPair> detectEightKeyUnintendedJackPairs(const Chart& original,
+                                                               const std::vector<Note>& notes,
+                                                               const ConvertOptions& options) {
+    std::vector<CreatedJackPair> pairs;
+    if (!eightKeyUnintendedJackGuardActive(options) || notes.size() < 2) {
+        return pairs;
+    }
+
+    const auto groupById = sourceJackGroupById(original, options.jackWindowMs);
+    const auto fastStairIndices = eightKeyFastStairNoteIndices(notes, options, original.timingPoints);
+    std::map<int, std::vector<int>> byLane;
+    for (std::size_t index = 0; index < notes.size(); ++index) {
+        byLane[notes[index].lane].push_back(static_cast<int>(index));
+    }
+
+    for (auto& entry : byLane) {
+        auto& indices = entry.second;
+        std::stable_sort(indices.begin(), indices.end(), [&](int lhs, int rhs) {
+            const auto& lhsNote = notes[static_cast<std::size_t>(lhs)];
+            const auto& rhsNote = notes[static_cast<std::size_t>(rhs)];
+            if (lhsNote.time != rhsNote.time) {
+                return lhsNote.time < rhsNote.time;
+            }
+            return lhsNote.id < rhsNote.id;
+        });
+
+        for (std::size_t index = 1; index < indices.size(); ++index) {
+            const auto& first = notes[static_cast<std::size_t>(indices[index - 1])];
+            const auto& second = notes[static_cast<std::size_t>(indices[index])];
+            const int delta = second.time - first.time;
+            if (delta <= 0 || delta > options.jackWindowMs ||
+                (fastStairIndices.count(static_cast<std::size_t>(indices[index - 1])) > 0 &&
+                 fastStairIndices.count(static_cast<std::size_t>(indices[index])) > 0) ||
+                sourceJackGroupAllowsPair(groupById, first, second)) {
+                continue;
+            }
+
+            CreatedJackPair pair;
+            pair.firstIndex = indices[index - 1];
+            pair.secondIndex = indices[index];
+            pair.lane = entry.first;
+            pair.firstTimeMs = first.time;
+            pair.secondTimeMs = second.time;
+            pair.firstId = first.id;
+            pair.secondId = second.id;
+            pair.involvesGenerated = isGeneratedNoteId(first.id) || isGeneratedNoteId(second.id);
+            pairs.push_back(std::move(pair));
+        }
+    }
+    return pairs;
+}
+
+bool wouldCreateEightKeyUnintendedJackOnLane(const Chart& original,
+                                             const std::vector<Note>& notes,
+                                             int noteIndex,
+                                             const Note& candidate,
+                                             int candidateLane,
+                                             const ConvertOptions& options) {
+    if (!eightKeyUnintendedJackGuardActive(options)) {
+        return false;
+    }
+
+    const auto groupById = sourceJackGroupById(original, options.jackWindowMs);
+    const auto fastStairIndices = eightKeyFastStairNoteIndices(notes, options, original.timingPoints);
+    Note moved = candidate;
+    moved.lane = candidateLane;
+    for (std::size_t index = 0; index < notes.size(); ++index) {
+        if (static_cast<int>(index) == noteIndex) {
+            continue;
+        }
+        const auto& other = notes[index];
+        if (other.lane != candidateLane) {
+            continue;
+        }
+        const int delta = std::abs(other.time - moved.time);
+        if (delta > 0 && delta <= options.jackWindowMs &&
+            !(fastStairIndices.count(static_cast<std::size_t>(noteIndex)) > 0 &&
+              fastStairIndices.count(index) > 0) &&
+            !sourceJackGroupAllowsPair(groupById, other, moved)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool eightKeyUnintendedJackRelaneCandidateIsSafe(const Chart& original,
+                                                 const std::vector<Note>& notes,
+                                                 int noteIndex,
+                                                 int candidateLane,
+                                                 const ConvertOptions& options) {
+    if (candidateLane < 0 || candidateLane >= options.targetKeyCount ||
+        noteIndex < 0 || noteIndex >= static_cast<int>(notes.size())) {
+        return false;
+    }
+
+    Note moved = notes[static_cast<std::size_t>(noteIndex)];
+    if (candidateLane == moved.lane) {
+        return false;
+    }
+    moved.lane = candidateLane;
+
+    const auto others = notesExcept(notes, noteIndex);
+    if (hasSameTimeNote(others, moved.time, moved.lane) ||
+        hasLongNoteConflict(others, moved, moved.lane) ||
+        hasDistanceConflict(others, moved, options, false)) {
+        return false;
+    }
+    return !wouldCreateEightKeyUnintendedJackOnLane(original,
+                                                   notes,
+                                                   noteIndex,
+                                                   moved,
+                                                   candidateLane,
+                                                   options);
+}
+
+bool tryRelaneEightKeyUnintendedJack(const Chart& original,
+                                     std::vector<Note>& notes,
+                                     const CreatedJackPair& pair,
+                                     const ConvertOptions& options) {
+    for (const int noteIndex : relaneOrder(notes, pair)) {
+        const int currentLane = notes[static_cast<std::size_t>(noteIndex)].lane;
+        for (const int lane : orderedLaneCandidates(currentLane, options.targetKeyCount)) {
+            if (eightKeyUnintendedJackRelaneCandidateIsSafe(original, notes, noteIndex, lane, options)) {
+                notes[static_cast<std::size_t>(noteIndex)].lane = lane;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+JackSanitizerStats sanitizeEightKeyUnintendedJacks(const Chart& original,
+                                                   std::vector<Note>& notes,
+                                                   const ConvertOptions& options) {
+    JackSanitizerStats stats;
+    if (!eightKeyUnintendedJackGuardActive(options)) {
+        return stats;
+    }
+
+    int guard = 0;
+    while (guard++ < 512) {
+        const auto pairs = detectEightKeyUnintendedJackPairs(original, notes, options);
+        if (pairs.empty()) {
+            return stats;
+        }
+
+        const auto& pair = pairs.front();
+        if (tryRelaneEightKeyUnintendedJack(original, notes, pair, options)) {
+            ++stats.sanitizedCreatedJacks;
+            continue;
+        }
+
+        if (const auto generatedIndex = generatedIndexForPair(notes, pair); generatedIndex.has_value()) {
+            notes.erase(notes.begin() + *generatedIndex);
+            ++stats.sanitizedCreatedJacks;
+            ++stats.droppedNotes;
+            continue;
+        }
+
+        stats.unsolvedCreatedJacks = static_cast<int>(pairs.size());
+        return stats;
+    }
+
+    stats.unsolvedCreatedJacks = static_cast<int>(detectEightKeyUnintendedJackPairs(original, notes, options).size());
+    return stats;
 }
 
 JackSanitizerStats sanitizeCreatedJacks(const Chart& original,
@@ -1180,6 +1385,12 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
         sanitizerStats = sanitizeCreatedJacks(chart, placed, options);
     } else {
         sanitizerStats.unsolvedCreatedJacks = static_cast<int>(createdPairsAfterRepair.size());
+    }
+    {
+        const auto eightKeyJackStats = sanitizeEightKeyUnintendedJacks(chart, placed, options);
+        sanitizerStats.sanitizedCreatedJacks += eightKeyJackStats.sanitizedCreatedJacks;
+        sanitizerStats.unsolvedCreatedJacks += eightKeyJackStats.unsolvedCreatedJacks;
+        sanitizerStats.droppedNotes += eightKeyJackStats.droppedNotes;
     }
     result.report.droppedNotes += sanitizerStats.droppedNotes;
     const auto distanceSanitizerStats = sanitizeNearTimeOverlaps(chart, placed, options);

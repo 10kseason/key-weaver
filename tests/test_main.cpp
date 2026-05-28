@@ -2116,6 +2116,58 @@ void testSourceJackPlayableSplit() {
     require(result.report.quality.createdJacks == 0, "playable jack handling should not create unrelated jacks");
 }
 
+void testEightKeyLooseRepeatDoesNotBecomeJack() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 8;
+    options.style = keyconv::ConversionStyle::Faithful;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    require(result.report.quality.sourceJackGroups == 0,
+            "two-hit loose repeat fixture should not be classified as a source jack group");
+    require(lanes.size() == 3, "8K loose-repeat fixture should preserve note count");
+    require(lanes[0] != lanes[1],
+            "8K conversion should not turn a loose two-hit repeat into a target-lane jack");
+    require(result.report.quality.sanitizedCreatedJacks > 0,
+            "8K loose-repeat guard should report that it moved an unintended target repeat");
+}
+
+void testEightKeySourceJackStillPreserved() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1250, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 8;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.jackPreservePolicy = keyconv::JackPreservePolicy::PreservePlayable;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    require(result.report.quality.sourceJackGroups == 1,
+            "8K true source jack fixture should detect the source jack group");
+    require(result.report.quality.preservedJackGroups + result.report.quality.splitJackGroups >= 1,
+            "8K unintended-jack guard should not erase a real source jack group");
+    require(result.report.quality.unsolvedCreatedJacks == 0,
+            "8K true source jack fixture should not leave unsolved created jacks");
+}
+
 void testFiveHundredMsJackWindowDetectsSlowSourceJack() {
     const auto chart = makeChart(4,
                                  {
@@ -3660,6 +3712,8 @@ int main() {
         {"no-jack input does not create jack", testNoJackInputDoesNotCreateJack},
         {"source jack preserved faithful", testSourceJackPreservedFaithful},
         {"source jack playable split", testSourceJackPlayableSplit},
+        {"8K loose repeat does not become jack", testEightKeyLooseRepeatDoesNotBecomeJack},
+        {"8K source jack still preserved", testEightKeySourceJackStillPreserved},
         {"500ms jack window detects slow source jack", testFiveHundredMsJackWindowDetectsSlowSourceJack},
         {"added note rejected if creates unwanted jack", testAddedNoteRejectedIfCreatesUnwantedJack},
         {"added note from source jack still rejected if creates target jack",

@@ -1,4 +1,4 @@
-# KeyWeaver v0.5.8
+# KeyWeaver v0.6.0
 
 C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
@@ -30,6 +30,8 @@ Current scope:
 - v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
+- v0.6.0 GUI Batch prompts for a songs/root folder, recursively converts `.osu` charts, and filters folder batches by Source override `CircleSize` when set
+- v0.6.0 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
 - v0.5.8 high-key generated-note presets use 10%/15%/20% low/normal/more budgets, 8K+ additions prefer 8th-beat slices with 16th-beat fallback, suppress additions on 32nd-or-faster even-key stairs, reduce outer-lane fill pressure, preserve long source jacks on one lane, and limit generated LNs to 8th-to-16th durations
 - v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus deterministic stream transforms (`superrandom`, `full-jitter`)
 - v0.5.2 Preserve Tap Plus policy with key-growth budgets, hand-zone balance, and LN-heavy window additions
@@ -68,10 +70,10 @@ cmake --build build --target keyconv_gui
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.5.8
+.\scripts\package_release.ps1 -Version 0.6.0
 ```
 
-The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.5.8-win64-<timestamp>.zip` plus a `.sha256` file.
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.6.0-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -221,10 +223,10 @@ GUI scope:
 - output beside the input chart by default, with optional folder override
 - drag one or more chart files onto an already-open GUI window to convert with the current Target field
 - drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads them so Target can be set before conversion
-- optional source-key override and target key; drag-and-drop and batch conversion use this Target field instead of assuming 10K
+- optional source-key override and target key; Source override filters GUI folder batches to matching `.osu` `CircleSize` values and is also passed to conversion
 - choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
 - run one conversion and parse report JSON
-- run batch conversion for dropped/loaded files
+- press Batch to choose a songs/root folder and recursively convert matching `.osu` files; dropped multi-file batches still convert the loaded files
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
 - open output/report and copy the generated CLI command
 ```
@@ -241,11 +243,11 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - `--optimizer beam`, `--style dp`, and `--dp` are accepted as reserved options and report a fallback warning.
 - Strong compression can drop or roll notes under no-overlap policies. Default high-to-low `auto` compression uses `no-overlap-drop`, so overflow taps or holds are omitted when the target key count cannot represent the source chord/LN occupancy cleanly. This prioritizes low-key recreation over preserving every object. Use explicit `--compress-policy no-overlap-hybrid` to roll overflow holds when possible, or `--compress-policy no-overlap-roll` when tap overflow should also be rolled instead of deleted.
 - Converted osu!mania difficulty names append a KeyWeaver mode marker. The base is `KeyWeaverNK`, where `N` is the target key count, and high-key auto expansion adds `(more)`, `(normal)`, or `(low)`. Stream transforms add `-sRan` or `-jitter`, for example `KeyWeaver10K-sRan (more)` or `KeyWeaver10K-jitter (low)`. If `--out` is omitted, the `.osu` is written beside the input using the same marker and a numeric suffix when needed.
-- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. When multiple files are dropped, Output is blank by default and each chart writes beside its own source file; set Output to force every batch item into one folder.
+- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. Pressing Batch opens a folder picker, recursively scans that folder for `.osu`, and writes each converted chart beside its own source unless Output is set. When Source override is set, folder batch skips `.osu` charts whose `CircleSize` does not match it.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
 - If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. High-key auto presets target generated-note budgets of `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%; explicit `--expansion-policy preserve` disables deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
-- `--expansion-policy preserve-tap-plus` preserves original taps/LNs and adds deterministic notes. On 8K+ high-key conversion, generated notes prefer source slices that land on the 8th-note beat grid, use 16th-beat slices as the lower-priority fallback, avoid making both outermost lanes into the alternating trill pair, and bias additions toward whole-target mirror-lane symmetry. With `--target-profile`, adaptive growth budgeting redistributes the global cap per 500-4000 ms profile window: low-density/under-expanded windows can spend more, while dense, chord-heavy, or LN-heavy windows spend less.
+- `--expansion-policy preserve-tap-plus` preserves original taps/LNs and adds deterministic notes. On 8K+ high-key conversion, generated notes prefer source slices that land on the 8th-note beat grid, use 16th-beat slices as the lower-priority fallback, avoid making both outermost lanes into the alternating trill pair, and bias additions toward whole-target mirror-lane symmetry. Target-10 conversion adds extra quarter/eighth-beat density pressure over the 8K+ baseline. With `--target-profile`, adaptive growth budgeting redistributes the global cap per 500-4000 ms profile window: low-density/under-expanded windows can spend more, while dense, chord-heavy, or LN-heavy windows spend less.
 - `--preserve-convert` is the strict preservation preset: faithful lane mapping, source-jack strict reporting, no playable jack split accounting, and `preserve` expansion. It now enables safe adjacent-lane drift for non-jack phrases so the output is not locked to one fixed lane skeleton. Use `--no-preserve-lane-drift` to restore the older fixed feel.
 - Tap-plus scans 2000 ms local windows. Tap-heavy slices still add taps, while LN-heavy windows only add holds on slices that already contain a source LN and whose anchor duration falls between the local 16th-note and 8th-note duration. Longer LN anchors are treated as tap-addition anchors instead of cloning long generated holds. Source taps are never converted into LNs, and generated holds stay near a same-time LN anchor with collision, LN-conflict, and no-created-jack guards still taking priority.
 - Higher-key `preserve-tap-plus` also balances target hand zones. For even-key to even-key conversion, one-hand source slices keep generated additions inside the matching target hand; when the source slice uses both hands, the full target lane range can be used. For 10K, lanes 0-4 are treated as left hand and lanes 5-9 as right hand; reports include `leftHandNotes`, `rightHandNotes`, and `handBalanceRatio`.

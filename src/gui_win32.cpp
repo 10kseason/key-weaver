@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -278,6 +279,10 @@ std::wstring lowerAscii(std::wstring value) {
 bool isBmsFamilyPath(const std::filesystem::path& path) {
     const auto extension = lowerAscii(path.extension().wstring());
     return extension == L".bms" || extension == L".bme" || extension == L".bml" || extension == L".pms";
+}
+
+bool isOsuPath(const std::filesystem::path& path) {
+    return lowerAscii(path.extension().wstring()) == L".osu";
 }
 
 bool isSupportedChartPath(const std::filesystem::path& path) {
@@ -659,6 +664,60 @@ std::optional<int> detectCircleSize(const std::filesystem::path& osuPath) {
     return std::nullopt;
 }
 
+std::optional<int> parseSourceOverrideKeyCount(const std::wstring& value) {
+    const auto text = trim(value);
+    if (text.empty()) {
+        return std::nullopt;
+    }
+    wchar_t* end = nullptr;
+    const long parsed = std::wcstol(text.c_str(), &end, 10);
+    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 32) {
+        return -1;
+    }
+    return static_cast<int>(parsed);
+}
+
+std::vector<std::filesystem::path> collectOsuFilesRecursively(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> files;
+    std::error_code error;
+    if (!std::filesystem::exists(root, error)) {
+        return files;
+    }
+    if (!std::filesystem::is_directory(root, error)) {
+        if (isOsuPath(root)) {
+            files.push_back(absolutePath(root));
+        }
+        return files;
+    }
+
+    const auto options = std::filesystem::directory_options::skip_permission_denied;
+    for (std::filesystem::recursive_directory_iterator it(root, options, error), end; it != end; it.increment(error)) {
+        if (error) {
+            error.clear();
+            continue;
+        }
+        const auto& entry = *it;
+        if (!entry.is_regular_file(error)) {
+            error.clear();
+            continue;
+        }
+        const auto path = entry.path();
+        if (isOsuPath(path)) {
+            files.push_back(absolutePath(path));
+        }
+    }
+    std::stable_sort(files.begin(), files.end());
+    return files;
+}
+
+bool matchesSourceOverride(const std::filesystem::path& path, int sourceKeyCount) {
+    if (!isOsuPath(path)) {
+        return true;
+    }
+    const auto detected = detectCircleSize(path);
+    return detected.has_value() && *detected == sourceKeyCount;
+}
+
 void setChildFont(HWND hwnd, HFONT font) {
     SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
@@ -779,6 +838,11 @@ bool validateToolOptions(const ToolOptions& options, HWND owner) {
         MessageBoxW(owner, L"Target key count is required.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
+    const auto sourceOverride = parseSourceOverrideKeyCount(options.sourceOverride);
+    if (sourceOverride.has_value() && *sourceOverride < 0) {
+        MessageBoxW(owner, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
+        return false;
+    }
     return true;
 }
 
@@ -821,10 +885,10 @@ std::optional<std::filesystem::path> browseOpenFile(HWND owner,
     return std::nullopt;
 }
 
-std::optional<std::filesystem::path> browseFolder(HWND owner) {
+std::optional<std::filesystem::path> browseFolder(HWND owner, const wchar_t* title = L"Select folder") {
     BROWSEINFOW browse{};
     browse.hwndOwner = owner;
-    browse.lpszTitle = L"Select output folder";
+    browse.lpszTitle = title;
     browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&browse);
     if (!item) {
@@ -926,14 +990,39 @@ std::vector<std::filesystem::path> batchInputsForState(const AppState& state) {
     if (inputText.empty()) {
         return {};
     }
-    return {absolutePath(std::filesystem::path(inputText))};
+    const auto input = absolutePath(std::filesystem::path(inputText));
+    std::error_code error;
+    if (std::filesystem::is_directory(input, error)) {
+        return collectOsuFilesRecursively(input);
+    }
+    return {input};
 }
 
-void executeBatchConvert(AppState& state) {
+std::vector<std::filesystem::path> chooseBatchFolderInputs(AppState& state) {
+    const auto folder = browseFolder(state.hwnd, L"Select songs folder for recursive .osu batch");
+    if (!folder.has_value()) {
+        return {};
+    }
+    const auto root = absolutePath(*folder);
+    setInputText(state, root.wstring());
+    setWindowText(state.outputDirEdit, L"");
+    state.batchInputs.clear();
+    return collectOsuFilesRecursively(root);
+}
+
+void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     auto baseOptions = readToolOptions(state);
-    const auto inputs = batchInputsForState(state);
+    auto inputs = chooseFolderFirst ? chooseBatchFolderInputs(state) : batchInputsForState(state);
+    const auto inputText = trim(getWindowText(state.inputEdit));
+    const auto inputPath = inputText.empty() ? std::filesystem::path() : absolutePath(std::filesystem::path(inputText));
+    std::error_code inputError;
+    const bool hasDirectoryInput = !inputPath.empty() && std::filesystem::is_directory(inputPath, inputError);
+    if (!chooseFolderFirst && (inputs.empty() || (!hasDirectoryInput && state.batchInputs.size() <= 1))) {
+        inputs = chooseBatchFolderInputs(state);
+    }
     if (inputs.empty()) {
-        MessageBoxW(state.hwnd, L"Drop or select at least one chart first.", L"KeyWeaver GUI", MB_ICONERROR);
+        MessageBoxW(state.hwnd, L"Select a songs folder containing .osu files, or drop multiple chart files first.",
+                    L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
     if (baseOptions.keyconvExe.empty() || !std::filesystem::exists(baseOptions.keyconvExe)) {
@@ -944,14 +1033,23 @@ void executeBatchConvert(AppState& state) {
         MessageBoxW(state.hwnd, L"Target key count is required.", L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
+    const auto sourceFilter = parseSourceOverrideKeyCount(baseOptions.sourceOverride);
+    if (sourceFilter.has_value() && *sourceFilter < 0) {
+        MessageBoxW(state.hwnd, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
 
     const auto forcedOutputDir = explicitOutputDir(state);
     clearSummary(state);
     appendLog(state, L"\r\nBatch convert: " + std::to_wstring(inputs.size()) +
                      L" file(s), target " + baseOptions.targetKeys + L"K\r\n");
+    if (sourceFilter.has_value()) {
+        appendLog(state, L"Source filter: only " + std::to_wstring(*sourceFilter) + L"K .osu charts\r\n");
+    }
 
     int succeeded = 0;
     int failed = 0;
+    int skipped = 0;
     for (std::size_t index = 0; index < inputs.size(); ++index) {
         ToolOptions options = baseOptions;
         options.inputFile = absolutePath(inputs[index]);
@@ -959,6 +1057,14 @@ void executeBatchConvert(AppState& state) {
             ++failed;
             addSummaryLine(state, L"[fail] " + options.inputFile.filename().wstring() + L" invalid input");
             appendLog(state, L"[fail] " + options.inputFile.wstring() + L" invalid input\r\n");
+            continue;
+        }
+        if (sourceFilter.has_value() && !matchesSourceOverride(options.inputFile, *sourceFilter)) {
+            ++skipped;
+            const auto detected = isOsuPath(options.inputFile) ? detectCircleSize(options.inputFile) : std::nullopt;
+            std::wstring sourceText = detected.has_value() ? std::to_wstring(*detected) + L"K" : L"unknown";
+            addSummaryLine(state, L"[skip] " + options.inputFile.filename().wstring() + L" source=" + sourceText);
+            appendLog(state, L"[skip] " + options.inputFile.wstring() + L" source=" + sourceText + L"\r\n");
             continue;
         }
         options.outputDir = forcedOutputDir.has_value() ? *forcedOutputDir : options.inputFile.parent_path();
@@ -993,7 +1099,7 @@ void executeBatchConvert(AppState& state) {
     }
 
     std::wostringstream done;
-    done << L"Batch done: ok=" << succeeded << L" fail=" << failed;
+    done << L"Batch done: ok=" << succeeded << L" fail=" << failed << L" skip=" << skipped;
     appendLog(state, done.str() + L"\r\n");
     if (failed > 0) {
         MessageBoxW(state.hwnd, done.str().c_str(), L"KeyWeaver batch", MB_ICONWARNING);
@@ -1034,7 +1140,7 @@ void loadDroppedFiles(AppState& state,
     if (files.size() == 1) {
         executeSingleConvert(state);
     } else {
-        executeBatchConvert(state);
+        executeBatchConvert(state, false);
     }
 }
 
@@ -1200,7 +1306,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 case kButtonBrowseOutputDir: {
-                    const auto path = browseFolder(hwnd);
+                    const auto path = browseFolder(hwnd, L"Select output folder");
                     if (path.has_value()) {
                         setWindowText(state->outputDirEdit, path->wstring());
                     }
@@ -1210,7 +1316,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     executeSingleConvert(*state);
                     return 0;
                 case kButtonBatch:
-                    executeBatchConvert(*state);
+                    executeBatchConvert(*state, true);
                     return 0;
                 case kButtonMatrix:
                     executeMatrix(*state);
@@ -1267,7 +1373,7 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.5.8 Playtest Tool",
+                                L"KeyWeaver v0.6.0 Playtest Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,

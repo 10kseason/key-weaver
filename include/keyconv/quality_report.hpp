@@ -213,7 +213,7 @@ struct ConversionReport {
         int droppedByDistanceGuard = 0;
         int rerolledByDistanceGuard = 0;
         bool deterministic = true;
-        std::string algorithmVersion = "v0.5.8";
+        std::string algorithmVersion = "v0.6.0";
         std::string expansionPolicy = "preserve";
         std::string streamEchoProfile = "conservative";
         std::string streamTransformPolicy = "off";

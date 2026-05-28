@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.8",
+    [string]$Version = "0.6.0",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -116,7 +116,9 @@ Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keycon
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
 Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
-Dropping files onto an already-open GUI window uses the current Target field; multiple files or Batch write beside each original file when Output is blank.
+Press Batch in the GUI to choose a songs/root folder; it recursively converts matching .osu files and writes beside each original file when Output is blank.
+Source override filters GUI folder batches by .osu CircleSize before conversion.
+Dropping files onto an already-open GUI window uses the current Target field; multiple dropped files still write beside each original file when Output is blank.
 CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
 The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family output extension.
@@ -124,7 +126,7 @@ Gesture Rail is on by default; use --gesture-rail off to compare older lane scor
 Preserve Tap Plus uses key-growth budgets and 10K hand-zone balancing.
 With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mid/high/chordHeavy/jackRisk windows for Composer pressure.
 Use --expansion-policy auto-low/auto-normal/auto-more for high-key generated-note budgets of 10%/15%/20%.
-8K+ generated notes prefer 8th-beat source slices, avoid both-edge trill reinforcement, and favor mirror-lane symmetry.
+8K+ generated notes prefer 8th-beat source slices, avoid both-edge trill reinforcement, and favor mirror-lane symmetry; target-10 adds extra quarter/eighth-beat density pressure.
 Use --preserve-convert for faithful mapping, strict source-jack preservation, no generated notes, and adjacent safe-lane drift.
 Use --stream-transform superrandom for deterministic per-note random lane assignment, or full-jitter for 1-15 ms per-note zure-style timing spread.
 Use --seed to vary deterministic stream-transform output.

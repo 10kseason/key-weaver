@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Added GUI folder batch flow: pressing Batch now prompts for a songs/root folder, recursively collects `.osu` charts, and converts them.
+- Added GUI Source override filtering for folder batches, so only `.osu` files whose `CircleSize` matches the requested source key count are converted.
+- Tuned 10K tap-plus generation to use stronger quarter/eighth-beat density pressure than the 8K+ baseline while keeping source jack phrases protected.
+
 ## 0.5.8
 
 - Changed high-key generated-note presets to `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%.

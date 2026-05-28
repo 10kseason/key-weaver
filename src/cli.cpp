@@ -33,7 +33,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.5.8";
+constexpr const char* kToolVersion = "v0.6.0";
 
 #if defined(_WIN32)
 std::string utf8FromWide(std::wstring_view value) {

@@ -63,7 +63,7 @@ struct ToolOptions {
     std::filesystem::path outputDir;
     std::wstring sourceOverride;
     std::wstring targetKeys = L"10";
-    std::wstring expansionPolicy = L"auto (normal)";
+    std::wstring expansionPolicy = L"auto (low)";
     std::wstring compressPolicy = L"auto";
     std::wstring streamTransform = L"off";
     bool preserveConvert = false;
@@ -611,7 +611,7 @@ std::wstring buildSingleCommand(ToolOptions options,
     const auto expansionPolicy = expansionPolicyCliValue(options.expansionPolicy);
     if (options.preserveConvert) {
         appendArg(command, L"--preserve-convert");
-    } else if (expansionPolicy != L"auto" && expansionPolicy != L"auto-normal") {
+    } else if (expansionPolicy != L"auto" && expansionPolicy != L"auto-low") {
         appendArg(command, L"--expansion-policy");
         appendArg(command, expansionPolicy);
     }
@@ -1711,10 +1711,10 @@ void createUi(AppState& state) {
     makeControl(state, L"STATIC", L"Expansion", 0, labelX, y + 4, 96, 20, -1);
     state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, editX, y, 180, 160,
                                        kComboExpansion);
-    for (const auto* item : {L"auto (more)", L"auto (normal)", L"auto (low)"}) {
+    for (const auto* item : {L"auto (low)", L"auto (normal)", L"auto (more)"}) {
         addComboItem(state.expansionCombo, item);
     }
-    setComboSelection(state.expansionCombo, L"auto (normal)");
+    setComboSelection(state.expansionCombo, L"auto (low)");
 
     makeControl(state, L"STATIC", L"Compress", 0, 320, y + 4, 70, 20, -1);
     state.compressCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 392, y, 180, 180,
@@ -1902,7 +1902,7 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.6.0 Playtest Tool",
+                                L"KeyWeaver v0.6.5 Playtest Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,

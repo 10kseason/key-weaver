@@ -38,7 +38,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.6.0";
+constexpr const char* kToolVersion = "v0.6.5";
 
 class ConvertedInputError : public std::runtime_error {
 public:
@@ -284,7 +284,7 @@ void printHelp(std::ostream& out) {
     out << "  --snap-tolerance <ms>   Snap validation tolerance. Default: 2.\n";
     out << "  --max-roll-ms <ms>      Maximum roll distance from original time. Default: 64.\n";
     out << "  --expansion-policy <p>  auto-more | auto-normal | auto-low | preserve | preserve-tap-plus | chord-fill | echo | training-scaffold | harder-remix | seeded-random.\n";
-    out << "                          Default auto-normal: preserve when target <= source, preserve-tap-plus when target > source.\n";
+    out << "                          Default auto-low: preserve when target <= source, preserve-tap-plus-low when target > source.\n";
     out << "                          high-key presets target low/normal/more added notes at 10%/15%/20%.\n";
     out << "  --max-added-ratio <n>   Max added notes as source-note ratio. Default: 0.45.\n";
     out << "  --max-added-per-slice <n> Max added notes per source slice. Default: 2.\n";
@@ -615,7 +615,7 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.maxRollMs = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--expansion-policy") {
             const auto value = requireValue(i, args, arg);
-            if (value == "auto" || value == "auto-normal") {
+            if (value == "auto") {
                 options.expansionPolicyProvided = false;
                 continue;
             }
@@ -1327,7 +1327,7 @@ std::vector<std::string> splitCommaList(const std::string& value) {
 }
 
 keyconv::ExpansionPolicy defaultExpansionPolicy(int sourceKeyCount, int targetKeyCount) {
-    return targetKeyCount > sourceKeyCount ? keyconv::ExpansionPolicy::PreserveTapPlus
+    return targetKeyCount > sourceKeyCount ? keyconv::ExpansionPolicy::PreserveTapPlusLow
                                            : keyconv::ExpansionPolicy::PreserveNoteCount;
 }
 

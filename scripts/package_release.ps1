@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.6.0",
+    [string]$Version = "0.6.5",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -127,19 +127,19 @@ The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family out
 Gesture Rail is on by default; use --gesture-rail off to compare older lane scoring.
 Preserve Tap Plus uses key-growth budgets and 10K hand-zone balancing.
 With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mid/high/chordHeavy/jackRisk windows for Composer pressure.
-Use --expansion-policy auto-low/auto-normal/auto-more for high-key generated-note budgets of 10%/15%/20%.
+Default high-key auto expansion uses auto-low; use --expansion-policy auto-normal/auto-more for 15%/20% generated-note budgets.
 8K+ generated notes prefer 8th-beat source slices, avoid both-edge trill reinforcement, and favor mirror-lane symmetry; target-10 adds extra quarter/eighth-beat density pressure.
 Use --preserve-convert for faithful mapping, strict source-jack preservation, no generated notes, and adjacent safe-lane drift.
 Use --stream-transform superrandom for deterministic per-note random lane assignment, or full-jitter for 1-15 ms per-note zure-style timing spread.
 Use --seed to vary deterministic stream-transform output.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
-Normal-mode algorithm contract: docs/algorithm-lock-v0.6.0.md
+Normal-mode algorithm contract: docs/algorithm-lock-v0.6.5.md
 
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/default-auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -154,6 +154,13 @@ $($RuntimeDlls -join "`n")
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --dry-run --report (Join-Path $SmokeDir "sample_4k_to_10k.report.json") *> (Join-Path $SmokeDir "sample_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "osu!mania sample smoke failed" }
+    $SampleSmokeReportText = Get-Content -LiteralPath (Join-Path $SmokeDir "sample_4k_to_10k.report.json") -Raw
+    if ($SampleSmokeReportText -notmatch '"algorithmVersion":\s*"v0\.6\.5"') {
+        throw "osu!mania sample smoke failed without v0.6.5 algorithm version"
+    }
+    if ($SampleSmokeReportText -notmatch '"expansionPolicy":\s*"preserve-tap-plus-low"') {
+        throw "default auto-low sample smoke did not use preserve-tap-plus-low"
+    }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target 10 --dry-run *> (Join-Path $SmokeDir "batch_cli.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "CLI batch dry-run smoke failed" }

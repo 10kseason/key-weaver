@@ -86,7 +86,7 @@ struct ExpansionPlanStats {
     double streamEchoAddedRatio = 0.0;
     double maxObservedLocalNpsAfterEcho = 0.0;
     bool deterministic = true;
-    std::string algorithmVersion = "v0.6.0";
+    std::string algorithmVersion = "v0.6.5";
     StreamEchoProfile streamEchoProfile = StreamEchoProfile::Conservative;
     ExpansionPolicy policy = ExpansionPolicy::PreserveNoteCount;
     std::vector<GeneratedNoteInfo> generatedNotes;

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.5
+
+- Locked the current whole-board high-key algorithm contract in `docs/algorithm-lock-v0.6.5.md`.
+- Changed omitted `--expansion-policy` / `auto` and the GUI default from `auto-normal` to `auto-low`; explicit `auto-normal` remains available for the 15% budget.
+- Promoted tool, report, package, and GUI labels to `v0.6.5`.
 - Added CLI batch worker parallelism; automatic batch mode now uses the detected CPU thread count by default while `--jobs` can override the worker count.
 - Added CLI/GUI batch progress text showing percent done and remaining chart count.
 - Re-enabled GUI Batch for tester packages and added a simple status line for Convert, Batch, and Matrix runs.

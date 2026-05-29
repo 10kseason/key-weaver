@@ -1,4 +1,4 @@
-# KeyWeaver v0.6.0
+# KeyWeaver v0.6.5
 
 C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
@@ -32,8 +32,9 @@ Current scope:
 - CLI and GUI batch runs show percent-done progress and remaining chart count while converting
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
-- v0.6.0 algorithm lock is documented at `docs/algorithm-lock-v0.6.0.md`, freezing the current generated-note, jack, LN, stream-transform, and safety contracts
-- v0.6.0 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
+- v0.6.5 algorithm lock is documented at `docs/algorithm-lock-v0.6.5.md`, freezing the current generated-note, jack, LN, stream-transform, whole-board, and safety contracts
+- v0.6.5 defaults high-key `auto` conversion to `auto-low` / `preserve-tap-plus-low`; choose `auto-normal` or `auto-more` explicitly for larger generated-note budgets
+- v0.6.5 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
 - current 8K/10K high-key mapping uses whole-board assignment and gesture hints instead of locking into 4K+4K / 5K+5K split panels
 - v0.5.8 high-key generated-note presets use 10%/15%/20% low/normal/more budgets, 8K+ additions prefer 8th-beat slices with 16th-beat fallback, suppress additions on 32nd-or-faster even-key stairs, reduce outer-lane fill pressure, preserve long source jacks on one lane, and limit generated LNs to 8th-to-16th durations
 - v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus deterministic stream transforms (`superrandom`, `full-jitter`)
@@ -50,7 +51,7 @@ Current scope:
 - v0.5.5 profile-guided Adaptive Growth Budget for `preserve-tap-plus`, using 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` Target-K profile windows to open or throttle local fill while keeping a global added-note cap
 - v0.5.5 broad style-profile workflow validated on a 628-chart u_e + CircusGalop 10K reference set, with a sanitized reusable profile committed at `profiles/keyweaver_10k_broad_style_v1.json`
 - v0.5.5 automatically loads the bundled broad 10K style profile for target-10 conversions when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; `--target-profile` overrides it
-- v0.5.5 algorithm lock remains historical context at `docs/algorithm-lock-v0.5.5.md`; the current frozen contract is `docs/algorithm-lock-v0.6.0.md`
+- v0.5.5 and v0.6.0 algorithm locks remain historical context; the current frozen contract is `docs/algorithm-lock-v0.6.5.md`
 
 Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, seeded random remix, burst echo synthesis, or DP stream splitting.
 
@@ -70,10 +71,10 @@ cmake --build build --target keyconv_gui
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.6.0
+.\scripts\package_release.ps1 -Version 0.6.5
 ```
 
-The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.6.0-win64-<timestamp>.zip` plus a `.sha256` file.
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.6.5-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -218,7 +219,7 @@ The broad profile scanner accepts osu!mania `CircleSize:10` charts whose `Creato
 
 Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables an adaptive-growth-budget pass: the global added-note cap stays in place, but Composer pressure is based on the 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` features rather than chart-level summaries.
 
-The frozen v0.6.0 algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. Treat it as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, jack/LN handling, stream transforms, or safety guard behavior should update that document and the matching tests.
+The frozen v0.6.5 algorithm contract is in `docs/algorithm-lock-v0.6.5.md`. Treat it as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, jack/LN handling, stream transforms, default auto policy, or safety guard behavior should update that document and the matching tests.
 
 GUI scope:
 
@@ -228,7 +229,7 @@ GUI scope:
 - drag a chart file onto an already-open GUI window to convert with the current Target field
 - drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads the first chart so Target can be set before conversion
 - optional source-key override and target key
-- choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
+- choose streamlined GUI options: expansion `auto (low)` / `auto (normal)` / `auto (more)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
 - run one conversion and parse report JSON
 - run GUI Batch from dropped charts or a selected songs/root folder, with status text showing percent done and remaining files
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
@@ -250,7 +251,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. GUI Batch converts dropped files or a selected folder, and blank Output writes each chart beside its original file.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
-- If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. High-key auto presets target generated-note budgets of `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%; explicit `--expansion-policy preserve` disables deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
+- If `--expansion-policy` is omitted or set to `auto` / `auto-low`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus-low` when converting to a higher key count. High-key auto presets target generated-note budgets of `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%; explicit `--expansion-policy auto-normal`, `auto-more`, or `preserve` overrides that default. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.
 - `--expansion-policy preserve-tap-plus` preserves original taps/LNs and adds deterministic notes. On 8K+ high-key conversion, generated notes prefer source slices that land on the 8th-note beat grid, use 16th-beat slices as the lower-priority fallback, avoid making both outermost lanes into the alternating trill pair, and bias additions toward whole-target mirror-lane symmetry. Target-10 conversion adds extra quarter/eighth-beat density pressure over the 8K+ baseline. Base assignment, gesture hints, and generated notes do not lock one-hand source slices to the 4K+4K / 5K+5K hand-panel split; wide-board scoring can use locally inactive lanes, globally underused lanes, and outer lanes when the target profile or built-in 8K/10K target expects broader coverage. With `--target-profile`, adaptive growth budgeting redistributes the global cap per 500-4000 ms profile window: low-density/under-expanded windows can spend more, while dense, chord-heavy, or LN-heavy windows spend less.
 - `--preserve-convert` is the strict preservation preset: faithful lane mapping, source-jack strict reporting, no playable jack split accounting, and `preserve` expansion. It now enables safe adjacent-lane drift for non-jack phrases so the output is not locked to one fixed lane skeleton. Use `--no-preserve-lane-drift` to restore the older fixed feel.
 - Tap-plus scans 2000 ms local windows. Tap-heavy slices still add taps, while LN-heavy windows only add holds on slices that already contain a source LN and whose anchor duration falls between the local 16th-note and 8th-note duration. Longer LN anchors are treated as tap-addition anchors instead of cloning long generated holds. Source taps are never converted into LNs, and generated holds stay near a same-time LN anchor with collision, LN-conflict, and no-created-jack guards still taking priority.

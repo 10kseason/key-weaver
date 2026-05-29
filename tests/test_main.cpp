@@ -424,7 +424,7 @@ void testPpgTrillPreserved() {
     require(lanes[0] != lanes[1], "trill lanes should not collapse");
 }
 
-void testGestureRailSevenKeyAscendingStairLeftZone() {
+void testGestureRailSevenKeyAscendingStairUsesWholeBoard() {
     const auto chart = makeChart(7,
                                  {
                                      {1000, 0, keyconv::NoteType::Tap, std::nullopt},
@@ -446,13 +446,14 @@ void testGestureRailSevenKeyAscendingStairLeftZone() {
     const auto rail = keyconv::buildGestureRail(chart, 7, 10, 2, 500, true);
     for (const auto& note : chart.notes) {
         const auto* hint = keyconv::findGestureHint(&rail, note.id);
-        require(hint != nullptr, "left-panel stair should receive gesture hints");
-        require(hint->role == keyconv::PhraseRole::LeftHandVoice,
-                "left-panel 7K stair should be classified as a left-hand voice");
+        require(hint != nullptr, "whole-board stair should receive gesture hints");
+        require(hint->role == keyconv::PhraseRole::Neutral,
+                "whole-board 7K stair should not be classified as a split-panel hand voice");
     }
     require(lanes[0] <= lanes[1] && lanes[1] <= lanes[2] && lanes[2] <= lanes[3],
             "7K ascending stair should remain monotonic in 10K");
-    require(lanes.front() >= 0 && lanes.back() <= 4, "left-hand 7K stair should stay in the 10K left zone");
+    require(lanes.front() >= 0 && lanes.back() < 10, "7K stair should stay inside the 10K board");
+    require(lanes.back() >= 5, "7K stair should be allowed to cross the old left-panel boundary");
     require(result.report.quality.detectedStairs >= 1, "gesture report should detect the source stair");
     require(result.report.quality.brokenStairs == 0, "gesture rail should preserve the source stair");
     require(result.report.quality.createdJacks == 0, "gesture rail stair should not create jacks");
@@ -460,7 +461,7 @@ void testGestureRailSevenKeyAscendingStairLeftZone() {
     require(result.report.quality.lnConflictCount == 0, "gesture rail stair should not create LN conflicts");
 }
 
-void testGestureRailSevenKeyDescendingStairLeftZone() {
+void testGestureRailSevenKeyDescendingStairUsesWholeBoard() {
     const auto chart = makeChart(7,
                                  {
                                      {1000, 3, keyconv::NoteType::Tap, std::nullopt},
@@ -481,12 +482,13 @@ void testGestureRailSevenKeyDescendingStairLeftZone() {
     require(lanes.size() == 4, "7K descending stair should keep note count");
     require(lanes[0] >= lanes[1] && lanes[1] >= lanes[2] && lanes[2] >= lanes[3],
             "7K descending stair should remain monotonic down in 10K");
-    require(lanes.back() >= 0 && lanes.front() <= 4, "left-hand descending stair should stay in 10K left zone");
+    require(lanes.back() >= 0 && lanes.front() < 10, "descending stair should stay inside the 10K board");
+    require(lanes.front() >= 5, "descending stair should be allowed to cross the old left-panel boundary");
     require(result.report.quality.detectedStairs >= 1, "gesture report should detect descending stair");
     require(result.report.quality.brokenStairs == 0, "gesture rail should preserve descending stair");
 }
 
-void testGestureRailSevenKeyAscendingStairRightFiveKeyPanel() {
+void testGestureRailSevenKeyAscendingStairHighSideWholeBoard() {
     const auto chart = makeChart(7,
                                  {
                                      {1000, 3, keyconv::NoteType::Tap, std::nullopt},
@@ -504,27 +506,23 @@ void testGestureRailSevenKeyAscendingStairRightFiveKeyPanel() {
 
     const auto result = keyconv::convertChart(chart, options);
     const auto lanes = lanesOf(result.chart);
-    require(lanes.size() == 4, "right-panel 7K stair should keep note count");
+    require(lanes.size() == 4, "high-side 7K stair should keep note count");
     const auto rail = keyconv::buildGestureRail(chart, 7, 10, 2, 500, true);
     for (const auto& note : chart.notes) {
         const auto* hint = keyconv::findGestureHint(&rail, note.id);
-        require(hint != nullptr, "right-panel stair should receive gesture hints");
-        require(hint->role == keyconv::PhraseRole::RightHandVoice,
-                "high-side 7K stair should be classified as a right-hand voice");
+        require(hint != nullptr, "high-side stair should receive gesture hints");
+        require(hint->role == keyconv::PhraseRole::Neutral,
+                "high-side 7K stair should not be classified as a split-panel hand voice");
     }
     require(lanes[0] <= lanes[1] && lanes[1] <= lanes[2] && lanes[2] <= lanes[3],
-            "right-panel 7K stair should remain monotonic in 10K");
-    for (std::size_t i = 1; i < lanes.size(); ++i) {
-        require(std::abs(lanes[i] - lanes[i - 1]) <= 2,
-                "right-panel 7K stair should preserve compact voice-leading inside the 5K panel");
-    }
-    require(lanes.front() >= 5 && lanes.back() <= 9,
-            "high-side 7K stair should be recomposed inside the right 5K panel");
-    require(result.report.quality.detectedStairs >= 1, "gesture report should detect right-panel stair");
-    require(result.report.quality.brokenStairs == 0, "right-panel stair should preserve gesture shape");
-    require(result.report.quality.createdJacks == 0, "right-panel stair should not create jacks");
-    require(result.report.quality.collisionCount == 0, "right-panel stair should not create collisions");
-    require(result.report.quality.lnConflictCount == 0, "right-panel stair should not create LN conflicts");
+            "high-side 7K stair should remain monotonic in 10K");
+    require(lanes.front() >= 0 && lanes.back() <= 9,
+            "high-side 7K stair should stay inside the full 10K board");
+    require(result.report.quality.detectedStairs >= 1, "gesture report should detect high-side stair");
+    require(result.report.quality.brokenStairs == 0, "high-side stair should preserve gesture shape");
+    require(result.report.quality.createdJacks == 0, "high-side stair should not create jacks");
+    require(result.report.quality.collisionCount == 0, "high-side stair should not create collisions");
+    require(result.report.quality.lnConflictCount == 0, "high-side stair should not create LN conflicts");
 }
 
 void testGestureRailSevenKeyTrillShape() {
@@ -620,7 +618,7 @@ void testSevenToTenSourceAnchorsTakePriorityOverLeftEdgeBalance() {
             "repeated left-edge source phrases should stay compact while allowing coverage pressure");
     for (const int lane : sourceZeroTargets) {
         require(lane >= 0 && lane <= 4,
-                "repeated left-edge source phrases should stay in the left 5K panel");
+                "repeated left-edge source phrases should stay near the low target edge");
     }
     require(result.report.quality.createdJacks == 0, "left balance should not create jacks");
     require(result.report.quality.collisionCount == 0, "left balance should not create collisions");
@@ -656,7 +654,7 @@ void testSevenToTenSparseSourceLaneAnchor() {
             "same sparse 7K source lane should stay compact while allowing nearby coverage pressure");
     for (const int lane : lanes) {
         require(lane >= 0 && lane <= 4,
-                "same sparse 7K source lane should stay inside the left 5K panel");
+                "same sparse low 7K source lane should stay near the low target edge");
     }
     require(result.report.quality.createdJacks == 0, "source-lane anchoring should not create unrelated jacks");
     require(result.report.quality.collisionCount == 0, "source-lane anchoring should not create collisions");
@@ -691,7 +689,7 @@ void testTenKeyNonJackSourceLaneAnchorRelaxesInsidePanel() {
             "10K non-jack source-lane anchors should loosen enough to use nearby lanes");
     for (const int lane : lanes) {
         require(lane >= 0 && lane <= 4,
-                "10K relaxed non-jack anchors should stay inside the source hand panel");
+                "10K relaxed non-jack anchors should stay near their low source-lane region");
     }
     require(result.report.quality.sourceJackGroups == 0,
             "10K non-jack relaxation fixture should stay outside the jack window");
@@ -707,7 +705,7 @@ void testEightKeyPlayableCandidateRadiusRemainsStable() {
             "8K playable candidates should not inherit 10K-only relaxation behavior");
 }
 
-void testSevenToTenNonGestureChordsStayInSourcePanels() {
+void testSevenToTenNonGestureChordsUseWholeBoard() {
     const auto lowChord = makeChart(7,
                                     {
                                         {1000, 1, keyconv::NoteType::Tap, std::nullopt},
@@ -732,9 +730,15 @@ void testSevenToTenNonGestureChordsStayInSourcePanels() {
     const auto lowResult = keyconv::convertChart(lowChord, options);
     const auto lowLanes = lanesOf(lowResult.chart);
     require(lowLanes.size() == 3, "low 7K chord should keep note count");
+    bool lowCrossesOldPanelBoundary = false;
     for (const int lane : lowLanes) {
-        require(lane >= 0 && lane <= 4, "low 7K non-gesture chord should stay in the left 5K panel");
+        require(lane >= 0 && lane <= 9, "low 7K non-gesture chord should stay inside the full 10K board");
+        if (lane >= 5) {
+            lowCrossesOldPanelBoundary = true;
+        }
     }
+    require(lowCrossesOldPanelBoundary,
+            "low 7K non-gesture chord should be allowed to cross the old left-panel boundary");
     require(lowResult.report.quality.collisionCount == 0, "low 7K chord should avoid collisions");
     require(lowResult.report.quality.createdJacks == 0, "low 7K chord should not create jacks");
 
@@ -742,7 +746,7 @@ void testSevenToTenNonGestureChordsStayInSourcePanels() {
     const auto highLanes = lanesOf(highResult.chart);
     require(highLanes.size() == 3, "high 7K chord should keep note count");
     for (const int lane : highLanes) {
-        require(lane >= 5 && lane <= 9, "high 7K non-gesture chord should stay in the right 5K panel");
+        require(lane >= 0 && lane <= 9, "high 7K non-gesture chord should stay inside the full 10K board");
     }
     require(highResult.report.quality.collisionCount == 0, "high 7K chord should avoid collisions");
     require(highResult.report.quality.createdJacks == 0, "high 7K chord should not create jacks");
@@ -3267,7 +3271,7 @@ void testTenKeyDenimTapPlusShiftsEachBeat() {
         }
     }
     require(generatedOutsideLeftPanel,
-            "10K denim helpers should be allowed to use the full board, not only the source hand panel");
+            "10K denim helpers should be allowed to use the full board, not only the low source region");
 
     const std::vector<int> beatAnchors = {1000, 1500, 2000, 2500, 3000};
     for (std::size_t index = 1; index < beatAnchors.size(); ++index) {
@@ -3750,10 +3754,10 @@ int main() {
         {"PPG pattern detection", testPpgPatternDetection},
         {"PPG stair preserved", testPpgStairPreserved},
         {"PPG trill preserved", testPpgTrillPreserved},
-        {"gesture rail 7K ascending stair left zone", testGestureRailSevenKeyAscendingStairLeftZone},
-        {"gesture rail 7K descending stair left zone", testGestureRailSevenKeyDescendingStairLeftZone},
-        {"gesture rail 7K ascending stair right 5K panel",
-         testGestureRailSevenKeyAscendingStairRightFiveKeyPanel},
+        {"gesture rail 7K ascending stair uses whole board", testGestureRailSevenKeyAscendingStairUsesWholeBoard},
+        {"gesture rail 7K descending stair uses whole board", testGestureRailSevenKeyDescendingStairUsesWholeBoard},
+        {"gesture rail 7K ascending stair high-side whole board",
+         testGestureRailSevenKeyAscendingStairHighSideWholeBoard},
         {"gesture rail 7K trill shape", testGestureRailSevenKeyTrillShape},
         {"gesture rail source jack identity", testGestureRailSourceJackIdentity},
         {"7K to 10K source anchors beat left-edge balance",
@@ -3762,8 +3766,8 @@ int main() {
         {"10K non-jack source-lane anchor relaxes inside panel",
          testTenKeyNonJackSourceLaneAnchorRelaxesInsidePanel},
         {"8K playable candidate radius remains stable", testEightKeyPlayableCandidateRadiusRemainsStable},
-        {"7K to 10K non-gesture chords stay in source panels",
-         testSevenToTenNonGestureChordsStayInSourcePanels},
+        {"7K to 10K non-gesture chords use whole board",
+         testSevenToTenNonGestureChordsUseWholeBoard},
         {"7K to 10K tap-plus hand-zone balance", testSevenToTenTapPlusHandZoneBalance},
         {"Target-K likeness report 7K to 10K", testTargetKLikenessReportSevenToTen},
         {"Target-K likeness uses reference profile", testTargetKLikenessUsesReferenceProfile},

@@ -59,6 +59,15 @@ Target-10 has an additional density rule:
 - The 10K rule may choose a quarter-beat candidate over the first baseline 8th-beat candidate when both are safe.
 - The bundled `keyweaver_10k_broad_style_v1` root `desiredActiveLaneRate` and `desiredEdgeUsage` fields are lane-choice pressure inputs in addition to report scoring inputs.
 
+## Whole-Board Assignment
+
+On 8K/10K high-key output, base assignment and Gesture Rail hints must use the full target board:
+
+- Do not apply a 4K+4K / 5K+5K split-panel preferred zone as a hard candidate filter.
+- Do not classify 7K-to-10K Gesture Rail phrases as left-hand or right-hand split-panel voices.
+- Lane-balance pressure may consider every target lane, while source-lane anchors, gesture shape, collision, LN conflict, distance, and no-created-jack guards still take priority.
+- Low source lanes may still naturally map toward low target lanes, and high source lanes may still naturally map toward high target lanes, but this must come from full-board scoring rather than a hard panel rail.
+
 ## Jack And Repeat Contract
 
 - The default jack/repeat detection window is 500 ms.
@@ -92,8 +101,11 @@ The frozen algorithm must keep these invariants:
 The v0.6.0 contract is guarded by the unit tests named:
 
 - `auto-more expansion reports larger budget`
+- `gesture rail 7K ascending stair uses whole board`
+- `gesture rail 7K ascending stair high-side whole board`
 - `high-key tap-plus prefers eighth-beat additions`
 - `10K tap-plus boosts quarter-eighth density above 8K`
+- `7K to 10K non-gesture chords use whole board`
 - `profile wide-board pressure uses outer panel lanes`
 - `high-key extreme trill avoids both outer edges`
 - `long source jack stays single lane playable`

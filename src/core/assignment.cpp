@@ -217,13 +217,19 @@ std::optional<Note> previousInMotif(const std::vector<Note>& placed,
     return std::nullopt;
 }
 
+bool wholeBoardHighKeyDefault(int sourceKeyCount, int targetKeyCount) {
+    return targetKeyCount >= 8 && targetKeyCount > sourceKeyCount;
+}
+
 bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
-    return sourceKeyCount == 7 && targetKeyCount == 10;
+    return sourceKeyCount == 7 && targetKeyCount == 10 &&
+           !wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount);
 }
 
 bool useEvenHandSplit(int sourceKeyCount, int targetKeyCount) {
     return sourceKeyCount >= 2 && targetKeyCount >= 2 &&
-           sourceKeyCount % 2 == 0 && targetKeyCount % 2 == 0;
+           sourceKeyCount % 2 == 0 && targetKeyCount % 2 == 0 &&
+           !wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount);
 }
 
 std::pair<int, int> dualFiveZoneForSource(int sourceLane) {
@@ -254,6 +260,9 @@ int dualFiveBaseLaneForSource(int sourceLane, int targetKeyCount) {
 std::pair<int, int> balanceZoneForSource(int sourceLane, int sourceKeyCount, int targetKeyCount) {
     if (targetKeyCount <= 1) {
         return {0, 0};
+    }
+    if (wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount)) {
+        return {0, targetKeyCount - 1};
     }
     if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
         return dualFiveZoneForSource(sourceLane);

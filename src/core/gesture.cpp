@@ -41,8 +41,13 @@ double averageLane(const std::vector<PhraseNote>& notes) {
     return static_cast<double>(total) / static_cast<double>(notes.size());
 }
 
+bool wholeBoardHighKeyDefault(int sourceKeyCount, int targetKeyCount) {
+    return targetKeyCount >= 8 && targetKeyCount > sourceKeyCount;
+}
+
 bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
-    return sourceKeyCount == 7 && targetKeyCount == 10;
+    return sourceKeyCount == 7 && targetKeyCount == 10 &&
+           !wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount);
 }
 
 std::pair<int, int> dualFiveZoneForPhrase(const std::vector<PhraseNote>& notes) {
@@ -71,6 +76,9 @@ std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes, int sour
         return {0, 0};
     }
     if (notes.empty()) {
+        return {0, targetKeyCount - 1};
+    }
+    if (wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount)) {
         return {0, targetKeyCount - 1};
     }
     if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {

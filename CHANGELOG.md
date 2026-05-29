@@ -8,7 +8,7 @@
 - Added a reconversion guard for already-converted chart markers such as `A7K`, `a10K`, `4to7c`, `7to10c`, `4K10C`, and `KeyWeaver10K`; CLI/GUI batch runs count these as skipped.
 - Added GUI folder-scan progress for large Songs folders, including counting status, scan percent, remaining file count, and chart count while keeping the window message loop responsive.
 - Fixed duplicate batch inputs so multithreaded CLI/GUI batch runs do not process the same chart twice or create duplicate `.osu` outputs.
-- Tuned 8K/10K tap-plus lane scoring so generated notes no longer lock one-hand source slices to 4K+4K / 5K+5K hand panels; profile/built-in wide-board pressure can use the full target board, underfilled local lanes, and outer lanes when broader coverage is safer.
+- Tuned 8K/10K high-key mapping so base assignment, gesture hints, and generated notes no longer lock into 4K+4K / 5K+5K hand panels; profile/built-in wide-board pressure can use the full target board, underfilled local lanes, and outer lanes when broader coverage is safer.
 
 ## 0.6.0
 

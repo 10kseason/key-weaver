@@ -28,10 +28,11 @@ Current scope:
 - v0.5.1 GUI output/report defaults beside the selected input `.osu`
 - v0.5.5 drag-and-drop GUI loading plus batch conversion: dropped files use the GUI Target field, and blank Output writes each chart beside its original file
 - v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
+- CLI batch conversion runs charts in parallel by default, using the detected CPU thread count capped only by input count; `--jobs` can override the worker count
+- CLI and GUI batch runs show percent-done progress and remaining chart count while converting
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
 - v0.6.0 algorithm lock is documented at `docs/algorithm-lock-v0.6.0.md`, freezing the current generated-note, jack, LN, stream-transform, and safety contracts
-- v0.6.0 GUI Batch is temporarily locked in tester builds; use single-chart Convert while batch conversion is reworked
 - v0.6.0 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
 - v0.5.8 high-key generated-note presets use 10%/15%/20% low/normal/more budgets, 8K+ additions prefer 8th-beat slices with 16th-beat fallback, suppress additions on 32nd-or-faster even-key stairs, reduce outer-lane fill pressure, preserve long source jacks on one lane, and limit generated LNs to 8th-to-16th durations
 - v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus deterministic stream transforms (`superrandom`, `full-jitter`)
@@ -164,6 +165,7 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --dp                    reserve DP mode, reports SP fallback in v0.1
   --dry-run               convert in memory and report only
   --batch                 treat positional chart inputs as a batch; outputs default beside each input
+  --jobs <number>         batch worker count override, default detected CPU thread count
   --report <path>         write conversion report json
   --target-profile <json> use a Target-K reference profile JSON for K-likeness scoring
                           target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled
@@ -190,10 +192,13 @@ build/KeyWeaver.exe samples/simple_4k.osu --target 10 --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --expansion-policy auto-low --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --preserve-convert --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch
+build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch --jobs 2
 build/KeyWeaver.exe path/to/chart.bms --target 4 --dry-run
 ```
 
 BMS inputs must write BMS-family outputs (`.bms`, `.bme`, `.bml`, or `.pms`). If `--out` is omitted, the original extension is kept except 9K BMS output, which defaults to `.pms`.
+
+Already-converted inputs are skipped before conversion. KeyWeaver checks filenames plus chart `Creator` / `Version` metadata for converter markers such as `KeyWeaver10K`, `A7K`, `a10K`, `4to7c`, `7to10c`, and compact `4K10C` tags; CLI batch mode reports those files as `skipped` instead of failed.
 
 ## GUI Playtest Tool
 
@@ -227,7 +232,7 @@ GUI scope:
 - optional source-key override and target key
 - choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
 - run one conversion and parse report JSON
-- GUI Batch is temporarily locked in tester builds; convert one chart at a time
+- run GUI Batch from dropped charts or a selected songs/root folder, with status text showing percent done and remaining files
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
 - open output/report and copy the generated CLI command
 ```
@@ -244,7 +249,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - `--optimizer beam`, `--style dp`, and `--dp` are accepted as reserved options and report a fallback warning.
 - Strong compression can drop or roll notes under no-overlap policies. Default high-to-low `auto` compression uses `no-overlap-drop`, so overflow taps or holds are omitted when the target key count cannot represent the source chord/LN occupancy cleanly. This prioritizes low-key recreation over preserving every object. Use explicit `--compress-policy no-overlap-hybrid` to roll overflow holds when possible, or `--compress-policy no-overlap-roll` when tap overflow should also be rolled instead of deleted.
 - Converted osu!mania difficulty names append a KeyWeaver mode marker. The base is `KeyWeaverNK`, where `N` is the target key count, and high-key auto expansion adds `(more)`, `(normal)`, or `(low)`. Stream transforms add `-sRan` or `-jitter`, for example `KeyWeaver10K-sRan (more)` or `KeyWeaver10K-jitter (low)`. If `--out` is omitted, the `.osu` is written beside the input using the same marker and a numeric suffix when needed.
-- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. GUI Batch is temporarily locked in tester builds; multi-file drops load only the first supported chart.
+- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. GUI Batch converts dropped files or a selected folder, and blank Output writes each chart beside its original file.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
 - If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. High-key auto presets target generated-note budgets of `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%; explicit `--expansion-policy preserve` disables deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.

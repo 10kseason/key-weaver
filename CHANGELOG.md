@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added CLI batch worker parallelism; automatic batch mode now uses the detected CPU thread count by default while `--jobs` can override the worker count.
+- Added CLI/GUI batch progress text showing percent done and remaining chart count.
+- Re-enabled GUI Batch for tester packages and added a simple status line for Convert, Batch, and Matrix runs.
+- Added a reconversion guard for already-converted chart markers such as `A7K`, `a10K`, `4to7c`, `7to10c`, `4K10C`, and `KeyWeaver10K`; CLI/GUI batch runs count these as skipped.
+- Added GUI folder-scan progress for large Songs folders, including counting status, scan percent, remaining file count, and chart count while keeping the window message loop responsive.
+
 ## 0.6.0
 
 - Documented the frozen v0.6.0 algorithm contract in `docs/algorithm-lock-v0.6.0.md`.

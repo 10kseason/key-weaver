@@ -50,11 +50,14 @@ On 8K+ high-key output, generated tap-plus notes must follow these priorities:
 - Reduce fill pressure on the outer target lanes, especially lanes that would make both extremes into an alternating trill pair.
 - Bias lane choice toward whole-target mirror symmetry.
 - For even-key to even-key conversion, one-hand source slices keep generated additions inside the matching target hand; source slices that use both hands may use the full target range.
+- Apply wide-board pressure inside the safe hand panel: locally inactive lanes, globally underused lanes, and edge lanes below the profile/built-in target receive fill priority.
+- When the target profile expects high edge usage, the light outer-lane penalty is reduced, but the outer-edge trill guard still blocks unsafe extreme alternation.
 
 Target-10 has an additional density rule:
 
 - Quarter-beat and 8th-beat source slices receive extra priority above the 8K+ baseline.
 - The 10K rule may choose a quarter-beat candidate over the first baseline 8th-beat candidate when both are safe.
+- The bundled `keyweaver_10k_broad_style_v1` root `desiredActiveLaneRate` and `desiredEdgeUsage` fields are lane-choice pressure inputs in addition to report scoring inputs.
 
 ## Jack And Repeat Contract
 
@@ -91,6 +94,7 @@ The v0.6.0 contract is guarded by the unit tests named:
 - `auto-more expansion reports larger budget`
 - `high-key tap-plus prefers eighth-beat additions`
 - `10K tap-plus boosts quarter-eighth density above 8K`
+- `profile wide-board pressure uses outer panel lanes`
 - `high-key extreme trill avoids both outer edges`
 - `long source jack stays single lane playable`
 - `chord-embedded long source jack stays single lane playable`

@@ -1427,6 +1427,27 @@ int localLaneUseAround(const std::vector<Note>& notes, int lane, int time, int w
     return count;
 }
 
+int activeLaneCountAround(const std::vector<Note>& notes, int time, int targetKeyCount, int windowMs) {
+    if (targetKeyCount <= 0) {
+        return 0;
+    }
+
+    const int halfWindow = std::max(250, windowMs / 2);
+    const int start = time - halfWindow;
+    const int end = time + halfWindow;
+    std::vector<bool> active(static_cast<std::size_t>(targetKeyCount), false);
+    for (const auto& note : notes) {
+        if (note.lane < 0 || note.lane >= targetKeyCount) {
+            continue;
+        }
+        const int noteEnd = note.endTime.value_or(note.time);
+        if (note.time <= end && noteEnd >= start) {
+            active[static_cast<std::size_t>(note.lane)] = true;
+        }
+    }
+    return static_cast<int>(std::count(active.begin(), active.end(), true));
+}
+
 bool outerLane(int lane, int targetKeyCount) {
     return targetKeyCount > 1 && (lane == 0 || lane == targetKeyCount - 1);
 }
@@ -1445,6 +1466,107 @@ double lightEdgePenalty(int lane, int targetKeyCount) {
         return 0.0;
     }
     return outerLane(lane, targetKeyCount) ? 10.0 : 8.0;
+}
+
+double desiredWideBoardActiveRate(const ConvertOptions& options) {
+    if (options.targetKProfile.has_value()) {
+        return std::clamp(options.targetKProfile->desiredActiveLaneRate, 0.10, 1.0);
+    }
+    return options.targetKeyCount >= 10 ? 0.80 : 0.72;
+}
+
+double desiredWideBoardEdgeUsage(const ConvertOptions& options) {
+    if (options.targetKProfile.has_value()) {
+        return std::clamp(options.targetKProfile->desiredEdgeUsage, 0.0, 0.75);
+    }
+    if (options.targetKeyCount <= 0) {
+        return 0.0;
+    }
+    return options.targetKeyCount >= 10 ? 0.34 : std::min(0.45, 2.0 / options.targetKeyCount);
+}
+
+bool wideBoardPressureActive(const ConvertOptions& options) {
+    return highKeyGeneratedTuningActive(options) && desiredWideBoardActiveRate(options) >= 0.60;
+}
+
+double currentEdgeUsageRatio(const std::vector<int>& laneUse, int targetKeyCount) {
+    if (targetKeyCount <= 0 || laneUse.empty()) {
+        return 0.0;
+    }
+
+    int total = 0;
+    int edgeNotes = 0;
+    const int edgeWidth = std::min(2, targetKeyCount / 2);
+    for (int lane = 0; lane < targetKeyCount && lane < static_cast<int>(laneUse.size()); ++lane) {
+        const int count = laneUse[static_cast<std::size_t>(lane)];
+        total += count;
+        if (lane < edgeWidth || lane >= targetKeyCount - edgeWidth) {
+            edgeNotes += count;
+        }
+    }
+    return total <= 0 ? 0.0 : static_cast<double>(edgeNotes) / static_cast<double>(total);
+}
+
+double profileAwareLightEdgePenalty(int lane, const ExpansionContext& context) {
+    const double penalty = lightEdgePenalty(lane, context.options.targetKeyCount);
+    if (penalty <= 0.0 || !wideBoardPressureActive(context.options)) {
+        return penalty;
+    }
+
+    const double desiredEdgeUsage = desiredWideBoardEdgeUsage(context.options);
+    const double scale = desiredEdgeUsage >= 0.34 ? 0.25 : desiredEdgeUsage >= 0.25 ? 0.50 : 0.75;
+    return penalty * scale;
+}
+
+double profileWideBoardLaneScore(const ExpansionCandidate& candidate, const ExpansionContext& context) {
+    const int lane = candidate.note.lane;
+    const int targetKeyCount = context.options.targetKeyCount;
+    if (!wideBoardPressureActive(context.options) || lane < 0 || lane >= targetKeyCount ||
+        lane >= static_cast<int>(context.laneUse.size())) {
+        return 0.0;
+    }
+
+    const int windowMs = adaptiveBudgetWindowMs(context.options);
+    const int localLaneUse = localLaneUseAround(context.chart.notes, lane, candidate.note.time, windowMs);
+    const int activeLanes = activeLaneCountAround(context.chart.notes,
+                                                  candidate.note.time,
+                                                  targetKeyCount,
+                                                  windowMs);
+    const int desiredActiveLanes =
+        clampInt(static_cast<int>(std::lround(desiredWideBoardActiveRate(context.options) *
+                                             static_cast<double>(targetKeyCount))),
+                 1,
+                 targetKeyCount);
+
+    double score = 0.0;
+    if (activeLanes < desiredActiveLanes) {
+        const int deficit = desiredActiveLanes - activeLanes;
+        score += std::min(16.0, 5.0 + static_cast<double>(deficit) * 1.75);
+        score += localLaneUse == 0
+                     ? 8.0
+                     : -std::min(6.0, static_cast<double>(localLaneUse) * 1.50);
+    }
+
+    const int totalUse = std::accumulate(context.laneUse.begin(), context.laneUse.end(), 0);
+    const double averageUse = targetKeyCount <= 0 ? 0.0 : static_cast<double>(totalUse) /
+                                                             static_cast<double>(targetKeyCount);
+    const int laneUse = context.laneUse[static_cast<std::size_t>(lane)];
+    if (static_cast<double>(laneUse) < averageUse) {
+        score += std::min(8.0, 2.0 + (averageUse - static_cast<double>(laneUse)) * 1.25);
+    }
+
+    if (lightEdgeLane(lane, targetKeyCount)) {
+        const double desiredEdgeUsage = desiredWideBoardEdgeUsage(context.options);
+        const double edgeDeficit = desiredEdgeUsage - currentEdgeUsageRatio(context.laneUse, targetKeyCount);
+        if (edgeDeficit > 0.0) {
+            score += 5.0 + std::min(10.0, edgeDeficit * 40.0);
+            if (outerLane(lane, targetKeyCount) && desiredEdgeUsage >= 0.34) {
+                score += 2.0;
+            }
+        }
+    }
+
+    return score;
 }
 
 double outerEdgeTrillPenalty(const std::vector<Note>& notes, int lane, int time, int targetKeyCount) {
@@ -1618,7 +1740,8 @@ void tuneHighKeyGeneratedCandidate(ExpansionCandidate& candidate, const Expansio
 
     candidate.score += tenKeyDenimBeatShiftScore(candidate, context);
     candidate.score += mirrorSymmetryScore(context, candidate.note.lane);
-    candidate.score -= lightEdgePenalty(candidate.note.lane, context.options.targetKeyCount);
+    candidate.score += profileWideBoardLaneScore(candidate, context);
+    candidate.score -= profileAwareLightEdgePenalty(candidate.note.lane, context);
     candidate.score -= outerEdgeTrillPenalty(context.chart.notes,
                                              candidate.note.lane,
                                              candidate.note.time,

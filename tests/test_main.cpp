@@ -1044,6 +1044,63 @@ void testAdaptiveGrowthBudgetAllowsSparseProfiledFill() {
     require(quality.nearTimeConflicts == 0, "sparse profiled fill should avoid near-time conflicts");
 }
 
+void testProfileWideBoardPressureUsesOuterPanelLanes() {
+    auto chart = makeChart(4,
+                           {
+                               {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {1750, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {2000, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2250, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {2500, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {2750, 2, keyconv::NoteType::Tap, std::nullopt},
+                               {3000, 1, keyconv::NoteType::Tap, std::nullopt},
+                               {3250, 2, keyconv::NoteType::Tap, std::nullopt},
+                           });
+    addTimingPoint(chart);
+
+    keyconv::TargetKProfile profile;
+    profile.targetKeys = 10;
+    profile.sampleCount = 628;
+    profile.windowMs = 1000;
+    profile.profileName = "keyweaver_10k_broad_style_v1";
+    profile.profileKind = "style";
+    profile.sourceName = "u_e_circusgalop_10k_reference_set";
+    profile.authorToken = "u_e,CircusGalop";
+    profile.desiredLaneEntropy = 0.82;
+    profile.desiredEdgeUsage = 0.38;
+    profile.desiredActiveLaneRate = 0.70;
+    profile.desiredChordSpan = 0.58;
+    profile.desiredHandBalance = 0.80;
+    profile.desiredAdjacentExpansion = 0.32;
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Direct;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+    options.targetKProfile = profile;
+    options.maxAddedPerSlice = 1;
+
+    const auto result = keyconv::convertChart(chart, options);
+    int generated = 0;
+    bool outerPanelLaneGenerated = false;
+    for (const auto& note : result.chart.notes) {
+        if (note.id.rfind("gen:tap_plus:", 0) != 0) {
+            continue;
+        }
+        ++generated;
+        if (note.lane == 0 || note.lane == 1 || note.lane == 8 || note.lane == 9) {
+            outerPanelLaneGenerated = true;
+        }
+    }
+
+    require(generated >= 2, "profiled wide-board fixture should spend the tap-plus budget");
+    require(outerPanelLaneGenerated,
+            "profiled 10K tap-plus should use outer panel lanes when the reference profile wants edge usage");
+}
+
 void testPreserveTapPlusCanUseSecondSliceFillSlot() {
     const auto chart = makeChart(4,
                                  {
@@ -3700,6 +3757,7 @@ int main() {
         {"adaptive growth budget reports profile windows", testAdaptiveGrowthBudgetReportsProfileWindows},
         {"adaptive growth budget uses density buckets", testAdaptiveGrowthBudgetUsesDensityBuckets},
         {"adaptive growth budget allows sparse profiled fill", testAdaptiveGrowthBudgetAllowsSparseProfiledFill},
+        {"profile wide-board pressure uses outer panel lanes", testProfileWideBoardPressureUsesOuterPanelLanes},
         {"preserve tap plus can use second slice fill slot", testPreserveTapPlusCanUseSecondSliceFillSlot},
         {"PPG chord does not collapse", testPpgChordDoesNotCollapse},
         {"PPG LN avoids tap", testPpgLnAvoidsTap},

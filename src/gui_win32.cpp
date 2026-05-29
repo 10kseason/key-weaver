@@ -112,6 +112,7 @@ struct AppState {
     std::wstring lastCommand;
     std::vector<std::filesystem::path> batchInputs;
     bool suppressInputChange = false;
+    bool operationBusy = false;
 };
 
 std::filesystem::path directoryForOpen(const std::filesystem::path& path) {
@@ -234,6 +235,76 @@ void setInputText(AppState& state, const std::wstring& text) {
     setWindowText(state.inputEdit, text);
     state.suppressInputChange = false;
 }
+
+void setStatus(AppState& state, const std::wstring& text);
+
+void setOperationControlsEnabled(AppState& state, BOOL enabled) {
+    for (HWND control : {
+             state.keyconvEdit,
+             state.inputEdit,
+             state.outputDirEdit,
+             state.sourceEdit,
+             state.targetEdit,
+             state.expansionCombo,
+             state.compressCombo,
+             state.streamProfileCombo,
+             state.preserveConvertCheck,
+             state.debugReportsCheck,
+         }) {
+        if (control != nullptr) {
+            EnableWindow(control, enabled);
+        }
+    }
+    for (int id : {
+             kButtonBrowseKeyconv,
+             kButtonBrowseInput,
+             kButtonBrowseOutputDir,
+             kButtonConvert,
+             kButtonBatch,
+             kButtonMatrix,
+         }) {
+        HWND control = GetDlgItem(state.hwnd, id);
+        if (control != nullptr) {
+            EnableWindow(control, enabled);
+        }
+    }
+}
+
+class OperationGuard {
+public:
+    OperationGuard(AppState& state, std::wstring busyStatus)
+        : state_(state) {
+        if (state_.operationBusy) {
+            setStatus(state_, L"Busy: operation already running");
+            return;
+        }
+        state_.operationBusy = true;
+        setOperationControlsEnabled(state_, FALSE);
+        if (!busyStatus.empty()) {
+            setStatus(state_, busyStatus);
+        }
+        active_ = true;
+    }
+
+    OperationGuard(const OperationGuard&) = delete;
+    OperationGuard& operator=(const OperationGuard&) = delete;
+
+    ~OperationGuard() {
+        if (!active_) {
+            return;
+        }
+        setOperationControlsEnabled(state_, TRUE);
+        state_.operationBusy = false;
+    }
+
+    bool active() const {
+        return active_;
+    }
+
+private:
+    AppState& state_;
+    bool active_ = false;
+};
 
 std::filesystem::path moduleDirectory() {
     std::array<wchar_t, MAX_PATH> buffer{};
@@ -1145,6 +1216,10 @@ void copyToClipboard(HWND owner, const std::wstring& text) {
 }
 
 void executeSingleConvert(AppState& state) {
+    OperationGuard operation(state, L"Converting: starting");
+    if (!operation.active()) {
+        return;
+    }
     auto options = readToolOptions(state);
     if (!validateToolOptions(options, state.hwnd)) {
         return;
@@ -1195,6 +1270,10 @@ void executeSingleConvert(AppState& state) {
 }
 
 void executeMatrix(AppState& state) {
+    OperationGuard operation(state, L"Matrix: starting");
+    if (!operation.active()) {
+        return;
+    }
     auto options = readToolOptions(state);
     if (!validateToolOptions(options, state.hwnd)) {
         return;
@@ -1231,6 +1310,33 @@ std::optional<std::filesystem::path> explicitOutputDir(const AppState& state) {
         return std::nullopt;
     }
     return absolutePath(std::filesystem::path(outputDirText));
+}
+
+std::wstring batchInputKey(const std::filesystem::path& path) {
+    std::error_code error;
+    auto key = std::filesystem::weakly_canonical(path, error);
+    if (error) {
+        error.clear();
+        key = absolutePath(path).lexically_normal();
+    }
+    return lowerAscii(key.wstring());
+}
+
+std::vector<std::filesystem::path> deduplicateBatchInputs(const std::vector<std::filesystem::path>& inputs,
+                                                          int& duplicates) {
+    std::vector<std::filesystem::path> result;
+    result.reserve(inputs.size());
+    std::set<std::wstring> seen;
+    duplicates = 0;
+    for (const auto& input : inputs) {
+        const auto key = batchInputKey(input);
+        if (!seen.insert(key).second) {
+            ++duplicates;
+            continue;
+        }
+        result.push_back(input);
+    }
+    return result;
 }
 
 std::vector<std::filesystem::path> batchInputsForState(const AppState& state) {
@@ -1365,6 +1471,10 @@ void applyBatchJobResult(AppState& state, const BatchJobResult& result, int& suc
 }
 
 void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
+    OperationGuard operation(state, L"Batch: starting");
+    if (!operation.active()) {
+        return;
+    }
     auto baseOptions = readToolOptions(state);
     auto inputs = chooseFolderFirst ? chooseBatchFolderInputs(state) : batchInputsForState(state);
     const auto inputText = trim(getWindowText(state.inputEdit));
@@ -1374,6 +1484,9 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     if (!chooseFolderFirst && (inputs.empty() || (!hasDirectoryInput && state.batchInputs.size() <= 1))) {
         inputs = chooseBatchFolderInputs(state);
     }
+    const std::size_t requestedInputCount = inputs.size();
+    int duplicateInputs = 0;
+    inputs = deduplicateBatchInputs(inputs, duplicateInputs);
     if (inputs.empty()) {
         MessageBoxW(state.hwnd, L"Select a songs folder containing .osu files, or drop multiple chart files first.",
                     L"KeyWeaver GUI", MB_ICONERROR);
@@ -1405,10 +1518,15 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
 
     int succeeded = 0;
     int failed = 0;
-    int skipped = 0;
+    int skipped = duplicateInputs;
     std::vector<BatchJob> jobs;
     jobs.reserve(inputs.size());
     std::set<std::filesystem::path> reservedOutputPaths;
+    if (duplicateInputs > 0) {
+        appendLog(state, L"Duplicate inputs skipped: " + std::to_wstring(duplicateInputs) +
+                         L" of " + std::to_wstring(requestedInputCount) + L"\r\n");
+        addSummaryLine(state, L"[skip] duplicate inputs=" + std::to_wstring(duplicateInputs));
+    }
     for (std::size_t index = 0; index < inputs.size(); ++index) {
         if ((index % 64) == 0) {
             const auto text = progressText(index, inputs.size(), L"Batch prepare");
@@ -1467,7 +1585,10 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     if (!baseOptions.debugReports) {
         appendLog(state, L"Debug JSON off: batch writes charts only.\r\n");
     }
-    appendProgress(state, static_cast<std::size_t>(skipped + failed), inputs.size(), L"Batch");
+    auto uniqueProcessedCount = [&]() -> std::size_t {
+        return static_cast<std::size_t>(succeeded + failed + std::max(0, skipped - duplicateInputs));
+    };
+    appendProgress(state, uniqueProcessedCount(), inputs.size(), L"Batch");
     UpdateWindow(state.hwnd);
 
     std::deque<std::future<BatchJobResult>> running;
@@ -1482,10 +1603,7 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
         auto result = running.front().get();
         running.pop_front();
         applyBatchJobResult(state, result, succeeded, failed);
-        appendProgress(state,
-                       static_cast<std::size_t>(succeeded + failed + skipped),
-                       inputs.size(),
-                       L"Batch");
+        appendProgress(state, uniqueProcessedCount(), inputs.size(), L"Batch");
         UpdateWindow(state.hwnd);
     };
 

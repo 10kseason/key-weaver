@@ -17,6 +17,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -462,6 +463,44 @@ void throwIfConvertedInput(const std::filesystem::path& input, const keyconv::Ch
     if (auto reason = convertedMetadataMarkerReason(chart)) {
         throw ConvertedInputError("already-converted chart marker detected: " + *reason);
     }
+}
+
+std::string batchInputKey(const std::filesystem::path& input) {
+    std::error_code error;
+    auto key = std::filesystem::weakly_canonical(input, error);
+    if (error) {
+        error.clear();
+        key = std::filesystem::absolute(input, error);
+        if (error) {
+            key = input;
+        }
+        key = key.lexically_normal();
+    }
+    auto text = displayPath(key);
+#if defined(_WIN32)
+    text = lowerAscii(std::move(text));
+#endif
+    return text;
+}
+
+struct UniqueBatchInputs {
+    std::vector<std::filesystem::path> inputs;
+    int duplicates = 0;
+};
+
+UniqueBatchInputs deduplicateBatchInputs(const std::vector<std::filesystem::path>& inputs) {
+    UniqueBatchInputs result;
+    result.inputs.reserve(inputs.size());
+    std::set<std::string> seen;
+    for (const auto& input : inputs) {
+        const auto key = batchInputKey(input);
+        if (!seen.insert(key).second) {
+            ++result.duplicates;
+            continue;
+        }
+        result.inputs.push_back(input);
+    }
+    return result;
 }
 
 std::filesystem::path defaultChartExtension(const std::filesystem::path& input, int targetKeys) {
@@ -1927,12 +1966,18 @@ BatchItemResult runBatchItem(const CliOptions& cli,
 }
 
 int runBatchConversion(const CliOptions& cli) {
+    const auto unique = deduplicateBatchInputs(cli.inputs);
+    const auto& inputs = unique.inputs;
     int succeeded = 0;
     int failed = 0;
-    int skipped = 0;
-    const std::size_t workerCount = batchWorkerCount(cli.inputs.size(), cli.jobs);
+    int skipped = unique.duplicates;
+    const std::size_t workerCount = batchWorkerCount(inputs.size(), cli.jobs);
     std::cout << kToolName << " " << kToolVersion << "\n";
-    std::cout << "Batch mode: " << cli.inputs.size() << " input(s)\n";
+    std::cout << "Batch mode: " << inputs.size() << " input(s)";
+    if (unique.duplicates > 0) {
+        std::cout << " (" << unique.duplicates << " duplicate skipped)";
+    }
+    std::cout << "\n";
     std::cout << "Target keys: " << *cli.target << "\n";
     std::cout << "Output: beside each input chart\n";
     std::cout << "Workers: " << workerCount << (cli.jobs.has_value() ? "" : " (auto)") << "\n";
@@ -1941,9 +1986,9 @@ int runBatchConversion(const CliOptions& cli) {
     }
 
     if (workerCount <= 1) {
-        for (std::size_t index = 0; index < cli.inputs.size(); ++index) {
-            const auto& input = cli.inputs[index];
-            std::cout << "\n[" << (index + 1) << "/" << cli.inputs.size() << "] "
+        for (std::size_t index = 0; index < inputs.size(); ++index) {
+            const auto& input = inputs[index];
+            std::cout << "\n[" << (index + 1) << "/" << inputs.size() << "] "
                       << displayPath(input) << "\n";
             try {
                 CliOptions item = cli;
@@ -1966,9 +2011,9 @@ int runBatchConversion(const CliOptions& cli) {
                           << error.what() << "\n";
             }
             const std::size_t done = index + 1;
-            const std::size_t percent = (done * 100) / cli.inputs.size();
+            const std::size_t percent = (done * 100) / inputs.size();
             std::cout << "Progress: " << percent << "% done, "
-                      << (cli.inputs.size() - done) << " left\n";
+                      << (inputs.size() - done) << " left\n";
         }
 
         std::cout << "\nBatch summary: succeeded=" << succeeded << " failed=" << failed
@@ -1989,10 +2034,10 @@ int runBatchConversion(const CliOptions& cli) {
         workers.emplace_back([&]() {
             for (;;) {
                 const std::size_t index = nextIndex.fetch_add(1);
-                if (index >= cli.inputs.size()) {
+                if (index >= inputs.size()) {
                     break;
                 }
-                auto result = runBatchItem(cli, index, cli.inputs[index], outputMutex);
+                auto result = runBatchItem(cli, index, inputs[index], outputMutex);
                 if (result.skipped) {
                     ++parallelSkipped;
                 } else if (result.exitCode == 0) {
@@ -2001,10 +2046,10 @@ int runBatchConversion(const CliOptions& cli) {
                     ++parallelFailed;
                 }
                 const std::size_t done = parallelCompleted.fetch_add(1) + 1;
-                const std::size_t percent = (done * 100) / cli.inputs.size();
+                const std::size_t percent = (done * 100) / inputs.size();
 
                 std::lock_guard<std::mutex> lock(logMutex);
-                std::cout << "\n[" << (result.index + 1) << "/" << cli.inputs.size() << "] "
+                std::cout << "\n[" << (result.index + 1) << "/" << inputs.size() << "] "
                           << displayPath(result.input) << "\n";
                 if (!result.output.empty()) {
                     std::cout << result.output;
@@ -2016,7 +2061,7 @@ int runBatchConversion(const CliOptions& cli) {
                     std::cerr << result.error << "\n";
                 }
                 std::cout << "Progress: " << percent << "% done, "
-                          << (cli.inputs.size() - done) << " left\n";
+                          << (inputs.size() - done) << " left\n";
             }
         });
     }
@@ -2025,7 +2070,7 @@ int runBatchConversion(const CliOptions& cli) {
     }
     succeeded = parallelSucceeded.load();
     failed = parallelFailed.load();
-    skipped = parallelSkipped.load();
+    skipped = unique.duplicates + parallelSkipped.load();
 
     std::cout << "\nBatch summary: succeeded=" << succeeded << " failed=" << failed
               << " skipped=" << skipped << "\n";

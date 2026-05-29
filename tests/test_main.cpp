@@ -3257,11 +3257,17 @@ void testTenKeyDenimTapPlusShiftsEachBeat() {
                 generatedLaneByTime.count(2000) == 1,
             "10K denim beat-shift fixture should cover consecutive whole-beat anchors");
 
+    bool generatedOutsideLeftPanel = false;
     for (const auto& [time, lane] : generatedLaneByTime) {
         (void)time;
-        require(lane >= 0 && lane < 5,
-                "10K left-hand denim helpers should stay inside the left 5K panel");
+        require(lane >= 0 && lane < 10,
+                "10K denim helpers should stay inside the target board");
+        if (lane >= 5) {
+            generatedOutsideLeftPanel = true;
+        }
     }
+    require(generatedOutsideLeftPanel,
+            "10K denim helpers should be allowed to use the full board, not only the source hand panel");
 
     const std::vector<int> beatAnchors = {1000, 1500, 2000, 2500, 3000};
     for (std::size_t index = 1; index < beatAnchors.size(); ++index) {
@@ -3272,11 +3278,9 @@ void testTenKeyDenimTapPlusShiftsEachBeat() {
                     "10K denim helper should shift on consecutive whole-beat anchors");
         }
     }
-    require(generatedLaneByTime.at(1000) != generatedLaneByTime.at(2000),
-            "10K denim helper should also shift the 5K panel phase every two beats");
 }
 
-void testEightKeyTapPlusReducesOneHandDenimWebAdditions() {
+void testEightKeyTapPlusUsesWholeBoardForOneHandDenim() {
     auto chart = makeChart(4,
                            {
                                {1000, 0, keyconv::NoteType::Tap, std::nullopt},
@@ -3302,10 +3306,14 @@ void testEightKeyTapPlusReducesOneHandDenimWebAdditions() {
     options.maxAddedPerSlice = 2;
 
     const auto result = keyconv::convertChart(chart, options);
-    require(result.report.quality.addedNotes == 0,
-            "8K tap-plus should skip generated notes that turn a one-hand two-lane chord into a denim web");
-    require(result.report.quality.rejectedExpansionCandidates > 0,
-            "8K denim web guard should reject the unsafe generated-note candidates");
+    require(result.report.quality.addedNotes > 0,
+            "8K tap-plus should use the full board instead of dropping all one-hand denim helpers");
+    require(result.report.quality.createdJacks == 0,
+            "8K whole-board denim helpers should not create jacks");
+    require(result.report.quality.nearTimeConflicts == 0,
+            "8K whole-board denim helpers should avoid near-time conflicts");
+    require(result.report.quality.lnConflictCount == 0,
+            "8K whole-board denim helpers should avoid LN conflicts");
 }
 
 void testHighKeyExtremeTrillAvoidsBothOuterEdges() {
@@ -3511,7 +3519,7 @@ void testEightKeyFastSixLaneStairKeepsSymmetricVacancies() {
             "8K fast stair symmetric-vacancy fixture should still suppress generated notes");
 }
 
-void testEvenKeyLeftOnlyAdditionsStayLeftHand() {
+void testEvenKeyLeftOnlyAdditionsUseWholeBoard() {
     auto chart = makeChart(4,
                            {
                                {1000, 0, keyconv::NoteType::Tap, std::nullopt},
@@ -3537,14 +3545,19 @@ void testEvenKeyLeftOnlyAdditionsStayLeftHand() {
 
     const auto result = keyconv::convertChart(chart, options);
     int generated = 0;
+    bool generatedOutsideSourceHand = false;
     for (const auto& note : result.chart.notes) {
         if (note.id.rfind("gen:tap_plus:", 0) != 0) {
             continue;
         }
         ++generated;
-        require(note.lane < 5, "left-hand-only even-key source slices should add notes in the left target hand");
+        if (note.lane >= 5) {
+            generatedOutsideSourceHand = true;
+        }
     }
     require(generated > 0, "left-only even-key chart should still receive generated notes");
+    require(generatedOutsideSourceHand,
+            "left-hand-only even-key source slices should still be able to use the full 10K board");
 }
 
 void testStreamSuperRandomRelanesEveryNote() {
@@ -3836,8 +3849,8 @@ int main() {
         {"10K tap-plus boosts quarter-eighth density above 8K",
          testTenKeyTapPlusBoostsQuarterEighthDensityAboveEightKey},
         {"10K denim tap-plus shifts each beat", testTenKeyDenimTapPlusShiftsEachBeat},
-        {"8K tap-plus reduces one-hand denim web additions",
-         testEightKeyTapPlusReducesOneHandDenimWebAdditions},
+        {"8K tap-plus uses whole board for one-hand denim",
+         testEightKeyTapPlusUsesWholeBoardForOneHandDenim},
         {"high-key extreme trill avoids both outer edges", testHighKeyExtremeTrillAvoidsBothOuterEdges},
         {"long source jack stays single lane playable", testLongSourceJackStaysSingleLanePlayable},
         {"chord-embedded long source jack stays single lane playable",
@@ -3845,7 +3858,7 @@ int main() {
         {"even-key fast 32nd stair suppresses additions", testEvenKeyFastThirtySecondStairSuppressesAdditions},
         {"8K fast 6-lane stair keeps symmetric vacancies",
          testEightKeyFastSixLaneStairKeepsSymmetricVacancies},
-        {"even-key left-only additions stay left hand", testEvenKeyLeftOnlyAdditionsStayLeftHand},
+        {"even-key left-only additions use whole board", testEvenKeyLeftOnlyAdditionsUseWholeBoard},
         {"stream superrandom relanes every note", testStreamSuperRandomRelanesEveryNote},
         {"stream superrandom keeps chord distinct", testStreamSuperRandomKeepsChordDistinct},
         {"full jitter offsets same-time chords", testFullJitterOffsetsSameTimeChords},

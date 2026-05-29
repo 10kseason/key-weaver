@@ -49,8 +49,8 @@ On 8K+ high-key output, generated tap-plus notes must follow these priorities:
 - Suppress generated-note candidates for even-key 32nd-or-faster stair slices.
 - Reduce fill pressure on the outer target lanes, especially lanes that would make both extremes into an alternating trill pair.
 - Bias lane choice toward whole-target mirror symmetry.
-- For even-key to even-key conversion, one-hand source slices keep generated additions inside the matching target hand; source slices that use both hands may use the full target range.
-- Apply wide-board pressure inside the safe hand panel: locally inactive lanes, globally underused lanes, and edge lanes below the profile/built-in target receive fill priority.
+- For 8K/10K high-key conversion, generated additions may use the full target range even when the source slice uses only one hand.
+- Apply wide-board pressure across the whole safe target board: locally inactive lanes, globally underused lanes, and edge lanes below the profile/built-in target receive fill priority.
 - When the target profile expects high edge usage, the light outer-lane penalty is reduced, but the outer-edge trill guard still blocks unsafe extreme alternation.
 
 Target-10 has an additional density rule:
@@ -99,7 +99,7 @@ The v0.6.0 contract is guarded by the unit tests named:
 - `long source jack stays single lane playable`
 - `chord-embedded long source jack stays single lane playable`
 - `even-key fast 32nd stair suppresses additions`
-- `even-key left-only additions stay left hand`
+- `even-key left-only additions use whole board`
 - `generated short hold clone ignores adjacent long hold length`
 - `generated long hold clone is tapified`
 - `500ms jack window detects slow source jack`

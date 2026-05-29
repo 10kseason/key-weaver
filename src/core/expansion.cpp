@@ -433,6 +433,9 @@ bool candidateRespectsEvenSourceHand(const std::vector<std::size_t>& noteIndices
     if (!evenKeyGeneratedPolicyActive(options)) {
         return true;
     }
+    if (options.targetKeyCount >= 8 && options.targetKeyCount > options.sourceKeyCount) {
+        return true;
+    }
     const int sourceHand = sourceHandForIndices(noteIndices, notes, options.sourceKeyCount);
     return sourceHand < 0 || handForLane(targetLane, options.targetKeyCount) == sourceHand;
 }

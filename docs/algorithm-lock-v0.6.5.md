@@ -7,14 +7,18 @@ the changelog, and the relevant regression tests in the same change.
 This supersedes `docs/algorithm-lock-v0.6.0.md` as the current baseline. The v0.6.0 document remains
 as historical context for the normal-default and first whole-board high-key changes.
 
+The 7K-to-10K default now uses the native-feel `dense-ln` rail. The earlier whole-board 7K-to-10K
+fallback remains available with `--native-10k off`, while the other `--native-10k` presets remain
+playtest comparison modes.
+
 ## Locked Scope
 
 - Primary target: high-key tap-plus conversion, especially 4K/7K/8K to 10K.
-- Default high-key auto expansion is `auto-low`, which maps to `preserve-tap-plus-low` when target keys are greater than source keys.
+- Default high-key auto expansion is `auto-low`, which maps to `preserve-tap-plus-low` when target keys are greater than source keys. 7K-to-10K is the exception: omitted native preset selects `dense-ln`, and omitted/auto expansion maps to normal `preserve-tap-plus` density on that rail.
 - Explicit `auto-normal` still maps to `preserve-tap-plus`, and explicit `auto-more` maps to `preserve-tap-plus-more`.
 - Target-10 conversions auto-load `profiles/keyweaver_10k_broad_style_v1.json` when the profile is bundled.
 - Preserve Convert is the strict no-added-note preset, with safe adjacent-lane drift for non-jack phrases.
-- Stream transforms are deterministic special options: `superrandom` relanes every note and `full-jitter` offsets notes by 1-15 ms.
+- Stream transforms are deterministic special options: `superrandom` relanes every note and `full-jitter` offsets notes by 1-30 ms.
 
 ## Fixed Profile Rule
 
@@ -32,10 +36,11 @@ The root `desired*` fields may remain scorer/report fallbacks, but they are not 
 
 ## Budget Contract
 
-- Omitted `--expansion-policy`, `auto`, and `auto-low` use `preserve-tap-plus-low` for higher-key conversion.
+- Omitted `--expansion-policy`, `auto`, and `auto-low` use `preserve-tap-plus-low` for higher-key conversion, except default 7K-to-10K native `dense-ln` where omitted/`auto` uses `preserve-tap-plus`.
 - `auto-low` / `preserve-tap-plus-low` target added-note ratio is `0.10`.
 - `auto-normal` / `preserve-tap-plus` target added-note ratio is `0.15`.
 - `auto-more` / `preserve-tap-plus-more` target added-note ratio is `0.20`.
+- Native `dense-ln` uses a narrower expansion range: `auto-low` `0.12`, normal `0.15`, and `auto-more` `0.18`.
 - `maxAddedNoteRatio` remains the hard global ceiling, defaulting to `0.45`.
 - Explicit `--max-added-ratio` still overrides the cap.
 - Adaptive Growth Budget is enabled only when a target profile is present, the policy is tap-plus, and the target key count is greater than the source key count.
@@ -51,8 +56,9 @@ On 8K+ high-key output, generated tap-plus notes must follow these priorities:
 - Suppress generated-note candidates for even-key 32nd-or-faster stair slices.
 - Reduce fill pressure on the outer target lanes, especially lanes that would make both extremes into an alternating trill pair.
 - Bias lane choice toward whole-target mirror symmetry.
-- For 8K/10K high-key conversion, generated additions may use the full target range even when the source slice uses only one hand.
+- For 8K+ high-key conversion, generated additions may use the full target range even when the source slice uses only one hand.
 - Apply wide-board pressure across the whole safe target board: locally inactive lanes, globally underused lanes, and edge lanes below the profile/built-in target receive fill priority.
+- On 9K+ output, edge coverage is soft underuse pressure only; do not hard-boost fixed lane indexes such as 10K 2nd/9th lanes.
 - When the target profile expects high edge usage, the light outer-lane penalty is reduced, but the outer-edge trill guard still blocks unsafe extreme alternation.
 
 Target-10 has an additional density rule:
@@ -63,11 +69,13 @@ Target-10 has an additional density rule:
 
 ## Whole-Board Assignment
 
-On 8K/10K high-key output, base assignment and Gesture Rail hints must use the full target board:
+On 4K-to-5/6/7K and 8K+ high-key output, base assignment and Gesture Rail hints must use the full target board:
 
 - Do not apply a 4K+4K / 5K+5K split-panel preferred zone as a hard candidate filter.
 - Do not classify 7K-to-10K Gesture Rail phrases as left-hand or right-hand split-panel voices.
 - Lane-balance pressure may consider every target lane, while source-lane anchors, gesture shape, collision, LN conflict, distance, and no-created-jack guards still take priority.
+- On 9K+ output, non-jack assignment should spread preserved notes through nearby safe lanes when lanes are globally underused, without fixed lane-index preference.
+- On lower-key compression, candidate filtering must not impose a hard left/right split when preserving the source skeleton; use the whole target board where collision and jack guards allow it.
 - Low source lanes may still naturally map toward low target lanes, and high source lanes may still naturally map toward high target lanes, but this must come from full-board scoring rather than a hard panel rail.
 
 ## Jack And Repeat Contract

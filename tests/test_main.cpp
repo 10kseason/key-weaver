@@ -18,8 +18,10 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <initializer_list>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -162,6 +164,12 @@ std::vector<int> lanesOf(const keyconv::Chart& chart) {
         lanes.push_back(note.lane);
     }
     return lanes;
+}
+
+int activeLaneCount(const std::vector<int>& distribution) {
+    return static_cast<int>(std::count_if(distribution.begin(), distribution.end(), [](int count) {
+        return count > 0;
+    }));
 }
 
 int sameLaneRepeatCount(const keyconv::Chart& chart, int thresholdMs = 180) {
@@ -614,8 +622,8 @@ void testSevenToTenSourceAnchorsTakePriorityOverLeftEdgeBalance() {
     }
     require(!sourceZeroTargets.empty(), "left-edge source phrase should survive conversion");
     std::set<int> sourceZeroUnique(sourceZeroTargets.begin(), sourceZeroTargets.end());
-    require(sourceZeroUnique.size() <= 3,
-            "repeated left-edge source phrases should stay compact while allowing coverage pressure");
+    require(sourceZeroUnique.size() <= 4,
+            "repeated left-edge source phrases should stay compact while allowing broader coverage pressure");
     for (const int lane : sourceZeroTargets) {
         require(lane >= 0 && lane <= 4,
                 "repeated left-edge source phrases should stay near the low target edge");
@@ -689,7 +697,8 @@ void testTenKeyNonJackSourceLaneAnchorRelaxesInsidePanel() {
             "10K non-jack source-lane anchors should loosen enough to use nearby lanes");
     for (const int lane : lanes) {
         require(lane >= 0 && lane <= 4,
-                "10K relaxed non-jack anchors should stay near their low source-lane region");
+                "10K relaxed non-jack anchors should stay near their low source-lane region; lane=" +
+                    std::to_string(lane));
     }
     require(result.report.quality.sourceJackGroups == 0,
             "10K non-jack relaxation fixture should stay outside the jack window");
@@ -799,6 +808,147 @@ void testSevenToTenTapPlusHandZoneBalance() {
             "tap-plus generated hand-zone accounting should match addedByTapPlus");
     require(generatedLeft > 0 || generatedRight > 0,
             "tap-plus should still add deterministic hand-zone helper notes");
+}
+
+void testNative10KConservativeMiddleColumnTradesHands() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    for (int i = 0; i < 8; ++i) {
+        keyconv::Note note;
+        note.id = "midtrade" + std::to_string(i);
+        note.time = 1000 + i * 700;
+        note.lane = 3;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.native10KPreset = keyconv::Native10KPreset::Conservative;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+
+    const auto result = keyconv::convertChart(chart, options);
+    int left = 0;
+    int right = 0;
+    for (const auto& note : result.chart.notes) {
+        if (note.lane < 5) {
+            ++left;
+        } else {
+            ++right;
+        }
+    }
+
+    require(left > 0 && right > 0,
+            "native 10K conservative should trade 7K middle-column taps between both hands");
+    require(result.report.quality.native10KPreset == "conservative",
+            "native 10K preset should be reported for playtest comparisons");
+    require(result.report.quality.addedNotes == 0,
+            "native 10K conservative should preserve note count by default");
+    require(result.report.quality.createdJacks == 0,
+            "native 10K middle-column trading should not create target jacks");
+}
+
+void testNative10KConservativeCandidatesCoverFullHands() {
+    const auto left = keyconv::generateCandidateLanes(0,
+                                                      7,
+                                                      10,
+                                                      keyconv::ConversionStyle::Playable,
+                                                      keyconv::Native10KPreset::Conservative);
+    const auto right = keyconv::generateCandidateLanes(6,
+                                                       7,
+                                                       10,
+                                                       keyconv::ConversionStyle::Playable,
+                                                       keyconv::Native10KPreset::Conservative);
+    const std::set<int> leftCandidates(left.candidates.begin(), left.candidates.end());
+    const std::set<int> rightCandidates(right.candidates.begin(), right.candidates.end());
+
+    for (int lane = 0; lane <= 4; ++lane) {
+        require(leftCandidates.count(lane) == 1,
+                "native 10K left-side source lane should expose the full left 5K hand");
+    }
+    for (int lane = 5; lane <= 9; ++lane) {
+        require(rightCandidates.count(lane) == 1,
+                "native 10K right-side source lane should expose the full right 5K hand");
+    }
+    require(*leftCandidates.rbegin() <= 4,
+            "native 10K left-side source lane should not leak into the right hand");
+    require(*rightCandidates.begin() >= 5,
+            "native 10K right-side source lane should not leak into the left hand");
+}
+
+void testNative10KConservativeLeftStairUsesOneHandWidth() {
+    const auto chart = makeChart(7,
+                                 {
+                                     {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1375, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.native10KPreset = keyconv::Native10KPreset::Conservative;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    std::set<int> unique(lanes.begin(), lanes.end());
+    require(lanes.size() == chart.notes.size(), "native 10K stair should keep note count");
+    require(unique.size() >= 4, "native 10K left stair should spend at least four lanes in one hand");
+    for (const int lane : lanes) {
+        require(lane >= 0 && lane <= 4,
+                "native 10K left-hand stair should stay inside the left 5K hand");
+    }
+    require(result.report.quality.addedNotes == 0,
+            "native 10K conservative stair should not synthesize helper notes");
+    require(result.report.quality.brokenStairs == 0,
+            "native 10K left-hand stair should preserve stair direction");
+}
+
+void testNative10KDenseLnBridgesBetweenOverlappingHolds() {
+    auto original = makeChart(10,
+                              {
+                                  {1000, 0, keyconv::NoteType::Hold, 2000},
+                                  {1250, 2, keyconv::NoteType::Hold, 2250},
+                              });
+    addTimingPoint(original);
+    auto converted = original;
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.native10KPreset = keyconv::Native10KPreset::DenseLn;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlusMore;
+    options.maxAddedNoteRatio = 1.0;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+
+    const auto stats = keyconv::applyExpansionPlanner(converted, original, options);
+    const auto bridge = std::find_if(converted.notes.begin(), converted.notes.end(), [](const auto& note) {
+        return note.id.rfind("gen:ln_bridge:", 0) == 0;
+    });
+
+    require(bridge != converted.notes.end(),
+            "native 10K dense-ln should generate a hold bridge between overlapping source holds");
+    require(bridge->type == keyconv::NoteType::Hold,
+            "native 10K dense-ln bridge should stay a hold note");
+    require(bridge->endTime.has_value() && *bridge->endTime > bridge->time,
+            "native 10K dense-ln bridge should keep a positive hold duration");
+    require(bridge->lane == 1,
+            "native 10K dense-ln bridge should choose the empty lane between the overlapping holds");
+    require(stats.addedByTapPlus >= 1,
+            "native 10K dense-ln bridge should count against tap-plus growth budget");
+    const auto collisions = keyconv::detectCollisions(converted.notes);
+    require(collisions.longNoteConflicts == 0,
+            "native 10K dense-ln bridge should avoid LN conflicts");
+    require(sameLaneRepeatCount(converted, options.jackWindowMs) == 0,
+            "native 10K dense-ln bridge should not create target jacks");
 }
 
 void testTargetKLikenessReportSevenToTen() {
@@ -1090,11 +1240,13 @@ void testProfileWideBoardPressureUsesOuterPanelLanes() {
     const auto result = keyconv::convertChart(chart, options);
     int generated = 0;
     bool outerPanelLaneGenerated = false;
+    std::set<int> generatedLanes;
     for (const auto& note : result.chart.notes) {
         if (note.id.rfind("gen:tap_plus:", 0) != 0) {
             continue;
         }
         ++generated;
+        generatedLanes.insert(note.lane);
         if (note.lane == 0 || note.lane == 1 || note.lane == 8 || note.lane == 9) {
             outerPanelLaneGenerated = true;
         }
@@ -1102,7 +1254,100 @@ void testProfileWideBoardPressureUsesOuterPanelLanes() {
 
     require(generated >= 2, "profiled wide-board fixture should spend the tap-plus budget");
     require(outerPanelLaneGenerated,
-            "profiled 10K tap-plus should use outer panel lanes when the reference profile wants edge usage");
+            "profiled 10K tap-plus should still cover edge lanes when the reference profile wants edge usage");
+    require(generatedLanes.size() >= 2,
+            "profiled 10K tap-plus should spread generated notes instead of locking one boosted edge lane");
+}
+
+void testHighKeyAssignmentSpreadsPreservedNotes() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 4;
+    const int pattern[] = {0, 1, 2, 3};
+    for (int i = 0; i < 80; ++i) {
+        keyconv::Note note;
+        note.id = "spread10" + std::to_string(i);
+        note.time = 1000 + i * 320;
+        note.lane = pattern[static_cast<std::size_t>(i % 4)];
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto distribution = keyconv::calculateLaneDistribution(result.chart.notes, 10);
+    require(activeLaneCount(distribution) >= 7,
+            "4K to 10K preserved notes should spread across most of the board");
+    require(result.report.quality.createdJacks == 0, "high-key spread fixture should not create jacks");
+    require(result.report.quality.collisionCount == 0, "high-key spread fixture should avoid collisions");
+    require(result.report.quality.lnConflictCount == 0, "high-key spread fixture should avoid LN conflicts");
+}
+
+void testFourKeyToSmallHighKeysUsesWholeBoard() {
+    for (const int targetKeys : {5, 6, 7}) {
+        keyconv::Chart chart;
+        chart.meta.sourceKeyCount = 4;
+        const int pattern[] = {0, 1, 2, 3};
+        for (int i = 0; i < 64; ++i) {
+            keyconv::Note note;
+            note.id = "spread" + std::to_string(targetKeys) + "_" + std::to_string(i);
+            note.time = 1000 + i * 340;
+            note.lane = pattern[static_cast<std::size_t>(i % 4)];
+            note.sourceLane = note.lane;
+            note.type = keyconv::NoteType::Tap;
+            chart.notes.push_back(note);
+        }
+
+        keyconv::ConvertOptions options;
+        options.sourceKeyCount = 4;
+        options.targetKeyCount = targetKeys;
+        options.style = keyconv::ConversionStyle::Playable;
+        options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+
+        const auto result = keyconv::convertChart(chart, options);
+        const auto distribution = keyconv::calculateLaneDistribution(result.chart.notes, targetKeys);
+        require(activeLaneCount(distribution) == targetKeys,
+                "4K to 5/6/7K preserved notes should use the whole target board; target=" +
+                    std::to_string(targetKeys) + " active=" + std::to_string(activeLaneCount(distribution)));
+        require(result.report.quality.createdJacks == 0, "4K small-high expansion should not create jacks");
+        require(result.report.quality.collisionCount == 0, "4K small-high expansion should avoid collisions");
+        require(result.report.quality.lnConflictCount == 0, "4K small-high expansion should avoid LN conflicts");
+    }
+}
+
+void testCompressionAssignmentUsesWholeTargetBoard() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 10;
+    for (int i = 0; i < 80; ++i) {
+        keyconv::Note note;
+        note.id = "compressspread" + std::to_string(i);
+        note.time = 1000 + i * 360;
+        note.lane = i % 10;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 10;
+    options.targetKeyCount = 6;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.compressPolicy = keyconv::CompressPolicy::NoOverlapDrop;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto distribution = keyconv::calculateLaneDistribution(result.chart.notes, 6);
+    require(activeLaneCount(distribution) == 6,
+            "10K to 6K preserved notes should use the whole target board, not a half split");
+    require(result.report.quality.droppedByCompression == 0,
+            "spaced compression spread fixture should not need to drop notes");
+    require(result.report.quality.createdJacks == 0, "compression spread fixture should not create jacks");
+    require(result.report.quality.collisionCount == 0, "compression spread fixture should avoid collisions");
 }
 
 void testPreserveTapPlusCanUseSecondSliceFillSlot() {
@@ -3657,9 +3902,9 @@ void testFullJitterOffsetsSameTimeChords() {
         const int originalIndex = std::stoi(note.id.substr(1));
         const int originalTime = originalIndex < 3 ? 1000 : 1500;
         const int offset = std::abs(note.time - originalTime);
-        require(offset >= 1 && offset <= 15, "full-jitter should offset every note by 1 to 15 ms");
+        require(offset >= 1 && offset <= 30, "full-jitter should offset every note by 1 to 30 ms");
         ++checkedNotes;
-        if (std::abs(note.time - 1000) <= 15) {
+        if (std::abs(note.time - 1000) <= 30) {
             chordTimes.push_back(note.time);
         }
     }
@@ -3709,6 +3954,22 @@ void testDifficultyNameMarksExpansionAndStreamTransform() {
     reparsed = keyconv::parseOsu(keyconv::exportOsu(result.chart, 10), {});
     require(reparsed.meta.version == "4K KeyWeaver10K-jitter (low)",
             "jitter low conversion should be visible in osu difficulty name");
+
+    keyconv::Chart sevenKeyChart = makeChart(7,
+                                             {
+                                                 {1000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                             });
+    sevenKeyChart.meta.version = "7K";
+    keyconv::ConvertOptions nativeOptions;
+    nativeOptions.sourceKeyCount = 7;
+    nativeOptions.targetKeyCount = 10;
+    nativeOptions.style = keyconv::ConversionStyle::Playable;
+    nativeOptions.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    nativeOptions.native10KPreset = keyconv::Native10KPreset::Conservative;
+    result = converter.convert(sevenKeyChart, nativeOptions);
+    reparsed = keyconv::parseOsu(keyconv::exportOsu(result.chart, 10), {});
+    require(reparsed.meta.version == "7K KeyWeaver10K-native",
+            "native 10K experimental conversion should be visible in osu difficulty name");
 }
 
 void testConvertedChartMarkerGuard() {
@@ -3769,12 +4030,23 @@ int main() {
         {"7K to 10K non-gesture chords use whole board",
          testSevenToTenNonGestureChordsUseWholeBoard},
         {"7K to 10K tap-plus hand-zone balance", testSevenToTenTapPlusHandZoneBalance},
+        {"native 10K conservative middle column trades hands",
+         testNative10KConservativeMiddleColumnTradesHands},
+        {"native 10K conservative candidates cover full hands",
+         testNative10KConservativeCandidatesCoverFullHands},
+        {"native 10K conservative left stair uses one hand width",
+         testNative10KConservativeLeftStairUsesOneHandWidth},
+        {"native 10K dense-ln bridges between overlapping holds",
+         testNative10KDenseLnBridgesBetweenOverlappingHolds},
         {"Target-K likeness report 7K to 10K", testTargetKLikenessReportSevenToTen},
         {"Target-K likeness uses reference profile", testTargetKLikenessUsesReferenceProfile},
         {"adaptive growth budget reports profile windows", testAdaptiveGrowthBudgetReportsProfileWindows},
         {"adaptive growth budget uses density buckets", testAdaptiveGrowthBudgetUsesDensityBuckets},
         {"adaptive growth budget allows sparse profiled fill", testAdaptiveGrowthBudgetAllowsSparseProfiledFill},
         {"profile wide-board pressure uses outer panel lanes", testProfileWideBoardPressureUsesOuterPanelLanes},
+        {"high-key assignment spreads preserved notes", testHighKeyAssignmentSpreadsPreservedNotes},
+        {"4K to 5/6/7K uses whole board", testFourKeyToSmallHighKeysUsesWholeBoard},
+        {"compression assignment uses whole target board", testCompressionAssignmentUsesWholeTargetBoard},
         {"preserve tap plus can use second slice fill slot", testPreserveTapPlusCanUseSecondSliceFillSlot},
         {"PPG chord does not collapse", testPpgChordDoesNotCollapse},
         {"PPG LN avoids tap", testPpgLnAvoidsTap},

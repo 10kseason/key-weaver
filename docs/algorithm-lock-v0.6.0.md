@@ -13,7 +13,7 @@ as historical context for the profile-guided Composer change.
 - Default high-key auto expansion is `auto-normal`, which maps to `preserve-tap-plus` when target keys are greater than source keys.
 - Target-10 conversions auto-load `profiles/keyweaver_10k_broad_style_v1.json` when the profile is bundled.
 - Preserve Convert is the strict no-added-note preset, with safe adjacent-lane drift for non-jack phrases.
-- Stream transforms are deterministic special options: `superrandom` relanes every note and `full-jitter` offsets notes by 1-15 ms.
+- Stream transforms are deterministic special options: `superrandom` relanes every note and `full-jitter` offsets notes by 1-30 ms.
 
 ## Fixed Profile Rule
 

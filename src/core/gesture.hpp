@@ -4,6 +4,8 @@
 #include "core/pattern.hpp"
 #include "core/slice.hpp"
 
+#include <keyconv/quality_report.hpp>
+
 #include <map>
 #include <optional>
 #include <string>
@@ -56,7 +58,8 @@ GestureRail buildGestureRail(const Chart& chart,
                              int targetKeyCount,
                              int sameTimeEpsilonMs,
                              int jackWindowMs,
-                             bool enabled);
+                             bool enabled,
+                             Native10KPreset native10KPreset = Native10KPreset::Off);
 
 const GestureHint* findGestureHint(const GestureRail* rail, const std::string& noteId);
 
@@ -66,6 +69,7 @@ GestureReport evaluateGesturePreservation(const Chart& original,
                                           int targetKeyCount,
                                           int sameTimeEpsilonMs,
                                           bool gestureRailEnabled,
-                                          int jackWindowMs = 500);
+                                          int jackWindowMs = 500,
+                                          Native10KPreset native10KPreset = Native10KPreset::Off);
 
 }  // namespace keyconv

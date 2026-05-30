@@ -79,6 +79,14 @@ enum class StreamTransformPolicy {
     FullJitter,
 };
 
+enum class Native10KPreset {
+    Off,
+    Conservative,
+    MirrorFill,
+    Dense,
+    DenseLn,
+};
+
 enum class JackPreservePolicy {
     PreserveStrict,
     PreservePlayable,
@@ -213,10 +221,11 @@ struct ConversionReport {
         int droppedByDistanceGuard = 0;
         int rerolledByDistanceGuard = 0;
         bool deterministic = true;
-        std::string algorithmVersion = "v0.6.5";
+        std::string algorithmVersion = "v0.7.0";
         std::string expansionPolicy = "preserve";
         std::string streamEchoProfile = "conservative";
         std::string streamTransformPolicy = "off";
+        std::string native10KPreset = "off";
         std::string expansionComposerProfile = "preserve";
         double targetAddedNoteRatio = 0.0;
         double budgetUsedRatio = 0.0;
@@ -328,6 +337,7 @@ std::string toString(ExpansionPolicy policy);
 std::string toString(EchoPolicy policy);
 std::string toString(StreamEchoProfile profile);
 std::string toString(StreamTransformPolicy policy);
+std::string toString(Native10KPreset preset);
 std::string toString(JackPreservePolicy policy);
 std::optional<ConversionStyle> parseConversionStyle(const std::string& value);
 std::optional<CollisionPolicy> parseCollisionPolicy(const std::string& value);
@@ -338,6 +348,7 @@ std::optional<ExpansionPolicy> parseExpansionPolicy(const std::string& value);
 std::optional<EchoPolicy> parseEchoPolicy(const std::string& value);
 std::optional<StreamEchoProfile> parseStreamEchoProfile(const std::string& value);
 std::optional<StreamTransformPolicy> parseStreamTransformPolicy(const std::string& value);
+std::optional<Native10KPreset> parseNative10KPreset(const std::string& value);
 std::optional<JackPreservePolicy> parseJackPreservePolicy(const std::string& value);
 std::string reportToJson(const ConversionReport& report);
 std::string reportToText(const ConversionReport& report);

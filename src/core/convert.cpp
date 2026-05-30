@@ -1048,10 +1048,11 @@ int applyStreamSuperRandom(std::vector<Note>& notes, const ConvertOptions& optio
 }
 
 std::vector<int> jitterOffsetPool(int time) {
+    constexpr int kFullJitterMaxMs = 30;
     std::vector<int> offsets;
-    offsets.reserve(30);
+    offsets.reserve(kFullJitterMaxMs * 2);
     const int direction = ((std::max(0, time) / 500) % 2 == 0) ? 1 : -1;
-    for (int magnitude = 1; magnitude <= 15; ++magnitude) {
+    for (int magnitude = 1; magnitude <= kFullJitterMaxMs; ++magnitude) {
         offsets.push_back(direction * magnitude);
         offsets.push_back(-direction * magnitude);
     }
@@ -1159,12 +1160,33 @@ std::string difficultyStreamTag(StreamTransformPolicy policy) {
     return {};
 }
 
+std::string difficultyNative10KTag(Native10KPreset preset) {
+    switch (preset) {
+        case Native10KPreset::Off:
+            return {};
+        case Native10KPreset::Conservative:
+            return "native";
+        case Native10KPreset::MirrorFill:
+            return "native-mirror";
+        case Native10KPreset::Dense:
+            return "native-dense";
+        case Native10KPreset::DenseLn:
+            return "native-dense-ln";
+    }
+    return {};
+}
+
 std::string conversionDifficultyMarker(const ConvertOptions& options) {
     std::string marker = "KeyWeaver" + std::to_string(options.targetKeyCount) + "K";
     const auto streamTag = difficultyStreamTag(options.streamTransformPolicy);
     if (!streamTag.empty()) {
         marker += "-";
         marker += streamTag;
+    }
+    const auto nativeTag = difficultyNative10KTag(options.native10KPreset);
+    if (!nativeTag.empty()) {
+        marker += "-";
+        marker += nativeTag;
     }
     const auto expansionTag = difficultyExpansionTag(options);
     if (!expansionTag.empty()) {
@@ -1439,7 +1461,8 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
                                                            options.targetKeyCount,
                                                            options.sameTimeEpsilonMs,
                                                            options.gestureRailEnabled,
-                                                           options.jackWindowMs);
+                                                           options.jackWindowMs,
+                                                           options.native10KPreset);
     result.report.quality.detectedStairs = gestureReport.detectedStairs;
     result.report.quality.preservedStairs = gestureReport.preservedStairs;
     result.report.quality.brokenStairs = gestureReport.brokenStairs;
@@ -1475,6 +1498,7 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     result.report.quality.expansionPolicy = toString(expansionStats.policy);
     result.report.quality.streamEchoProfile = toString(expansionStats.streamEchoProfile);
     result.report.quality.streamTransformPolicy = toString(options.streamTransformPolicy);
+    result.report.quality.native10KPreset = toString(options.native10KPreset);
     result.report.quality.streamTransformedNotes = streamTransformStats.transformedNotes;
     result.report.quality.streamJitteredNotes = streamTransformStats.jitteredNotes;
     result.report.quality.addedNotes = expansionStats.addedNotes;

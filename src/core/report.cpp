@@ -181,6 +181,22 @@ std::string toString(StreamTransformPolicy policy) {
     return "off";
 }
 
+std::string toString(Native10KPreset preset) {
+    switch (preset) {
+        case Native10KPreset::Off:
+            return "off";
+        case Native10KPreset::Conservative:
+            return "conservative";
+        case Native10KPreset::MirrorFill:
+            return "mirror-fill";
+        case Native10KPreset::Dense:
+            return "dense";
+        case Native10KPreset::DenseLn:
+            return "dense-ln";
+    }
+    return "off";
+}
+
 std::string toString(JackPreservePolicy policy) {
     switch (policy) {
         case JackPreservePolicy::PreserveStrict:
@@ -369,6 +385,27 @@ std::optional<StreamTransformPolicy> parseStreamTransformPolicy(const std::strin
     return std::nullopt;
 }
 
+std::optional<Native10KPreset> parseNative10KPreset(const std::string& value) {
+    if (value == "off" || value == "none" || value == "0" || value == "false") {
+        return Native10KPreset::Off;
+    }
+    if (value == "conservative" || value == "native" || value == "native-conservative") {
+        return Native10KPreset::Conservative;
+    }
+    if (value == "mirror" || value == "mirror-fill" || value == "native-mirror" ||
+        value == "native-mirror-fill") {
+        return Native10KPreset::MirrorFill;
+    }
+    if (value == "dense" || value == "native-dense") {
+        return Native10KPreset::Dense;
+    }
+    if (value == "dense-ln" || value == "ln-dense" || value == "native-dense-ln" ||
+        value == "native-ln-dense") {
+        return Native10KPreset::DenseLn;
+    }
+    return std::nullopt;
+}
+
 std::optional<JackPreservePolicy> parseJackPreservePolicy(const std::string& value) {
     if (value == "preserve-strict" || value == "strict") {
         return JackPreservePolicy::PreserveStrict;
@@ -485,6 +522,7 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"expansionPolicy\": \"" << jsonEscape(report.quality.expansionPolicy) << "\",\n";
     out << "    \"streamEchoProfile\": \"" << jsonEscape(report.quality.streamEchoProfile) << "\",\n";
     out << "    \"streamTransformPolicy\": \"" << jsonEscape(report.quality.streamTransformPolicy) << "\",\n";
+    out << "    \"native10KPreset\": \"" << jsonEscape(report.quality.native10KPreset) << "\",\n";
     out << "    \"expansionComposerProfile\": \"" << jsonEscape(report.quality.expansionComposerProfile) << "\",\n";
     out << "    \"targetAddedNoteRatio\": " << report.quality.targetAddedNoteRatio << ",\n";
     out << "    \"budgetUsedRatio\": " << report.quality.budgetUsedRatio << ",\n";
@@ -689,6 +727,7 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Expansion policy: " << report.quality.expansionPolicy << "\n";
     out << "- Stream echo profile: " << report.quality.streamEchoProfile << "\n";
     out << "- Stream transform policy: " << report.quality.streamTransformPolicy << "\n";
+    out << "- Native 10K preset: " << report.quality.native10KPreset << "\n";
     out << "- Expansion composer profile: " << report.quality.expansionComposerProfile << "\n";
     out << "- Target added note ratio: " << report.quality.targetAddedNoteRatio << "\n";
     out << "- Budget used ratio: " << report.quality.budgetUsedRatio << "\n";

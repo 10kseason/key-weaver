@@ -43,6 +43,7 @@ struct AssignmentContext {
     int targetKeyCount = 0;
     int jackWindowMs = 500;
     ConversionStyle style = ConversionStyle::Playable;
+    Native10KPreset native10KPreset = Native10KPreset::Off;
     PpgWeights weights;
     bool preserveLaneDrift = false;
     int* preventedJacksByAssignment = nullptr;
@@ -50,7 +51,11 @@ struct AssignmentContext {
 };
 
 PpgWeights weightsForStyle(ConversionStyle style);
-LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK, ConversionStyle style);
+LaneCandidateSet generateCandidateLanes(int sourceLane,
+                                        int sourceK,
+                                        int targetK,
+                                        ConversionStyle style,
+                                        Native10KPreset native10KPreset = Native10KPreset::Off);
 std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
                                                       const std::vector<Note>& sourceNotes,
                                                       const AssignmentContext& context);

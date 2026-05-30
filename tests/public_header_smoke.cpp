@@ -36,11 +36,14 @@ int main() {
     const auto echoPolicy = keyconv::parseEchoPolicy("stair-trill");
     const auto streamEchoProfile = keyconv::parseStreamEchoProfile("balanced");
     const auto streamTransformPolicy = keyconv::parseStreamTransformPolicy("superrandom");
+    const auto native10KPreset = keyconv::parseNative10KPreset("mirror-fill");
+    const auto native10KDenseLnPreset = keyconv::parseNative10KPreset("dense-ln");
     const auto jackPreservePolicy = keyconv::parseJackPreservePolicy("preserve-playable");
     if (!style.has_value() || !optimizer.has_value() || !compressPolicy.has_value() ||
         !distancePolicy.has_value() || !expansionPolicy.has_value() ||
         !lowExpansionPolicy.has_value() || !moreExpansionPolicy.has_value() || !echoPolicy.has_value() ||
-        !streamEchoProfile.has_value() || !streamTransformPolicy.has_value() || !jackPreservePolicy.has_value()) {
+        !streamEchoProfile.has_value() || !streamTransformPolicy.has_value() || !native10KPreset.has_value() ||
+        !native10KDenseLnPreset.has_value() || !jackPreservePolicy.has_value()) {
         return 2;
     }
 

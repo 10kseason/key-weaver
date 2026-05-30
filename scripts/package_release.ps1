@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.6.5",
+    [string]$Version = "0.7.0",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -119,27 +119,29 @@ Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
 Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
 GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
+Normal GUI Batch runs one quiet CLI batch process via an input-list file; Debug JSON mode keeps per-chart subprocesses for report parsing.
+GUI Batch only/exclude fields filter detected source key counts before conversion.
 Source override is passed to GUI conversions.
 Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
-CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart and auto-detects CPU worker count.
+CLI batch: pass multiple input charts or --input-list plus explicit --target; outputs default beside each input chart, supports --out-dir, --batch-source-keys, --batch-exclude-source-keys, and auto-detects CPU worker count capped at 4.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
 The GUI accepts osu!mania and BMS-family charts and preserves the BMS-family output extension.
 Gesture Rail is on by default; use --gesture-rail off to compare older lane scoring.
 Preserve Tap Plus uses key-growth budgets and 10K hand-zone balancing.
 With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mid/high/chordHeavy/jackRisk windows for Composer pressure.
-Default high-key auto expansion uses auto-low; use --expansion-policy auto-normal/auto-more for 15%/20% generated-note budgets.
+Default auto-new-algorithm uses normal density for target-8 higher-key conversion, keeps other non-native high-key conversion on auto-low, and sends 7K-to-10K to native dense-ln normal density. Use --expansion-policy auto-low/auto-normal/auto-more to tune native dense-ln at 12%/15%/18% or other high-key conversion at 10%/15%/20%.
 8K+ generated notes prefer 8th-beat source slices, avoid both-edge trill reinforcement, and favor mirror-lane symmetry; target-10 adds extra quarter/eighth-beat density pressure.
 Use --preserve-convert for faithful mapping, strict source-jack preservation, no generated notes, and adjacent safe-lane drift.
-Use --stream-transform superrandom for deterministic per-note random lane assignment, or full-jitter for 1-15 ms per-note zure-style timing spread.
+Use --stream-transform superrandom for deterministic per-note random lane assignment, or full-jitter for 1-30 ms per-note zure-style timing spread.
 Use --seed to vary deterministic stream-transform output.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
-Normal-mode algorithm contract: docs/algorithm-lock-v0.6.5.md
+Normal-mode algorithm contract: docs/algorithm-lock-v0.7.0.md
 
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/default-auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/filter/default-auto-low/default-8K-normal/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -155,11 +157,37 @@ $($RuntimeDlls -join "`n")
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --dry-run --report (Join-Path $SmokeDir "sample_4k_to_10k.report.json") *> (Join-Path $SmokeDir "sample_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "osu!mania sample smoke failed" }
     $SampleSmokeReportText = Get-Content -LiteralPath (Join-Path $SmokeDir "sample_4k_to_10k.report.json") -Raw
-    if ($SampleSmokeReportText -notmatch '"algorithmVersion":\s*"v0\.6\.5"') {
-        throw "osu!mania sample smoke failed without v0.6.5 algorithm version"
+    if ($SampleSmokeReportText -notmatch '"algorithmVersion":\s*"v0\.7\.0"') {
+        throw "osu!mania sample smoke failed without v0.7.0 algorithm version"
     }
     if ($SampleSmokeReportText -notmatch '"expansionPolicy":\s*"preserve-tap-plus-low"') {
         throw "default auto-low sample smoke did not use preserve-tap-plus-low"
+    }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 8 --dry-run --report (Join-Path $SmokeDir "sample_4k_to_8.report.json") *> (Join-Path $SmokeDir "sample_4k_to_8.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "target-8 normal-density default sample smoke failed" }
+    $TargetEightSmokeReportText = Get-Content -LiteralPath (Join-Path $SmokeDir "sample_4k_to_8.report.json") -Raw
+    if ($TargetEightSmokeReportText -notmatch '"expansionPolicy":\s*"preserve-tap-plus"') {
+        throw "target-8 default sample smoke did not use normal tap-plus density"
+    }
+    if ($TargetEightSmokeReportText -notmatch '"targetAddedNoteRatio":\s*0\.15') {
+        throw "target-8 default sample smoke did not use 0.15 target ratio"
+    }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_7k_ln.osu") --source 7 --target 10 --dry-run --report (Join-Path $SmokeDir "sample_7k_to_10k_native.report.json") *> (Join-Path $SmokeDir "sample_7k_to_10k_native.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "native dense-ln default sample smoke failed" }
+    $NativeSmokeReportText = Get-Content -LiteralPath (Join-Path $SmokeDir "sample_7k_to_10k_native.report.json") -Raw
+    if ($NativeSmokeReportText -notmatch '"algorithmVersion":\s*"v0\.7\.0"') {
+        throw "native dense-ln sample smoke failed without v0.7.0 algorithm version"
+    }
+    if ($NativeSmokeReportText -notmatch '"native10KPreset":\s*"dense-ln"') {
+        throw "native dense-ln sample smoke did not use dense-ln preset"
+    }
+    if ($NativeSmokeReportText -notmatch '"expansionPolicy":\s*"preserve-tap-plus"') {
+        throw "native dense-ln sample smoke did not use normal tap-plus density"
+    }
+    if ($NativeSmokeReportText -notmatch '"targetAddedNoteRatio":\s*0\.15') {
+        throw "native dense-ln sample smoke did not use 0.15 target ratio"
     }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target 10 --dry-run *> (Join-Path $SmokeDir "batch_cli.console.txt")
@@ -170,6 +198,26 @@ $($RuntimeDlls -join "`n")
     }
     if ($BatchSmokeText -notmatch "Progress: 100% done, 0 left") {
         throw "CLI batch dry-run smoke failed without the expected progress output"
+    }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target 10 --batch-source-keys 7 --dry-run *> (Join-Path $SmokeDir "batch_filter_only_7.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "CLI batch source-key include filter smoke failed" }
+    $BatchIncludeFilterText = Get-Content -LiteralPath (Join-Path $SmokeDir "batch_filter_only_7.console.txt") -Raw
+    if ($BatchIncludeFilterText -notmatch "Batch source keys: only 7") {
+        throw "CLI batch source-key include filter smoke failed without filter header"
+    }
+    if ($BatchIncludeFilterText -notmatch "Batch summary: succeeded=1 failed=0 skipped=1") {
+        throw "CLI batch source-key include filter smoke failed without expected summary"
+    }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target 10 --batch-exclude-source-keys 7 --dry-run *> (Join-Path $SmokeDir "batch_filter_exclude_7.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "CLI batch source-key exclude filter smoke failed" }
+    $BatchExcludeFilterText = Get-Content -LiteralPath (Join-Path $SmokeDir "batch_filter_exclude_7.console.txt") -Raw
+    if ($BatchExcludeFilterText -notmatch "Batch exclude source keys: 7") {
+        throw "CLI batch source-key exclude filter smoke failed without filter header"
+    }
+    if ($BatchExcludeFilterText -notmatch "Batch summary: succeeded=1 failed=0 skipped=1") {
+        throw "CLI batch source-key exclude filter smoke failed without expected summary"
     }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 10 --expansion-policy auto-low --dry-run *> (Join-Path $SmokeDir "auto_low.console.txt")

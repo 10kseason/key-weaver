@@ -117,13 +117,15 @@ OptimizationResult greedyOptimizeSlices(const Chart& chart, const ConvertOptions
                                               options.targetKeyCount,
                                               options.sameTimeEpsilonMs,
                                               options.jackWindowMs,
-                                              options.gestureRailEnabled);
+                                              options.gestureRailEnabled,
+                                              options.native10KPreset);
 
     AssignmentContext context;
     context.sourceKeyCount = options.sourceKeyCount;
     context.targetKeyCount = options.targetKeyCount;
     context.jackWindowMs = options.jackWindowMs;
     context.style = options.style;
+    context.native10KPreset = options.native10KPreset;
     context.weights = weightsForStyle(options.style);
     context.preserveLaneDrift = options.preserveLaneDrift;
     context.preventedJacksByAssignment = &result.preventedJacksByAssignment;

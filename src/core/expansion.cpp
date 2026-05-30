@@ -165,6 +165,24 @@ double preserveTapPlusLowTargetRatio(int sourceKeyCount, int targetKeyCount) {
     return 0.10;
 }
 
+bool native10KDenseLnActive(const ConvertOptions& options) {
+    return options.sourceKeyCount == 7 && options.targetKeyCount == 10 &&
+           options.native10KPreset == Native10KPreset::DenseLn;
+}
+
+double native10KDenseLnTargetRatio(ExpansionPolicy policy) {
+    switch (policy) {
+        case ExpansionPolicy::PreserveTapPlusLow:
+            return 0.12;
+        case ExpansionPolicy::PreserveTapPlus:
+            return 0.15;
+        case ExpansionPolicy::PreserveTapPlusMore:
+            return 0.18;
+        default:
+            return 0.0;
+    }
+}
+
 StreamEchoProfileSettings streamEchoProfileSettings(StreamEchoProfile profile) {
     switch (profile) {
         case StreamEchoProfile::Conservative:
@@ -227,7 +245,17 @@ ExpansionComposerSettings composerSettingsForPolicy(ExpansionPolicy policy,
 }
 
 ExpansionComposerSettings composerSettingsForOptions(const ConvertOptions& options) {
-    return composerSettingsForPolicy(effectiveExpansionPolicy(options),
+    const auto policy = effectiveExpansionPolicy(options);
+    if (native10KDenseLnActive(options) &&
+        (policy == ExpansionPolicy::PreserveTapPlusLow ||
+         policy == ExpansionPolicy::PreserveTapPlus ||
+         policy == ExpansionPolicy::PreserveTapPlusMore)) {
+        return {policy == ExpansionPolicy::PreserveTapPlusLow
+                    ? "tap-plus-low"
+                    : (policy == ExpansionPolicy::PreserveTapPlusMore ? "tap-plus-more" : "tap-plus"),
+                native10KDenseLnTargetRatio(policy)};
+    }
+    return composerSettingsForPolicy(policy,
                                      options.streamEchoProfile,
                                      options.sourceKeyCount,
                                      options.targetKeyCount);
@@ -509,6 +537,10 @@ bool tenKeyQuarterEighthDensityActive(const ConvertOptions& options) {
     return options.targetKeyCount == 10 && options.targetKeyCount > options.sourceKeyCount;
 }
 
+bool native10KDenseLnBridgeActive(const ConvertOptions& options) {
+    return native10KDenseLnActive(options);
+}
+
 bool evenKeyGeneratedPolicyActive(const ConvertOptions& options) {
     return highKeyGeneratedTuningActive(options) &&
            options.sourceKeyCount >= 2 && options.targetKeyCount >= 2 &&
@@ -602,6 +634,21 @@ bool generatedHoldDurationAllowed(int durationMs,
     return durationMs > 0 &&
            durationMs >= generatedHoldMinDurationMs(time, timingPoints) - tolerance &&
            durationMs <= generatedHoldMaxDurationMs(time, timingPoints) + tolerance;
+}
+
+int nativeBridgeHoldMaxDurationMs(int time, const std::vector<TimingPoint>& timingPoints) {
+    const double beatLength = beatLengthAtOrFallback(time, timingPoints);
+    return std::max(1, static_cast<int>(std::lround(beatLength)));
+}
+
+bool nativeBridgeHoldDurationAllowed(int durationMs,
+                                     int time,
+                                     const std::vector<TimingPoint>& timingPoints,
+                                     int toleranceMs = 2) {
+    const int tolerance = std::max(0, toleranceMs);
+    return durationMs > 0 &&
+           durationMs >= generatedHoldMinDurationMs(time, timingPoints) - tolerance &&
+           durationMs <= nativeBridgeHoldMaxDurationMs(time, timingPoints) + tolerance;
 }
 
 double adaptiveDensityRoom(double densityNps) {
@@ -1250,7 +1297,7 @@ private:
         }
         if (candidate.ruleName == "chord_fill") {
             ++stats.addedByChordFill;
-        } else if (candidate.ruleName == "tap_plus") {
+        } else if (candidate.ruleName == "tap_plus" || candidate.ruleName == "ln_bridge") {
             ++stats.addedByTapPlus;
         } else if (candidate.ruleName == "training_scaffold") {
             ++stats.addedByTrainingScaffold;
@@ -1562,9 +1609,9 @@ double profileWideBoardLaneScore(const ExpansionCandidate& candidate, const Expa
         const double desiredEdgeUsage = desiredWideBoardEdgeUsage(context.options);
         const double edgeDeficit = desiredEdgeUsage - currentEdgeUsageRatio(context.laneUse, targetKeyCount);
         if (edgeDeficit > 0.0) {
-            score += 5.0 + std::min(10.0, edgeDeficit * 40.0);
+            score += 1.5 + std::min(4.0, edgeDeficit * 16.0);
             if (outerLane(lane, targetKeyCount) && desiredEdgeUsage >= 0.34) {
-                score += 2.0;
+                score += 0.5;
             }
         }
     }
@@ -1609,34 +1656,6 @@ double mirrorSymmetryScore(const ExpansionContext& context, int lane) {
     return std::max(-8.0, std::min(8.0, static_cast<double>(mirrorUse - laneUse) * 1.75));
 }
 
-int positiveModulo(int value, int divisor) {
-    if (divisor <= 0) {
-        return 0;
-    }
-    const int result = value % divisor;
-    return result < 0 ? result + divisor : result;
-}
-
-int circularDistance(int lhs, int rhs, int width) {
-    if (width <= 0) {
-        return 0;
-    }
-    const int delta = std::abs(lhs - rhs);
-    return std::min(delta, width - delta);
-}
-
-int beatIndexAtOrFallback(int time, const std::vector<TimingPoint>& timingPoints) {
-    const auto grid = explicitGridAt(time, timingPoints);
-    const int gridTime = grid.has_value() ? grid->time : 0;
-    const double beatLength = grid.has_value() && grid->beatLength > 0.0
-                                  ? grid->beatLength
-                                  : static_cast<double>(kFallbackBeatLengthMs);
-    if (beatLength <= 0.0) {
-        return 0;
-    }
-    return static_cast<int>(std::floor((static_cast<double>(time - gridTime) / beatLength) + 1e-6));
-}
-
 int sameTimeHandLaneCountForCandidate(const ExpansionCandidate& candidate, const ExpansionContext& context) {
     if (candidate.note.lane < 0 || candidate.note.lane >= context.options.targetKeyCount) {
         return 0;
@@ -1679,14 +1698,6 @@ double tenKeyDenimBeatShiftScore(const ExpansionCandidate& candidate, const Expa
         return 0.0;
     }
 
-    const int beatIndex = beatIndexAtOrFallback(candidate.note.time, context.original.timingPoints);
-    const int globalPreferredLane = positiveModulo(2 + beatIndex, context.options.targetKeyCount);
-    const int panelPreferredLane =
-        handStart + positiveModulo(1 + beatIndex / 2 + (handStart == 0 ? 0 : 2), handWidth);
-
-    const int globalDistance =
-        circularDistance(candidate.note.lane, globalPreferredLane, context.options.targetKeyCount);
-    const int panelDistance = circularDistance(localLane, panelPreferredLane - handStart, handWidth);
     const int recentWindow =
         static_cast<int>(std::lround(beatLengthAtOrFallback(candidate.note.time, context.original.timingPoints) * 2.0)) +
         std::max(2, context.options.expansionSnapToleranceMs);
@@ -1701,8 +1712,26 @@ double tenKeyDenimBeatShiftScore(const ExpansionCandidate& candidate, const Expa
             break;
         }
     }
-    return 10.0 - static_cast<double>(globalDistance) * 2.5 +
-           6.0 - static_cast<double>(panelDistance) * 3.0 -
+
+    const int totalUse = std::accumulate(context.laneUse.begin(), context.laneUse.end(), 0);
+    const double averageUse = totalUse <= 0 ? 0.0 : static_cast<double>(totalUse) /
+                                                       static_cast<double>(context.options.targetKeyCount);
+    const double laneUse = candidate.note.lane < static_cast<int>(context.laneUse.size())
+                               ? static_cast<double>(context.laneUse[static_cast<std::size_t>(candidate.note.lane)])
+                               : averageUse;
+    const double underuseScore = std::max(0.0, averageUse - laneUse) * 1.15;
+    const int localUse =
+        localLaneUseAround(context.chart.notes,
+                           candidate.note.lane,
+                           candidate.note.time,
+                           adaptiveBudgetWindowMs(context.options));
+    const double localGapScore = localUse == 0 ? 4.0 : -std::min(5.0, static_cast<double>(localUse));
+    const double handScore =
+        std::max(0.0, handBalanceScore(context.laneUse,
+                                       candidate.note.lane,
+                                       context.options.targetKeyCount)) * 5.0;
+
+    return std::min(10.0, underuseScore + localGapScore + handScore) -
            recentGeneratedLanePenalty;
 }
 
@@ -2026,6 +2055,205 @@ const LnAnchor* nearestAnchorForLane(const LnWindowProfile& profile, int lane) {
     return best;
 }
 
+struct ActiveHoldRef {
+    std::size_t noteIndex = 0;
+    int lane = 0;
+    int start = 0;
+    int end = 0;
+};
+
+bool isNativeBridgeHold(const Note& note) {
+    return note.id.rfind("gen:ln_bridge:", 0) == 0;
+}
+
+std::string sourceIdForNote(const Note& note, std::size_t index) {
+    return note.id.empty() ? "anon" + std::to_string(index) : note.id;
+}
+
+std::vector<ActiveHoldRef> activeHoldsAt(const std::vector<Note>& notes, int time, int targetKeyCount) {
+    std::vector<ActiveHoldRef> active;
+    for (std::size_t index = 0; index < notes.size(); ++index) {
+        const auto& note = notes[index];
+        if (note.type != NoteType::Hold || !note.endTime.has_value() ||
+            *note.endTime <= note.time || note.lane < 0 || note.lane >= targetKeyCount) {
+            continue;
+        }
+        if (note.time <= time && *note.endTime > time) {
+            active.push_back({index, note.lane, note.time, *note.endTime});
+        }
+    }
+    std::stable_sort(active.begin(), active.end(), [](const ActiveHoldRef& lhs, const ActiveHoldRef& rhs) {
+        if (lhs.lane != rhs.lane) {
+            return lhs.lane < rhs.lane;
+        }
+        return lhs.start < rhs.start;
+    });
+    return active;
+}
+
+int activeHoldCountAt(const std::vector<Note>& notes, int time, int targetKeyCount, std::optional<int> hand) {
+    int count = 0;
+    for (const auto& hold : activeHoldsAt(notes, time, targetKeyCount)) {
+        if (hand.has_value() && handForLane(hold.lane, targetKeyCount) != *hand) {
+            continue;
+        }
+        ++count;
+    }
+    return count;
+}
+
+bool nativeLnBridgeCapacityAllows(const ExpansionCandidate& candidate, const ExpansionContext& context) {
+    if (candidate.note.type != NoteType::Hold) {
+        return true;
+    }
+    const int hand = handForLane(candidate.note.lane, context.options.targetKeyCount);
+    if (activeHoldCountAt(context.chart.notes, candidate.note.time, context.options.targetKeyCount, hand) >= 3) {
+        return false;
+    }
+    if (activeHoldCountAt(context.chart.notes, candidate.note.time, context.options.targetKeyCount, std::nullopt) >= 6) {
+        return false;
+    }
+    return true;
+}
+
+std::vector<int> nativeBridgeLanesBetween(const ActiveHoldRef& lhs,
+                                          const ActiveHoldRef& rhs,
+                                          const ExpansionContext& context) {
+    if (handForLane(lhs.lane, context.options.targetKeyCount) !=
+        handForLane(rhs.lane, context.options.targetKeyCount)) {
+        return {};
+    }
+    const int low = std::min(lhs.lane, rhs.lane);
+    const int high = std::max(lhs.lane, rhs.lane);
+    if (high - low < 2) {
+        return {};
+    }
+
+    std::vector<int> lanes;
+    for (int lane = low + 1; lane < high; ++lane) {
+        if (handForLane(lane, context.options.targetKeyCount) != handForLane(lhs.lane, context.options.targetKeyCount)) {
+            continue;
+        }
+        lanes.push_back(lane);
+    }
+    const double midpoint = (static_cast<double>(lhs.lane) + static_cast<double>(rhs.lane)) / 2.0;
+    std::stable_sort(lanes.begin(), lanes.end(), [&](int left, int right) {
+        const int leftUse = context.laneUse[static_cast<std::size_t>(left)];
+        const int rightUse = context.laneUse[static_cast<std::size_t>(right)];
+        if (leftUse != rightUse) {
+            return leftUse < rightUse;
+        }
+        const double leftMid = std::abs(static_cast<double>(left) - midpoint);
+        const double rightMid = std::abs(static_cast<double>(right) - midpoint);
+        if (leftMid != rightMid) {
+            return leftMid < rightMid;
+        }
+        return left < right;
+    });
+    return lanes;
+}
+
+void applyNative10KLnBridgeFill(ExpansionContext& context,
+                                const std::vector<SliceView>& slices,
+                                const std::vector<Note>& baseNotes) {
+    if (!native10KDenseLnBridgeActive(context.options)) {
+        return;
+    }
+
+    for (const auto& slice : slices) {
+        if (slice.noteIndices.empty() ||
+            slice.noteIndices.size() >= static_cast<std::size_t>(std::max(2, context.options.targetKeyCount / 2)) ||
+            context.stats.addedNotes >= context.maxAdded) {
+            continue;
+        }
+
+        const auto active = activeHoldsAt(baseNotes, slice.time, context.options.targetKeyCount);
+        if (active.size() < 2) {
+            continue;
+        }
+
+        const int targetChordSize = targetChordSizeForSlice(slice, context.options);
+        const int maxAddsForSlice =
+            std::max(0,
+                     std::min(context.options.maxAddedPerSlice,
+                              targetChordSize - static_cast<int>(slice.noteIndices.size())));
+        if (maxAddsForSlice <= 0) {
+            continue;
+        }
+
+        std::vector<ExpansionCandidate> candidates;
+        int ordinal = 0;
+        for (std::size_t index = 1; index < active.size(); ++index) {
+            const auto& left = active[index - 1];
+            const auto& right = active[index];
+            const int overlapStart = std::max(left.start, right.start);
+            if (overlapStart != slice.time) {
+                continue;
+            }
+            const int overlapEnd = std::min(left.end, right.end);
+            const int maxDuration = nativeBridgeHoldMaxDurationMs(overlapStart, context.original.timingPoints);
+            const int duration = std::min(overlapEnd - overlapStart, maxDuration);
+            if (!nativeBridgeHoldDurationAllowed(duration,
+                                                 overlapStart,
+                                                 context.original.timingPoints,
+                                                 context.options.expansionSnapToleranceMs)) {
+                continue;
+            }
+
+            auto lanes = nativeBridgeLanesBetween(left, right, context);
+            for (const int lane : lanes) {
+                ExpansionCandidate candidate;
+                candidate.note.time = overlapStart;
+                candidate.note.lane = lane;
+                candidate.note.type = NoteType::Hold;
+                candidate.note.endTime = overlapStart + duration;
+                candidate.note.sourceLane = lane;
+                candidate.ruleName = "ln_bridge";
+                candidate.sourceNoteIds = {
+                    sourceIdForNote(baseNotes[left.noteIndex], left.noteIndex),
+                    sourceIdForNote(baseNotes[right.noteIndex], right.noteIndex),
+                };
+                std::stable_sort(candidate.sourceNoteIds.begin(), candidate.sourceNoteIds.end());
+                candidate.sourceSliceIndex = slice.index;
+                candidate.sourceNoteIndex = 0;
+                candidate.ordinal = ordinal++;
+                const int localLaneUse =
+                    localLaneUseAround(context.chart.notes, lane, overlapStart, adaptiveBudgetWindowMs(context.options));
+                const double durationScore =
+                    static_cast<double>(duration) /
+                    static_cast<double>(std::max(1, maxDuration));
+                candidate.score = 135.0 +
+                                  durationScore * 18.0 -
+                                  static_cast<double>(context.laneUse[static_cast<std::size_t>(lane)]) * 2.0 -
+                                  std::min(10.0, static_cast<double>(localLaneUse) * 3.0) +
+                                  handBalanceScore(context.laneUse, lane, context.options.targetKeyCount) * 6.0;
+                candidate.rhythmDriftAbs = 0;
+                candidate.snapPriority = 4;
+                candidate.laneMovement = std::min(std::abs(lane - left.lane), std::abs(lane - right.lane));
+                tuneHighKeyGeneratedCandidate(candidate, context);
+                candidates.push_back(std::move(candidate));
+            }
+        }
+
+        std::stable_sort(candidates.begin(), candidates.end(), candidateLess);
+        int addedInThisSlice = 0;
+        for (auto& candidate : candidates) {
+            if (addedInThisSlice >= maxAddsForSlice ||
+                context.stats.addedNotes >= context.maxAdded) {
+                break;
+            }
+            if (!nativeLnBridgeCapacityAllows(candidate, context)) {
+                ++context.stats.rejectedExpansionCandidates;
+                ++context.stats.rejectedByComposerSafety;
+                continue;
+            }
+            if (context.tryAdd(candidate)) {
+                ++addedInThisSlice;
+            }
+        }
+    }
+}
+
 void applyTrainingScaffold(ExpansionContext& context) {
     auto slices = buildSliceViews(context.chart.notes, context.options.sameTimeEpsilonMs);
     sortExpansionSlices(slices, context);
@@ -2078,6 +2306,8 @@ void applyPreserveTapPlus(ExpansionContext& context) {
     const auto baseNotes = context.chart.notes;
     auto slices = buildSliceViews(baseNotes, context.options.sameTimeEpsilonMs);
     sortExpansionSlices(slices, context);
+
+    applyNative10KLnBridgeFill(context, slices, baseNotes);
 
     for (const auto& slice : slices) {
         if (slice.noteIndices.empty() ||
@@ -2423,6 +2653,12 @@ void normalizeGeneratedHoldDurations(Chart& chart) {
 
         const int currentDuration =
             note.endTime.has_value() && *note.endTime > note.time ? *note.endTime - note.time : 0;
+        if (isNativeBridgeHold(note)) {
+            if (!nativeBridgeHoldDurationAllowed(currentDuration, note.time, chart.timingPoints)) {
+                tapifyGeneratedHold(note);
+            }
+            continue;
+        }
         const auto duration = adjacentShortHoldDuration(chart.notes, i, chart.timingPoints);
         if (duration.has_value() && *duration > 0) {
             note.endTime = note.time + *duration;

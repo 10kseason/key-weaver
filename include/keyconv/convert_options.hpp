@@ -17,6 +17,7 @@ struct ConvertOptions {
     EchoPolicy echoPolicy = EchoPolicy::Off;
     StreamEchoProfile streamEchoProfile = StreamEchoProfile::Conservative;
     StreamTransformPolicy streamTransformPolicy = StreamTransformPolicy::Off;
+    Native10KPreset native10KPreset = Native10KPreset::Off;
     JackPreservePolicy jackPreservePolicy = JackPreservePolicy::PreservePlayable;
     bool gestureRailEnabled = true;
     bool preserveLaneDrift = false;

@@ -221,14 +221,27 @@ bool wholeBoardHighKeyDefault(int sourceKeyCount, int targetKeyCount) {
     return targetKeyCount >= 8 && targetKeyCount > sourceKeyCount;
 }
 
-bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
-    return sourceKeyCount == 7 && targetKeyCount == 10 &&
-           !wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount);
+bool fourKeySmallHighKeyWholeBoard(int sourceKeyCount, int targetKeyCount) {
+    return sourceKeyCount == 4 && targetKeyCount >= 5 && targetKeyCount <= 7;
+}
+
+bool native10KActive(int sourceKeyCount, int targetKeyCount, Native10KPreset preset) {
+    return sourceKeyCount == 7 && targetKeyCount == 10 && preset != Native10KPreset::Off;
+}
+
+bool native10KActive(const AssignmentContext& context) {
+    return native10KActive(context.sourceKeyCount, context.targetKeyCount, context.native10KPreset);
+}
+
+bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount, Native10KPreset preset) {
+    return native10KActive(sourceKeyCount, targetKeyCount, preset);
 }
 
 bool useEvenHandSplit(int sourceKeyCount, int targetKeyCount) {
     return sourceKeyCount >= 2 && targetKeyCount >= 2 &&
+           targetKeyCount > sourceKeyCount &&
            sourceKeyCount % 2 == 0 && targetKeyCount % 2 == 0 &&
+           !fourKeySmallHighKeyWholeBoard(sourceKeyCount, targetKeyCount) &&
            !wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount);
 }
 
@@ -257,15 +270,21 @@ int dualFiveBaseLaneForSource(int sourceLane, int targetKeyCount) {
     return clampInt(lane, 0, targetKeyCount - 1);
 }
 
-std::pair<int, int> balanceZoneForSource(int sourceLane, int sourceKeyCount, int targetKeyCount) {
+std::pair<int, int> balanceZoneForSource(int sourceLane,
+                                         int sourceKeyCount,
+                                         int targetKeyCount,
+                                         Native10KPreset native10KPreset) {
     if (targetKeyCount <= 1) {
         return {0, 0};
+    }
+    if (useDualFiveSplit(sourceKeyCount, targetKeyCount, native10KPreset)) {
+        return dualFiveZoneForSource(sourceLane);
     }
     if (wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount)) {
         return {0, targetKeyCount - 1};
     }
-    if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
-        return dualFiveZoneForSource(sourceLane);
+    if (fourKeySmallHighKeyWholeBoard(sourceKeyCount, targetKeyCount)) {
+        return {0, targetKeyCount - 1};
     }
     if (useEvenHandSplit(sourceKeyCount, targetKeyCount)) {
         return evenHandZoneForSource(sourceLane, sourceKeyCount, targetKeyCount);
@@ -297,7 +316,7 @@ double dualFivePanelScore(int sourceLane,
                           int targetLane,
                           const GestureHint* hint,
                           const AssignmentContext& context) {
-    if (!useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount)) {
+    if (!useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount, context.native10KPreset)) {
         return 0.0;
     }
 
@@ -371,22 +390,66 @@ double sourceLaneAnchorScore(int targetLane, int anchorLane, int targetKeyCount)
     return -std::min(1.0, static_cast<double>(delta) / 3.0);
 }
 
+double relaxedExpansionSourceLaneAnchorScore(int targetLane, int anchorLane, int targetKeyCount) {
+    const int delta = std::abs(targetLane - anchorLane);
+    if (targetKeyCount >= 5 && targetKeyCount <= 7) {
+        if (delta == 0) {
+            return 0.65;
+        }
+        if (delta == 1) {
+            return 0.35;
+        }
+        if (delta == 2) {
+            return -0.05;
+        }
+        return -0.75;
+    }
+
+    if (targetKeyCount < 9) {
+        return sourceLaneAnchorScore(targetLane, anchorLane, targetKeyCount);
+    }
+
+    const bool sameHand = handForLane(targetLane, targetKeyCount) == handForLane(anchorLane, targetKeyCount);
+    if (delta == 0) {
+        return 0.55;
+    }
+    if (sameHand && delta == 1) {
+        return 0.38;
+    }
+    if (sameHand && delta == 2) {
+        return 0.12;
+    }
+    if (sameHand && delta == 3) {
+        return -0.25;
+    }
+    return -0.85;
+}
+
 bool preserveLaneDriftActive(const AssignmentContext& context) {
     return context.preserveLaneDrift && context.style == ConversionStyle::Faithful &&
            context.targetKeyCount > context.sourceKeyCount && context.targetKeyCount > 1;
 }
 
-bool tenKeyLooseNonJackExpansionActive(int sourceKeyCount, int targetKeyCount, ConversionStyle style) {
-    return targetKeyCount == 10 && targetKeyCount > sourceKeyCount &&
+bool looseHighKeyNonJackExpansionActive(int sourceKeyCount, int targetKeyCount, ConversionStyle style) {
+    return targetKeyCount >= 9 && targetKeyCount > sourceKeyCount &&
            (style == ConversionStyle::Playable || style == ConversionStyle::Training);
 }
 
-bool tenKeyLooseNonJackExpansionActive(const AssignmentContext& context) {
-    return tenKeyLooseNonJackExpansionActive(context.sourceKeyCount, context.targetKeyCount, context.style);
+bool looseHighKeyNonJackExpansionActive(const AssignmentContext& context) {
+    return looseHighKeyNonJackExpansionActive(context.sourceKeyCount, context.targetKeyCount, context.style);
+}
+
+bool looseSmallHighKeyNonJackExpansionActive(int sourceKeyCount, int targetKeyCount, ConversionStyle style) {
+    return fourKeySmallHighKeyWholeBoard(sourceKeyCount, targetKeyCount) &&
+           (style == ConversionStyle::Playable || style == ConversionStyle::Training);
+}
+
+bool looseSmallHighKeyNonJackExpansionActive(const AssignmentContext& context) {
+    return looseSmallHighKeyNonJackExpansionActive(context.sourceKeyCount, context.targetKeyCount, context.style);
 }
 
 int preserveLaneDriftBaseLane(int sourceLane, const AssignmentContext& context) {
-    return useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount)
+    return useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount, context.native10KPreset)
                ? dualFiveBaseLaneForSource(sourceLane, context.targetKeyCount)
                : mapLaneDirect(sourceLane, context.sourceKeyCount, context.targetKeyCount);
 }
@@ -402,7 +465,7 @@ std::optional<int> preserveLaneDriftLane(int sourceLane, int time, const Assignm
     const int offset = kOffsets[(phase + sourceLane * 3) %
                                 (static_cast<int>(sizeof(kOffsets) / sizeof(kOffsets[0])))];
     int lane = preserveLaneDriftBaseLane(sourceLane, context) + offset;
-    if (useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount)) {
+    if (useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount, context.native10KPreset)) {
         const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
         lane = clampInt(lane, zoneStart, zoneEnd);
     }
@@ -440,7 +503,8 @@ double roleVoiceLeadingScore(const Note& previous,
                              int targetLane,
                              const GestureHint& hint,
                              const AssignmentContext& context) {
-    if (!useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount) || !roleHasHandVoice(hint.role) ||
+    if (!useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount, context.native10KPreset) ||
+        !roleHasHandVoice(hint.role) ||
         hint.kind == PatternKind::Jack || previousHint == nullptr || previousHint->role != hint.role) {
         return 0.0;
     }
@@ -503,17 +567,120 @@ double handBalanceScore(const std::vector<int>& laneUse, int targetLane, int tar
     return std::max(-1.0, std::min(1.0, static_cast<double>(otherHandUse - currentHandUse) / normalizer));
 }
 
+std::optional<int> previousNativeMiddleHand(const std::vector<Note>& placed) {
+    for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
+        if (it->sourceLane.value_or(it->lane) == 3) {
+            return handForLane(it->lane, 10);
+        }
+    }
+    return std::nullopt;
+}
+
+double nativeMiddleTradingScore(int sourceLane, int targetLane, const AssignmentContext& context) {
+    if (!native10KActive(context) || sourceLane != 3 || context.targetKeyCount != 10) {
+        return 0.0;
+    }
+
+    double score = handBalanceScore(context.laneUse, targetLane, context.targetKeyCount) *
+                   context.weights.handBalance * 0.85;
+    const int targetHand = handForLane(targetLane, context.targetKeyCount);
+    if (const auto previousHand = previousNativeMiddleHand(context.placed); previousHand.has_value()) {
+        score += (*previousHand == targetHand) ? -context.weights.shape * 0.45
+                                               : context.weights.shape * 0.70;
+    }
+    if (targetLane == 4 || targetLane == 5) {
+        score += context.weights.shape * 0.35;
+    } else if (targetLane == 3 || targetLane == 6) {
+        score += context.weights.shape * 0.10;
+    } else {
+        score -= context.weights.shape * 0.25;
+    }
+    return score;
+}
+
+std::pair<int, int> nativeWidthZoneForCandidate(int sourceLane, int targetLane) {
+    if (sourceLane == 3) {
+        return targetLane < 5 ? std::pair<int, int>{0, 4} : std::pair<int, int>{5, 9};
+    }
+    return dualFiveZoneForSource(sourceLane);
+}
+
+double nativeWithinHandSpreadScore(int sourceLane, int targetLane, const AssignmentContext& context) {
+    if (!native10KActive(context) || context.targetKeyCount != 10 ||
+        context.laneUse.size() != static_cast<std::size_t>(context.targetKeyCount)) {
+        return 0.0;
+    }
+
+    const auto [zoneStart, zoneEnd] = nativeWidthZoneForCandidate(sourceLane, targetLane);
+    if (targetLane < zoneStart || targetLane > zoneEnd) {
+        return 0.0;
+    }
+
+    int total = 0;
+    for (int lane = zoneStart; lane <= zoneEnd; ++lane) {
+        total += context.laneUse[static_cast<std::size_t>(lane)];
+    }
+    const int zoneSize = std::max(1, zoneEnd - zoneStart + 1);
+    if (total < zoneSize) {
+        return 0.0;
+    }
+
+    const double averageUse = static_cast<double>(total) / static_cast<double>(zoneSize);
+    const double laneUseValue = static_cast<double>(context.laneUse[static_cast<std::size_t>(targetLane)]);
+    const double underuse = std::max(-0.8, std::min(1.0, (averageUse - laneUseValue) / std::max(1.0, averageUse)));
+    if (underuse <= 0.0) {
+        return underuse * 0.35;
+    }
+
+    const int baseLane = sourceLane == 3 ? (targetLane < 5 ? 4 : 5)
+                                         : dualFiveBaseLaneForSource(sourceLane, context.targetKeyCount);
+    const double awayFromAnchor = std::min(1.0, static_cast<double>(std::abs(targetLane - baseLane)) / 2.0);
+    return underuse + awayFromAnchor * 0.25;
+}
+
+bool highKeySoftEdgeLane(int lane, int targetKeyCount) {
+    return targetKeyCount >= 9 && (lane <= 1 || lane >= targetKeyCount - 2);
+}
+
+double highKeySoftEdgeCoverScore(const std::vector<int>& laneUse,
+                                 int targetLane,
+                                 int sourceKeyCount,
+                                 int targetKeyCount) {
+    if (targetKeyCount < 9 || targetKeyCount <= sourceKeyCount ||
+        !highKeySoftEdgeLane(targetLane, targetKeyCount) ||
+        laneUse.size() != static_cast<std::size_t>(targetKeyCount)) {
+        return 0.0;
+    }
+
+    int totalUse = 0;
+    for (const int count : laneUse) {
+        totalUse += count;
+    }
+    if (totalUse <= 0) {
+        return 0.0;
+    }
+
+    const double averageUse = static_cast<double>(totalUse) / static_cast<double>(targetKeyCount);
+    const double laneUseValue = static_cast<double>(laneUse[static_cast<std::size_t>(targetLane)]);
+    if (laneUseValue > averageUse) {
+        return 0.0;
+    }
+    return std::min(0.8, 0.20 + (averageUse - laneUseValue) * 0.12);
+}
+
 double expandedLaneBalanceScore(const std::vector<int>& laneUse,
                                 int sourceLane,
                                 int sourceKeyCount,
                                 int targetLane,
-                                int targetKeyCount) {
+                                int targetKeyCount,
+                                Native10KPreset native10KPreset) {
     if (targetKeyCount <= sourceKeyCount || targetLane < 0 || targetLane >= targetKeyCount ||
         laneUse.size() != static_cast<std::size_t>(targetKeyCount)) {
         return 0.0;
     }
 
-    const auto [zoneStart, zoneEnd] = balanceZoneForSource(sourceLane, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] =
+        balanceZoneForSource(sourceLane, sourceKeyCount, targetKeyCount, native10KPreset);
     if (zoneStart > zoneEnd) {
         return 0.0;
     }
@@ -717,13 +884,22 @@ PpgWeights weightsForStyle(ConversionStyle style) {
     return weights;
 }
 
-LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK, ConversionStyle style) {
+LaneCandidateSet generateCandidateLanes(int sourceLane,
+                                        int sourceK,
+                                        int targetK,
+                                        ConversionStyle style,
+                                        Native10KPreset native10KPreset) {
     LaneCandidateSet set;
     set.sourceLane = sourceLane;
-    set.baseLane = useDualFiveSplit(sourceK, targetK)
+    const bool nativeMiddleLane = native10KActive(sourceK, targetK, native10KPreset) && sourceLane == 3;
+    set.baseLane = useDualFiveSplit(sourceK, targetK, native10KPreset)
                        ? dualFiveBaseLaneForSource(sourceLane, targetK)
                        : mapLaneDirect(sourceLane, sourceK, targetK);
-    if (useDualFiveSplit(sourceK, targetK)) {
+    if (nativeMiddleLane) {
+        set.hasPreferredZone = true;
+        set.preferredZoneStart = 0;
+        set.preferredZoneEnd = targetK - 1;
+    } else if (useDualFiveSplit(sourceK, targetK, native10KPreset)) {
         const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
         set.hasPreferredZone = true;
         set.preferredZoneStart = zoneStart;
@@ -739,6 +915,9 @@ LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK
         set.radius = 0;
     } else if (style == ConversionStyle::Playable) {
         set.radius = sourceK == targetK ? 1 : 2;
+        if (sourceK == 4 && targetK >= 9 && targetK > sourceK) {
+            set.radius = 3;
+        }
     } else if (style == ConversionStyle::Faithful) {
         set.radius = 1;
     } else if (style == ConversionStyle::Training) {
@@ -746,11 +925,20 @@ LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK
     } else if (style == ConversionStyle::DP) {
         set.radius = 2;
     }
+    if (!nativeMiddleLane && native10KActive(sourceK, targetK, native10KPreset) &&
+        (style == ConversionStyle::Playable || style == ConversionStyle::Training || style == ConversionStyle::DP)) {
+        set.radius = std::max(set.radius, 4);
+    }
 
     addUnique(set.candidates, clampInt(set.baseLane, 0, targetK - 1));
     for (int offset = 1; offset <= set.radius; ++offset) {
         addUnique(set.candidates, clampInt(set.baseLane - offset, 0, targetK - 1));
         addUnique(set.candidates, clampInt(set.baseLane + offset, 0, targetK - 1));
+    }
+    if (nativeMiddleLane) {
+        addUnique(set.candidates, 5);
+        addUnique(set.candidates, 3);
+        addUnique(set.candidates, 6);
     }
     keepPreferredZoneCandidates(set);
     return set;
@@ -765,8 +953,11 @@ std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
     for (const auto noteIndex : slice.noteIndices) {
         const auto& note = sourceNotes[noteIndex];
         const int sourceLane = note.sourceLane.value_or(note.lane);
-        auto baseSet =
-            generateCandidateLanes(sourceLane, context.sourceKeyCount, context.targetKeyCount, context.style);
+        auto baseSet = generateCandidateLanes(sourceLane,
+                                              context.sourceKeyCount,
+                                              context.targetKeyCount,
+                                              context.style,
+                                              context.native10KPreset);
         const auto* hint = findGestureHint(context.gestureRail, note.id);
         addGestureCandidates(baseSet, hint, context.targetKeyCount);
         auto candidates = noCreatedJackCandidates(baseSet, note, context);
@@ -841,42 +1032,76 @@ double scoreAssignment(const TimeSlice& slice,
             hasNearbySourceLaneNeighbor(sourceNotes, sourceLane, source.id, source.time, jackWindowMsForBalance);
         const auto sourceAnchor =
             recentSourceLaneAnchor(context.placed, sourceLane, source.time, context.targetKeyCount);
-        const bool looseTenKeyNonJack =
-            tenKeyLooseNonJackExpansionActive(context) && slice.chordSize == 1 && hint == nullptr &&
+        const bool native10K = native10KActive(context);
+        const bool looseHighKeyNonJack =
+            !native10K && looseHighKeyNonJackExpansionActive(context) && slice.chordSize == 1 && hint == nullptr &&
             !sourceRepeatNearAny;
+        const bool looseSmallHighKeyNonJack =
+            looseSmallHighKeyNonJackExpansionActive(context) && slice.chordSize == 1 && hint == nullptr &&
+            !sourceRepeatNearAny;
+        const bool looseWholeBoardNonJack = looseHighKeyNonJack || looseSmallHighKeyNonJack;
         const auto driftLane = preserveLaneDriftLane(sourceLane, source.time, context);
 
-        score += context.weights.position *
+        const double positionWeight =
+            context.weights.position * (looseHighKeyNonJack ? 0.45 : looseSmallHighKeyNonJack ? 0.65 : 1.0);
+        score += positionWeight *
                  (1.0 - std::abs(normalizedLane(sourceLane, context.sourceKeyCount) -
                                   normalizedLane(targetLane, context.targetKeyCount)));
         score += dualFivePanelScore(sourceLane, targetLane, hint, context);
-        if (!sourceJackLike && !sourceRepeatNearby && (!sourceAnchor.has_value() || looseTenKeyNonJack)) {
-            const double densityScale = sourceAnchor.has_value() ? 0.9 : 1.5;
+        score += nativeMiddleTradingScore(sourceLane, targetLane, context);
+        const bool nativeWidthBalance = native10K && !sourceJackLike && !sourceRepeatNearby;
+        if (!sourceJackLike && !sourceRepeatNearby &&
+            (!sourceAnchor.has_value() || looseWholeBoardNonJack || nativeWidthBalance)) {
+            const double densityScale =
+                nativeWidthBalance ? (sourceAnchor.has_value() ? 2.15 : 1.85)
+                                   : looseHighKeyNonJack ? 2.2
+                                                         : looseSmallHighKeyNonJack ? 2.0
+                                                                                   : (sourceAnchor.has_value() ? 0.9
+                                                                                                               : 1.5);
             score += context.weights.density *
                      expandedLaneBalanceScore(context.laneUse,
                                               sourceLane,
                                               context.sourceKeyCount,
                                               targetLane,
-                                              context.targetKeyCount) *
+                                              context.targetKeyCount,
+                                              context.native10KPreset) *
                      densityScale;
             if (context.targetKeyCount > context.sourceKeyCount) {
                 score += context.weights.handBalance *
                          handBalanceScore(context.laneUse, targetLane, context.targetKeyCount) *
                          0.75;
             }
+            score += context.weights.density *
+                     highKeySoftEdgeCoverScore(context.laneUse,
+                                               targetLane,
+                                               context.sourceKeyCount,
+                                               context.targetKeyCount);
+        }
+        if (nativeWidthBalance) {
+            score += context.weights.density * nativeWithinHandSpreadScore(sourceLane, targetLane, context) * 1.65;
         }
         score += gestureScore(source, targetLane, hint, context);
         if (!sourceJackLike && sourceAnchor.has_value()) {
             double anchorWeight = context.targetKeyCount > context.sourceKeyCount ? 0.85 : 2.25;
-            if (looseTenKeyNonJack) {
-                anchorWeight = 0.60;
+            if (looseHighKeyNonJack) {
+                anchorWeight = 0.45;
+            } else if (looseSmallHighKeyNonJack) {
+                anchorWeight = 0.50;
+            }
+            if (nativeWidthBalance) {
+                anchorWeight = 0.28;
             }
             if (preserveLaneDriftActive(context) && !sourceRepeatNearby) {
                 anchorWeight = 0.30;
             }
-            score += context.weights.shape *
-                     sourceLaneAnchorScore(targetLane, *sourceAnchor, context.targetKeyCount) *
-                     anchorWeight;
+            const double anchorScore = looseWholeBoardNonJack
+                                           ? relaxedExpansionSourceLaneAnchorScore(targetLane,
+                                                                                  *sourceAnchor,
+                                                                                  context.targetKeyCount)
+                                           : sourceLaneAnchorScore(targetLane,
+                                                                   *sourceAnchor,
+                                                                   context.targetKeyCount);
+            score += context.weights.shape * anchorScore * anchorWeight;
         }
         if (!sourceJackLike && !sourceRepeatNearby && driftLane.has_value()) {
             score += preserveLaneDriftScore(targetLane, *driftLane, context);
@@ -930,8 +1155,10 @@ double scoreAssignment(const TimeSlice& slice,
         }
 
         if (const auto previous = lastPlacedBefore(context.placed, source.time); previous.has_value()) {
+            const double movementScale = looseHighKeyNonJack ? 0.45 : looseSmallHighKeyNonJack ? 0.65 : 1.0;
             movementPenalty +=
-                std::abs(targetLane - previous->lane) / static_cast<double>(std::max(1, context.targetKeyCount - 1));
+                movementScale * std::abs(targetLane - previous->lane) /
+                static_cast<double>(std::max(1, context.targetKeyCount - 1));
 
             const int sourceSign = signOf(sourceLane - previous->sourceLane.value_or(previous->lane));
             const int targetSign = signOf(targetLane - previous->lane);

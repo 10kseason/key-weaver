@@ -2,18 +2,31 @@
 
 ## Unreleased
 
+## 0.7.0
+
+- Added opt-in `--native-10k` 7K-to-10K playtest presets (`conservative`, `mirror-fill`, `dense`, `dense-ln`) that route 7K through a two-hand 5K+5K rail, trade the middle column between hands, report `native10KPreset`, and mark output filenames/difficulties with native tags. The `dense-ln` preset additionally tries short LN bridge fills between same-hand overlapping LNs.
+- Changed CLI/GUI 7K-to-10K default conversion to the native `dense-ln` rail. Omitted expansion and `auto-normal` use normal density, while explicit `auto-low` and `auto-more` tune that rail down/up with a narrower 12%/15%/18% range.
+- Changed target-8 higher-key auto-new-algorithm conversion to default to normal `preserve-tap-plus` density while keeping explicit `auto-low` available for conservative 8K exports.
+- Renamed the GUI default expansion choice to `auto (new algorithm)` and added `--expansion-policy auto-new-algorithm` as a CLI alias for the omitted/default auto path.
+- Added batch source-key filters: CLI `--batch-source-keys` / `--batch-exclude-source-keys` and GUI Batch only/exclude fields can restrict or skip detected source key counts before conversion.
+- Promoted tool, report, package, GUI labels, and the current algorithm lock to `v0.7.0`.
+
 ## 0.6.5
 
 - Locked the current whole-board high-key algorithm contract in `docs/algorithm-lock-v0.6.5.md`.
 - Changed omitted `--expansion-policy` / `auto` and the GUI default from `auto-normal` to `auto-low`; explicit `auto-normal` remains available for the 15% budget.
 - Promoted tool, report, package, and GUI labels to `v0.6.5`.
-- Added CLI batch worker parallelism; automatic batch mode now uses the detected CPU thread count by default while `--jobs` can override the worker count.
+- Added CLI batch worker parallelism; automatic batch mode now uses the detected CPU thread count capped at 4 workers by default while `--jobs` can override the worker count.
+- Added `--input-list` and `--out-dir` for large CLI batches; normal GUI Batch now launches one quiet CLI batch process instead of spawning one process per chart.
 - Added CLI/GUI batch progress text showing percent done and remaining chart count.
+- Added concise `--quiet` CLI output and use it for GUI batch subprocesses to reduce per-chart pipe/log overhead; quiet batch mode now suppresses per-item logs and keeps the final summary.
 - Re-enabled GUI Batch for tester packages and added a simple status line for Convert, Batch, and Matrix runs.
 - Added a reconversion guard for already-converted chart markers such as `A7K`, `a10K`, `4to7c`, `7to10c`, `4K10C`, and `KeyWeaver10K`; CLI/GUI batch runs count these as skipped.
 - Added GUI folder-scan progress for large Songs folders, including counting status, scan percent, remaining file count, and chart count while keeping the window message loop responsive.
 - Fixed duplicate batch inputs so multithreaded CLI/GUI batch runs do not process the same chart twice or create duplicate `.osu` outputs.
 - Tuned 8K/10K high-key mapping so base assignment, gesture hints, and generated notes no longer lock into 4K+4K / 5K+5K hand panels; profile/built-in wide-board pressure can use the full target board, underfilled local lanes, and outer lanes when broader coverage is safer.
+- Tuned 9K+ whole-board assignment and tap-plus generation to use soft underuse/edge coverage instead of fixed boosted lane indexes.
+- Tuned 4K-to-5/6/7K playable mapping and lower-key compression assignment so preserved notes can use the whole target board instead of a hard half-board split.
 
 ## 0.6.0
 
@@ -34,7 +47,7 @@
 
 - Added Preserve Convert lane drift: strict source-jack/no-generated-note conversion can now move non-jack phrases through adjacent safe lanes instead of staying locked to one fixed skeleton.
 - Added `auto-more` / `preserve-tap-plus-more` expansion for a larger high-key preserve-tap-plus growth budget.
-- Added `--stream-transform superrandom` and `--stream-transform full-jitter` for deterministic stream relaning and full-chart 1-15 ms per-note jitter.
+- Added `--stream-transform superrandom` and `--stream-transform full-jitter` for deterministic stream relaning and full-chart 1-30 ms per-note jitter.
 - Changed `superrandom` to randomize every note to a safe lane instead of only detected stream runs; `--seed` can vary the deterministic lane order.
 - Converted osu!mania difficulty names and default output filenames now distinguish expansion intensity and stream transforms, for example `KeyWeaver10K-sRan (more)` and `KeyWeaver10K-jitter (low)`.
 - Streamlined the GUI choices to expansion `auto-more` / `auto-normal` / `auto-low`, compress `auto`, and stream `off` / `superrandom` / `full-jitter`.

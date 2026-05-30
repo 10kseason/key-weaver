@@ -21,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -51,6 +52,9 @@ constexpr int kButtonBatch = 119;
 constexpr int kCheckPreserveConvert = 120;
 constexpr int kCheckDebugReports = 121;
 constexpr int kStaticStatus = 122;
+constexpr int kEditBatchOnlyKeys = 123;
+constexpr int kEditBatchExcludeKeys = 124;
+constexpr std::size_t kAutoBatchWorkerCap = 4;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -62,8 +66,10 @@ struct ToolOptions {
     std::filesystem::path inputFile;
     std::filesystem::path outputDir;
     std::wstring sourceOverride;
+    std::wstring batchOnlySourceKeys;
+    std::wstring batchExcludeSourceKeys;
     std::wstring targetKeys = L"10";
-    std::wstring expansionPolicy = L"auto (low)";
+    std::wstring expansionPolicy = L"auto (new algorithm)";
     std::wstring compressPolicy = L"auto";
     std::wstring streamTransform = L"off";
     bool preserveConvert = false;
@@ -95,6 +101,8 @@ struct AppState {
     HWND inputEdit = nullptr;
     HWND outputDirEdit = nullptr;
     HWND sourceEdit = nullptr;
+    HWND batchOnlyKeysEdit = nullptr;
+    HWND batchExcludeKeysEdit = nullptr;
     HWND targetEdit = nullptr;
     HWND expansionCombo = nullptr;
     HWND compressCombo = nullptr;
@@ -486,6 +494,48 @@ std::wstring chartOutputExtension(const ToolOptions& options) {
     return L".osu";
 }
 
+std::optional<int> detectCircleSize(const std::filesystem::path& osuPath);
+std::optional<int> parseSourceOverrideKeyCount(const std::wstring& value);
+
+std::optional<int> parseGuiKeyCountText(const std::wstring& value) {
+    const auto text = trim(value);
+    if (text.empty()) {
+        return std::nullopt;
+    }
+    wchar_t* end = nullptr;
+    const long parsed = std::wcstol(text.c_str(), &end, 10);
+    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 32) {
+        return std::nullopt;
+    }
+    return static_cast<int>(parsed);
+}
+
+std::optional<int> effectiveGuiSourceKeyCount(const ToolOptions& options) {
+    const auto sourceOverride = parseSourceOverrideKeyCount(options.sourceOverride);
+    if (sourceOverride.has_value() && *sourceOverride > 0) {
+        return sourceOverride;
+    }
+    return detectCircleSize(options.inputFile);
+}
+
+bool defaultGuiNativeDenseLnApplies(const ToolOptions& options) {
+    if (options.preserveConvert) {
+        return false;
+    }
+    const auto sourceKeys = effectiveGuiSourceKeyCount(options);
+    const auto targetKeys = parseGuiKeyCountText(options.targetKeys);
+    return sourceKeys.has_value() && targetKeys.has_value() && *sourceKeys == 7 && *targetKeys == 10;
+}
+
+bool defaultGuiEightKeyUpgradeApplies(const ToolOptions& options) {
+    if (options.preserveConvert) {
+        return false;
+    }
+    const auto sourceKeys = effectiveGuiSourceKeyCount(options);
+    const auto targetKeys = parseGuiKeyCountText(options.targetKeys);
+    return sourceKeys.has_value() && targetKeys.has_value() && *sourceKeys < 8 && *targetKeys == 8;
+}
+
 std::wstring expansionDifficultyTag(const ToolOptions& options) {
     if (options.preserveConvert) {
         return {};
@@ -498,6 +548,16 @@ std::wstring expansionDifficultyTag(const ToolOptions& options) {
     }
     if (options.expansionPolicy == L"auto (low)") {
         return L"low";
+    }
+    if (options.expansionPolicy == L"auto (new algorithm)") {
+        if (defaultGuiNativeDenseLnApplies(options) || defaultGuiEightKeyUpgradeApplies(options)) {
+            return L"normal";
+        }
+        const auto sourceKeys = effectiveGuiSourceKeyCount(options);
+        const auto targetKeys = parseGuiKeyCountText(options.targetKeys);
+        if (sourceKeys.has_value() && targetKeys.has_value() && *targetKeys > *sourceKeys) {
+            return L"low";
+        }
     }
     return {};
 }
@@ -518,6 +578,9 @@ std::wstring keyWeaverConversionMarker(const ToolOptions& options) {
     if (!streamTag.empty()) {
         marker += L"-";
         marker += streamTag;
+    }
+    if (defaultGuiNativeDenseLnApplies(options)) {
+        marker += L"-native-dense-ln";
     }
     const auto expansionTag = expansionDifficultyTag(options);
     if (!expansionTag.empty()) {
@@ -574,6 +637,9 @@ void appendArg(std::wstring& command, const std::wstring& arg) {
 }
 
 std::wstring expansionPolicyCliValue(const std::wstring& value) {
+    if (value == L"auto (new algorithm)") {
+        return L"auto";
+    }
     if (value == L"auto (more)") {
         return L"auto-more";
     }
@@ -611,7 +677,7 @@ std::wstring buildSingleCommand(ToolOptions options,
     const auto expansionPolicy = expansionPolicyCliValue(options.expansionPolicy);
     if (options.preserveConvert) {
         appendArg(command, L"--preserve-convert");
-    } else if (expansionPolicy != L"auto" && expansionPolicy != L"auto-low") {
+    } else if (expansionPolicy != L"auto") {
         appendArg(command, L"--expansion-policy");
         appendArg(command, expansionPolicy);
     }
@@ -621,6 +687,7 @@ std::wstring buildSingleCommand(ToolOptions options,
     }
     appendArg(command, L"--out");
     appendArg(command, quoteArg(paths.outputChart));
+    appendArg(command, L"--quiet");
     if (options.debugReports) {
         appendArg(command, L"--report");
         appendArg(command, quoteArg(paths.reportJson));
@@ -653,6 +720,48 @@ std::wstring buildMatrixCommand(const ToolOptions& options, OutputPaths& paths) 
     appendArg(command, quoteArg(paths.reportJson));
     appendArg(command, L"--report-csv");
     appendArg(command, quoteArg(paths.reportCsv));
+    return command;
+}
+
+std::wstring buildCliBatchCommand(const ToolOptions& options,
+                                  const std::filesystem::path& inputList,
+                                  const std::optional<std::filesystem::path>& forcedOutputDir) {
+    std::wstring command = quoteArg(options.keyconvExe);
+    appendArg(command, L"--input-list");
+    appendArg(command, quoteArg(inputList));
+    appendArg(command, L"--batch");
+    if (!trim(options.sourceOverride).empty()) {
+        appendArg(command, L"--source");
+        appendArg(command, trim(options.sourceOverride));
+    }
+    if (!trim(options.batchOnlySourceKeys).empty()) {
+        appendArg(command, L"--batch-source-keys");
+        appendArg(command, trim(options.batchOnlySourceKeys));
+    }
+    if (!trim(options.batchExcludeSourceKeys).empty()) {
+        appendArg(command, L"--batch-exclude-source-keys");
+        appendArg(command, trim(options.batchExcludeSourceKeys));
+    }
+    appendArg(command, L"--target");
+    appendArg(command, options.targetKeys);
+    appendArg(command, L"--compress-policy");
+    appendArg(command, options.compressPolicy);
+    const auto expansionPolicy = expansionPolicyCliValue(options.expansionPolicy);
+    if (options.preserveConvert) {
+        appendArg(command, L"--preserve-convert");
+    } else if (expansionPolicy != L"auto") {
+        appendArg(command, L"--expansion-policy");
+        appendArg(command, expansionPolicy);
+    }
+    if (!options.preserveConvert && options.streamTransform != L"off") {
+        appendArg(command, L"--stream-transform");
+        appendArg(command, options.streamTransform);
+    }
+    if (forcedOutputDir.has_value()) {
+        appendArg(command, L"--out-dir");
+        appendArg(command, quoteArg(*forcedOutputDir));
+    }
+    appendArg(command, L"--quiet");
     return command;
 }
 
@@ -881,6 +990,52 @@ std::optional<int> parseSourceOverrideKeyCount(const std::wstring& value) {
     return static_cast<int>(parsed);
 }
 
+std::optional<std::set<int>> parseBatchSourceKeySet(const std::wstring& value) {
+    const auto text = trim(value);
+    if (text.empty()) {
+        return std::set<int>{};
+    }
+
+    std::set<int> keys;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const auto comma = text.find(L',', start);
+        auto token = trim(text.substr(start, comma == std::wstring::npos ? std::wstring::npos
+                                                                         : comma - start));
+        if (!token.empty() && (token.back() == L'k' || token.back() == L'K')) {
+            token.pop_back();
+            token = trim(token);
+        }
+        if (token.empty()) {
+            return std::nullopt;
+        }
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(token.c_str(), &end, 10);
+        if (end == token.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 32) {
+            return std::nullopt;
+        }
+        keys.insert(static_cast<int>(parsed));
+        if (comma == std::wstring::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return keys;
+}
+
+std::wstring keySetText(const std::set<int>& keys) {
+    std::wostringstream out;
+    bool first = true;
+    for (const int key : keys) {
+        if (!first) {
+            out << L",";
+        }
+        first = false;
+        out << key;
+    }
+    return out.str();
+}
+
 struct FolderScanProgress {
     std::size_t visitedFiles = 0;
     std::size_t totalFiles = 0;
@@ -984,6 +1139,23 @@ bool matchesSourceOverride(const std::filesystem::path& path, int sourceKeyCount
     }
     const auto detected = detectCircleSize(path);
     return detected.has_value() && *detected == sourceKeyCount;
+}
+
+bool matchesBatchSourceFilters(const std::filesystem::path& path,
+                               const std::set<int>& onlyKeys,
+                               const std::set<int>& excludeKeys,
+                               std::optional<int>& detected,
+                               std::wstring& reason) {
+    detected = isOsuPath(path) ? detectCircleSize(path) : std::nullopt;
+    if (!onlyKeys.empty() && (!detected.has_value() || onlyKeys.count(*detected) == 0)) {
+        reason = L"not in only keys " + keySetText(onlyKeys);
+        return false;
+    }
+    if (!excludeKeys.empty() && detected.has_value() && excludeKeys.count(*detected) > 0) {
+        reason = L"excluded by " + keySetText(excludeKeys);
+        return false;
+    }
+    return true;
 }
 
 void setChildFont(HWND hwnd, HFONT font) {
@@ -1106,6 +1278,8 @@ ToolOptions readToolOptions(const AppState& state) {
     options.outputDir = outputDirText.empty() ? options.inputFile.parent_path()
                                               : absolutePath(std::filesystem::path(outputDirText));
     options.sourceOverride = trim(getWindowText(state.sourceEdit));
+    options.batchOnlySourceKeys = trim(getWindowText(state.batchOnlyKeysEdit));
+    options.batchExcludeSourceKeys = trim(getWindowText(state.batchExcludeKeysEdit));
     options.targetKeys = trim(getWindowText(state.targetEdit));
     options.expansionPolicy = comboText(state.expansionCombo);
     options.compressPolicy = comboText(state.compressCombo);
@@ -1133,6 +1307,16 @@ bool validateToolOptions(const ToolOptions& options, HWND owner) {
     const auto sourceOverride = parseSourceOverrideKeyCount(options.sourceOverride);
     if (sourceOverride.has_value() && *sourceOverride < 0) {
         MessageBoxW(owner, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
+        return false;
+    }
+    if (!parseBatchSourceKeySet(options.batchOnlySourceKeys).has_value()) {
+        MessageBoxW(owner, L"Batch only keys must be a comma-separated key-count list, for example 4,7.",
+                    L"KeyWeaver GUI", MB_ICONERROR);
+        return false;
+    }
+    if (!parseBatchSourceKeySet(options.batchExcludeSourceKeys).has_value()) {
+        MessageBoxW(owner, L"Batch exclude keys must be a comma-separated key-count list, for example 4,7.",
+                    L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     return true;
@@ -1424,13 +1608,58 @@ struct BatchJobResult {
     ReportSummary summary;
 };
 
+std::filesystem::path temporaryBatchInputListPath() {
+    std::error_code error;
+    auto temp = std::filesystem::temp_directory_path(error);
+    if (error) {
+        temp = moduleDirectory();
+    }
+    std::wstring filename = L"KeyWeaver_batch_";
+    filename += std::to_wstring(GetCurrentProcessId());
+    filename += L"_";
+    filename += timestampSuffix();
+    filename += L".txt";
+    return temp / filename;
+}
+
+std::filesystem::path writeBatchInputList(const std::vector<BatchJob>& jobs) {
+    const auto path = temporaryBatchInputListPath();
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("Could not create batch input list");
+    }
+    for (const auto& job : jobs) {
+        out << narrowLossy(job.options.inputFile.wstring()) << "\n";
+    }
+    if (!out) {
+        throw std::runtime_error("Could not write batch input list");
+    }
+    return path;
+}
+
+std::optional<std::wstring> cliBatchSummaryLine(const std::string& output) {
+    constexpr std::string_view needle = "Batch summary:";
+    const auto pos = output.rfind(needle);
+    if (pos == std::string::npos) {
+        return std::nullopt;
+    }
+    auto end = output.find('\n', pos);
+    if (end == std::string::npos) {
+        end = output.size();
+    }
+    return widen(trimAscii(output.substr(pos, end - pos)));
+}
+
 std::size_t batchWorkerCount(std::size_t jobCount) {
     if (jobCount <= 1) {
         return jobCount;
     }
     const unsigned hardware = std::thread::hardware_concurrency();
     const std::size_t workers = hardware == 0 ? 4 : static_cast<std::size_t>(hardware);
-    return std::clamp<std::size_t>(workers, 1, jobCount);
+    return std::clamp<std::size_t>(std::min(workers, kAutoBatchWorkerCap), 1, jobCount);
 }
 
 BatchJobResult runBatchJob(BatchJob job) {
@@ -1505,6 +1734,18 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
         MessageBoxW(state.hwnd, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
+    const auto batchOnlyFilter = parseBatchSourceKeySet(baseOptions.batchOnlySourceKeys);
+    if (!batchOnlyFilter.has_value()) {
+        MessageBoxW(state.hwnd, L"Batch only keys must be a comma-separated key-count list, for example 4,7.",
+                    L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
+    const auto batchExcludeFilter = parseBatchSourceKeySet(baseOptions.batchExcludeSourceKeys);
+    if (!batchExcludeFilter.has_value()) {
+        MessageBoxW(state.hwnd, L"Batch exclude keys must be a comma-separated key-count list, for example 4,7.",
+                    L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
 
     const auto forcedOutputDir = explicitOutputDir(state);
     clearSummary(state);
@@ -1514,6 +1755,12 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
                      L" file(s), target " + baseOptions.targetKeys + L"K\r\n");
     if (sourceFilter.has_value()) {
         appendLog(state, L"Source filter: only " + std::to_wstring(*sourceFilter) + L"K .osu charts\r\n");
+    }
+    if (!batchOnlyFilter->empty()) {
+        appendLog(state, L"Batch only source keys: " + keySetText(*batchOnlyFilter) + L"\r\n");
+    }
+    if (!batchExcludeFilter->empty()) {
+        appendLog(state, L"Batch exclude source keys: " + keySetText(*batchExcludeFilter) + L"\r\n");
     }
 
     int succeeded = 0;
@@ -1559,6 +1806,23 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
             appendLog(state, L"[skip] " + options.inputFile.wstring() + L" source=" + sourceText + L"\r\n");
             continue;
         }
+        std::optional<int> detectedForBatchFilter;
+        std::wstring batchFilterReason;
+        if (!matchesBatchSourceFilters(options.inputFile,
+                                       *batchOnlyFilter,
+                                       *batchExcludeFilter,
+                                       detectedForBatchFilter,
+                                       batchFilterReason)) {
+            ++skipped;
+            const std::wstring sourceText = detectedForBatchFilter.has_value()
+                                                ? std::to_wstring(*detectedForBatchFilter) + L"K"
+                                                : L"unknown";
+            addSummaryLine(state, L"[skip] " + options.inputFile.filename().wstring() +
+                                      L" source=" + sourceText);
+            appendLog(state, L"[skip] " + options.inputFile.wstring() + L" source=" +
+                             sourceText + L" (" + batchFilterReason + L")\r\n");
+            continue;
+        }
         options.outputDir = forcedOutputDir.has_value() ? *forcedOutputDir : options.inputFile.parent_path();
         if (!options.outputDir.empty()) {
             std::filesystem::create_directories(options.outputDir);
@@ -1578,12 +1842,79 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
         return;
     }
 
+    if (!baseOptions.debugReports) {
+        setStatus(state, L"Batch: launching CLI batch");
+        addSummaryLine(state, L"[run] CLI batch process jobs=" + std::to_wstring(jobs.size()));
+        appendLog(state, L"Debug JSON off: using one CLI batch process.\r\n");
+
+        std::filesystem::path inputListPath;
+        try {
+            inputListPath = writeBatchInputList(jobs);
+        } catch (const std::exception& error) {
+            setStatus(state, L"Batch failed: list write");
+            appendLog(state, L"Batch input-list write failed: " + widen(error.what()) + L"\r\n");
+            MessageBoxW(state.hwnd, L"Could not write the temporary batch input list.",
+                        L"KeyWeaver batch", MB_ICONERROR);
+            return;
+        }
+
+        const std::wstring command = buildCliBatchCommand(baseOptions, inputListPath, forcedOutputDir);
+        state.lastCommand = command;
+        state.lastOutputPath = forcedOutputDir.has_value() ? *forcedOutputDir
+                                                           : jobs.back().options.inputFile.parent_path();
+        appendLog(state, L"\r\n> " + command + L"\r\n");
+        appendProgress(state, static_cast<std::size_t>(skipped + failed), inputs.size(), L"Batch");
+        UpdateWindow(state.hwnd);
+
+        auto running = std::async(std::launch::async, runProcess, command, baseOptions.keyconvExe.parent_path());
+        std::size_t pulse = 0;
+        while (running.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            if ((pulse++ % 20) == 0) {
+                setStatus(state, L"Batch: CLI batch running");
+            }
+            pumpPendingUiMessages();
+            Sleep(25);
+        }
+        const auto result = running.get();
+        std::error_code removeError;
+        std::filesystem::remove(inputListPath, removeError);
+
+        appendLog(state, widen(result.output) + L"\r\n");
+        const auto cliSummary = cliBatchSummaryLine(result.output);
+        if (cliSummary.has_value()) {
+            addSummaryLine(state, *cliSummary);
+        } else {
+            addSummaryLine(state, L"CLI batch completed; see log output.");
+        }
+        if (skipped > 0 || failed > 0) {
+            addSummaryLine(state, L"[prep] fail=" + std::to_wstring(failed) +
+                                  L" skip=" + std::to_wstring(skipped));
+        }
+
+        const bool batchFailed = result.exitCode != 0 || failed > 0;
+        std::wstring done = L"Batch done";
+        if (cliSummary.has_value()) {
+            done += L": ";
+            done += *cliSummary;
+        }
+        if (skipped > 0 || failed > 0) {
+            done += L" prepFail=" + std::to_wstring(failed) +
+                    L" prepSkip=" + std::to_wstring(skipped);
+        }
+        if (result.exitCode != 0) {
+            done += L" cliExit=" + std::to_wstring(result.exitCode);
+        }
+        setStatus(state, batchFailed ? L"Batch completed with failures" : done);
+        appendLog(state, done + L"\r\n");
+        if (batchFailed) {
+            MessageBoxW(state.hwnd, done.c_str(), L"KeyWeaver batch", MB_ICONWARNING);
+        }
+        return;
+    }
+
     const std::size_t workerCount = batchWorkerCount(jobs.size());
     if (workerCount > 1) {
         appendLog(state, L"Parallel workers: " + std::to_wstring(workerCount) + L"\r\n");
-    }
-    if (!baseOptions.debugReports) {
-        appendLog(state, L"Debug JSON off: batch writes charts only.\r\n");
     }
     auto uniqueProcessedCount = [&]() -> std::size_t {
         return static_cast<std::size_t>(succeeded + failed + std::max(0, skipped - duplicateInputs));
@@ -1706,15 +2037,24 @@ void createUi(AppState& state) {
     makeControl(state, L"STATIC", L"Target", 0, 210, y + 28, 50, 20, -1);
     state.targetEdit = makeControl(state, L"EDIT", L"10", ES_AUTOHSCROLL, 260, y + 24, 70, 24, kEditTarget,
                                    WS_EX_CLIENTEDGE);
-    y += 64;
+    makeControl(state, L"STATIC", L"Batch only", 0, labelX, y + 58, 100, 20, -1);
+    state.batchOnlyKeysEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL,
+                                          editX, y + 54, 130, 24, kEditBatchOnlyKeys,
+                                          WS_EX_CLIENTEDGE);
+    makeControl(state, L"STATIC", L"Batch exclude", 0, 270, y + 58, 104, 20, -1);
+    state.batchExcludeKeysEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL,
+                                             380, y + 54, 130, 24, kEditBatchExcludeKeys,
+                                             WS_EX_CLIENTEDGE);
+    makeControl(state, L"STATIC", L"comma keys", 0, 522, y + 58, 90, 20, -1);
+    y += 96;
 
     makeControl(state, L"STATIC", L"Expansion", 0, labelX, y + 4, 96, 20, -1);
     state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, editX, y, 180, 160,
                                        kComboExpansion);
-    for (const auto* item : {L"auto (low)", L"auto (normal)", L"auto (more)"}) {
+    for (const auto* item : {L"auto (new algorithm)", L"auto (low)", L"auto (normal)", L"auto (more)"}) {
         addComboItem(state.expansionCombo, item);
     }
-    setComboSelection(state.expansionCombo, L"auto (low)");
+    setComboSelection(state.expansionCombo, L"auto (new algorithm)");
 
     makeControl(state, L"STATIC", L"Compress", 0, 320, y + 4, 70, 20, -1);
     state.compressCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 392, y, 180, 180,
@@ -1902,12 +2242,12 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.6.5 Playtest Tool",
+                                L"KeyWeaver v0.7.0 Playtest Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,
                                 810,
-                                680,
+                                720,
                                 nullptr,
                                 nullptr,
                                 wc.hInstance,

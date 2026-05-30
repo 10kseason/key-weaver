@@ -45,9 +45,12 @@ bool wholeBoardHighKeyDefault(int sourceKeyCount, int targetKeyCount) {
     return targetKeyCount >= 8 && targetKeyCount > sourceKeyCount;
 }
 
-bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
-    return sourceKeyCount == 7 && targetKeyCount == 10 &&
-           !wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount);
+bool native10KActive(int sourceKeyCount, int targetKeyCount, Native10KPreset preset) {
+    return sourceKeyCount == 7 && targetKeyCount == 10 && preset != Native10KPreset::Off;
+}
+
+bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount, Native10KPreset preset) {
+    return native10KActive(sourceKeyCount, targetKeyCount, preset);
 }
 
 std::pair<int, int> dualFiveZoneForPhrase(const std::vector<PhraseNote>& notes) {
@@ -62,8 +65,11 @@ std::pair<int, int> dualFiveZoneForPhrase(const std::vector<PhraseNote>& notes) 
     return {5, 9};
 }
 
-PhraseRole phraseRoleFor(const std::vector<PhraseNote>& notes, int sourceKeyCount, int targetKeyCount) {
-    if (!useDualFiveSplit(sourceKeyCount, targetKeyCount) || notes.empty()) {
+PhraseRole phraseRoleFor(const std::vector<PhraseNote>& notes,
+                         int sourceKeyCount,
+                         int targetKeyCount,
+                         Native10KPreset native10KPreset) {
+    if (!useDualFiveSplit(sourceKeyCount, targetKeyCount, native10KPreset) || notes.empty()) {
         return PhraseRole::Neutral;
     }
 
@@ -71,18 +77,21 @@ PhraseRole phraseRoleFor(const std::vector<PhraseNote>& notes, int sourceKeyCoun
     return zone.first < 5 ? PhraseRole::LeftHandVoice : PhraseRole::RightHandVoice;
 }
 
-std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes, int sourceKeyCount, int targetKeyCount) {
+std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes,
+                                  int sourceKeyCount,
+                                  int targetKeyCount,
+                                  Native10KPreset native10KPreset) {
     if (targetKeyCount <= 1) {
         return {0, 0};
     }
     if (notes.empty()) {
         return {0, targetKeyCount - 1};
     }
+    if (useDualFiveSplit(sourceKeyCount, targetKeyCount, native10KPreset)) {
+        return dualFiveZoneForPhrase(notes);
+    }
     if (wholeBoardHighKeyDefault(sourceKeyCount, targetKeyCount)) {
         return {0, targetKeyCount - 1};
-    }
-    if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
-        return dualFiveZoneForPhrase(notes);
     }
 
     const double center = averageLane(notes);
@@ -172,7 +181,8 @@ void addStairHints(GestureRail& rail,
                    const PatternToken& token,
                    int motifId,
                    int sourceKeyCount,
-                   int targetKeyCount) {
+                   int targetKeyCount,
+                   Native10KPreset native10KPreset) {
     if (notes.empty()) {
         return;
     }
@@ -180,14 +190,14 @@ void addStairHints(GestureRail& rail,
     const auto [sourceMinIt, sourceMaxIt] = std::minmax_element(notes.begin(), notes.end(), [](const auto& a, const auto& b) {
         return a.sourceLane < b.sourceLane;
     });
-    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
-    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount, native10KPreset);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount, native10KPreset);
     for (const auto& note : notes) {
         GestureHint hint;
         hint.motifId = motifId;
         hint.kind = token.kind;
         hint.role = role;
-        hint.preferredLane = useDualFiveSplit(sourceKeyCount, targetKeyCount)
+        hint.preferredLane = useDualFiveSplit(sourceKeyCount, targetKeyCount, native10KPreset)
                                  ? laneInDualFiveZone(note.sourceLane, zoneStart, zoneEnd, targetKeyCount)
                                  : laneInZoneBySourcePosition(note.sourceLane,
                                                               sourceMinIt->sourceLane,
@@ -206,13 +216,14 @@ void addTrillHints(GestureRail& rail,
                    const std::vector<PhraseNote>& notes,
                    int motifId,
                    int sourceKeyCount,
-                   int targetKeyCount) {
+                   int targetKeyCount,
+                   Native10KPreset native10KPreset) {
     if (notes.size() < 2 || targetKeyCount <= 1) {
         return;
     }
 
-    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
-    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount, native10KPreset);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount, native10KPreset);
     std::vector<int> sourceLanes;
     for (const auto& note : notes) {
         if (std::find(sourceLanes.begin(), sourceLanes.end(), note.sourceLane) == sourceLanes.end()) {
@@ -260,18 +271,19 @@ void addJackHints(GestureRail& rail,
                   const std::vector<PhraseNote>& notes,
                   int motifId,
                   int sourceKeyCount,
-                  int targetKeyCount) {
+                  int targetKeyCount,
+                  Native10KPreset native10KPreset) {
     if (notes.empty()) {
         return;
     }
 
     const int sourceLane = notes.front().sourceLane;
-    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
-    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount, native10KPreset);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount, native10KPreset);
     const int motifHitCount = static_cast<int>(notes.size());
     const int motifDurationMs = motifHitCount >= 2 ? notes.back().time - notes.front().time : 0;
     const bool longJack = motifHitCount >= 5;
-    const int preferred = useDualFiveSplit(sourceKeyCount, targetKeyCount)
+    const int preferred = useDualFiveSplit(sourceKeyCount, targetKeyCount, native10KPreset)
                               ? laneInDualFiveZone(sourceLane, zoneStart, zoneEnd, targetKeyCount)
                               : mapLaneDirect(sourceLane, sourceKeyCount, targetKeyCount);
     int jackZoneStart = clampInt(preferred, zoneStart, zoneEnd);
@@ -336,7 +348,8 @@ void addSourceJackGroupHints(GestureRail& rail,
                              int sourceKeyCount,
                              int targetKeyCount,
                              int jackWindowMs,
-                             int& motifId) {
+                             int& motifId,
+                             Native10KPreset native10KPreset) {
     const auto groups = detectJackGroups(chart.notes, RepeatLaneMode::SourceLane, jackWindowMs);
     for (const auto& group : groups) {
         bool anyAlreadyHinted = false;
@@ -354,7 +367,7 @@ void addSourceJackGroupHints(GestureRail& rail,
         if (notes.size() < 3) {
             continue;
         }
-        addJackHints(rail, notes, motifId++, sourceKeyCount, targetKeyCount);
+        addJackHints(rail, notes, motifId++, sourceKeyCount, targetKeyCount, native10KPreset);
     }
 }
 
@@ -410,11 +423,13 @@ std::vector<Note> convertedNotesForIds(const Chart& converted, const std::vector
 bool targetZoneMatchesSource(const std::vector<PhraseNote>& sourceNotes,
                              const std::vector<Note>& targetNotes,
                              int sourceKeyCount,
-                             int targetKeyCount) {
+                             int targetKeyCount,
+                             Native10KPreset native10KPreset) {
     if (sourceNotes.empty() || targetNotes.empty() || targetKeyCount <= 1) {
         return true;
     }
-    const auto [zoneStart, zoneEnd] = targetZoneFor(sourceNotes, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] =
+        targetZoneFor(sourceNotes, sourceKeyCount, targetKeyCount, native10KPreset);
     if (zoneStart == 0 && zoneEnd == targetKeyCount - 1) {
         return true;
     }
@@ -507,7 +522,8 @@ GestureRail buildGestureRail(const Chart& chart,
                              int targetKeyCount,
                              int sameTimeEpsilonMs,
                              int jackWindowMs,
-                             bool enabled) {
+                             bool enabled,
+                             Native10KPreset native10KPreset) {
     GestureRail rail;
     rail.enabled = enabled;
     if (!enabled || chart.notes.empty() || sourceKeyCount <= 0 || targetKeyCount <= 0) {
@@ -526,16 +542,16 @@ GestureRail buildGestureRail(const Chart& chart,
             continue;
         }
         if (token.kind == PatternKind::StairUp || token.kind == PatternKind::StairDown) {
-            addStairHints(rail, notes, token, motifId, sourceKeyCount, targetKeyCount);
+            addStairHints(rail, notes, token, motifId, sourceKeyCount, targetKeyCount, native10KPreset);
         } else if (token.kind == PatternKind::Trill) {
-            addTrillHints(rail, notes, motifId, sourceKeyCount, targetKeyCount);
+            addTrillHints(rail, notes, motifId, sourceKeyCount, targetKeyCount, native10KPreset);
         } else if (token.kind == PatternKind::Jack) {
-            addJackHints(rail, notes, motifId, sourceKeyCount, targetKeyCount);
+            addJackHints(rail, notes, motifId, sourceKeyCount, targetKeyCount, native10KPreset);
         }
         ++motifId;
     }
 
-    addSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId);
+    addSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId, native10KPreset);
 
     return rail;
 }
@@ -554,7 +570,8 @@ GestureReport evaluateGesturePreservation(const Chart& original,
                                           int targetKeyCount,
                                           int sameTimeEpsilonMs,
                                           bool gestureRailEnabled,
-                                          int jackWindowMs) {
+                                          int jackWindowMs,
+                                          Native10KPreset native10KPreset) {
     GestureReport report;
     report.gestureRailEnabled = gestureRailEnabled;
 
@@ -574,7 +591,7 @@ GestureReport evaluateGesturePreservation(const Chart& original,
             continue;
         }
 
-        if (!targetZoneMatchesSource(sourceNotes, targetNotes, sourceKeyCount, targetKeyCount)) {
+        if (!targetZoneMatchesSource(sourceNotes, targetNotes, sourceKeyCount, targetKeyCount, native10KPreset)) {
             ++report.handZoneBreaks;
         }
         if (laneScattered(token.kind, targetNotes)) {
@@ -624,7 +641,7 @@ GestureReport evaluateGesturePreservation(const Chart& original,
             continue;
         }
 
-        if (!targetZoneMatchesSource(sourceNotes, targetNotes, sourceKeyCount, targetKeyCount)) {
+        if (!targetZoneMatchesSource(sourceNotes, targetNotes, sourceKeyCount, targetKeyCount, native10KPreset)) {
             ++report.handZoneBreaks;
         }
         if (laneScattered(PatternKind::Jack, targetNotes)) {

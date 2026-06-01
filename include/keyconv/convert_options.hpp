@@ -18,10 +18,14 @@ struct ConvertOptions {
     StreamEchoProfile streamEchoProfile = StreamEchoProfile::Conservative;
     StreamTransformPolicy streamTransformPolicy = StreamTransformPolicy::Off;
     JackPreservePolicy jackPreservePolicy = JackPreservePolicy::PreservePlayable;
+    TenKeyPlannerPolicy tenKeyPlannerPolicy = TenKeyPlannerPolicy::Auto;
     bool gestureRailEnabled = true;
     bool preserveLaneDrift = false;
     bool echoDiagnostics = false;
     bool dpMode = false;
+    bool tenKFullFieldRemix = false;
+    double tenKFullFieldRemixDensityCeiling = 1.6;
+    int tenKFullFieldRemixPhaseStep = 2;
     int beamWidth = 16;
     int sameTimeEpsilonMs = 2;
     int minObjectGapMs = 16;

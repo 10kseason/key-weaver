@@ -184,6 +184,31 @@ double handBalanceRatio(int left, int right) {
     return 1.0 - static_cast<double>(std::abs(left - right)) / static_cast<double>(total);
 }
 
+double centerBridgeRate(const std::vector<int>& distribution) {
+    const int total = std::accumulate(distribution.begin(), distribution.end(), 0);
+    if (total <= 0 || distribution.size() < 10) {
+        return 0.0;
+    }
+    int center = 0;
+    for (int lane = 3; lane <= 6; ++lane) {
+        center += distribution[static_cast<std::size_t>(lane)];
+    }
+    return static_cast<double>(center) / static_cast<double>(total);
+}
+
+double centerSplitBalance(const std::vector<int>& distribution) {
+    if (distribution.size() < 10) {
+        return 0.0;
+    }
+    const int leftCenter = distribution[4];
+    const int rightCenter = distribution[5];
+    const int total = leftCenter + rightCenter;
+    if (total <= 0) {
+        return 0.0;
+    }
+    return 1.0 - static_cast<double>(std::abs(leftCenter - rightCenter)) / static_cast<double>(total);
+}
+
 double lnAnchorPressure(const std::vector<Note>& notes) {
     std::vector<Note> holds;
     std::vector<Note> taps;
@@ -208,6 +233,41 @@ double lnAnchorPressure(const std::vector<Note>& notes) {
         }
     }
     return static_cast<double>(pressuredTaps) / static_cast<double>(taps.size());
+}
+
+double splitChordRate(const Chart& converted, int targetK) {
+    if (converted.notes.empty() || targetK < 10) {
+        return 0.0;
+    }
+
+    std::map<int, std::vector<int>> lanesByTime;
+    for (const auto& note : converted.notes) {
+        lanesByTime[note.time].push_back(note.lane);
+    }
+
+    int chordSlices = 0;
+    int splitChords = 0;
+    const int boundary = targetK / 2;
+    for (const auto& [time, lanes] : lanesByTime) {
+        (void)time;
+        if (lanes.size() < 2) {
+            continue;
+        }
+        ++chordSlices;
+        bool left = false;
+        bool right = false;
+        for (const int lane : lanes) {
+            if (lane < boundary) {
+                left = true;
+            } else {
+                right = true;
+            }
+        }
+        if (left && right) {
+            ++splitChords;
+        }
+    }
+    return chordSlices <= 0 ? 0.0 : static_cast<double>(splitChords) / static_cast<double>(chordSlices);
 }
 
 void addTag(std::vector<std::string>& tags, const std::string& tag) {
@@ -532,6 +592,11 @@ TargetKProfile targetKProfileFor(int sourceKeyCount, int targetKeyCount) {
     profile.desiredHandBalance = targetKeyCount >= 9 ? 0.88 : 0.95;
     profile.desiredAdjacentExpansion =
         std::max(0.08, std::min(0.30, growthPotential * 0.45));
+    if (targetKeyCount >= 10) {
+        profile.desiredCenterBridgeRate = 0.42;
+        profile.desiredCenterSplitBalance = 0.82;
+        profile.desiredSplitChordRate = 0.45;
+    }
     return profile;
 }
 
@@ -563,6 +628,9 @@ QualityReport computeQualityReport(const Chart& original,
     report.leftHandNotes = leftHandNotes;
     report.rightHandNotes = rightHandNotes;
     report.handBalanceRatio = handBalanceRatio(leftHandNotes, rightHandNotes);
+    report.centerBridgeRate = centerBridgeRate(report.laneDistribution);
+    report.centerSplitBalance = centerSplitBalance(report.laneDistribution);
+    report.splitChordRate = splitChordRate(converted, targetKeyCount);
     report.orderPreserveScore = orderScore(original, converted);
     report.spanPreserveScore = spanScore(original, converted, sourceKeyCount, targetKeyCount);
     report.patternPreserveScore = (report.orderPreserveScore + report.spanPreserveScore) / 2.0;
@@ -623,6 +691,22 @@ void finalizeTargetKLikenessReport(QualityReport& report,
                                              profile.desiredAdjacentExpansion * 0.25,
                                              profile.desiredAdjacentExpansion,
                                              std::min(0.60, profile.desiredAdjacentExpansion * 2.20));
+    report.centerBridgeScore = targetKeyCount >= 10
+                                   ? scoreBand(report.centerBridgeRate,
+                                               profile.desiredCenterBridgeRate * 0.45,
+                                               profile.desiredCenterBridgeRate,
+                                               std::min(0.78,
+                                                        profile.desiredCenterBridgeRate * 1.65))
+                                   : 1.0;
+    report.centerSplitBalanceScore =
+        targetKeyCount >= 10 ? scoreAtLeast(report.centerSplitBalance, profile.desiredCenterSplitBalance)
+                             : 1.0;
+    report.splitChordScore = targetKeyCount >= 10
+                                 ? scoreBand(report.splitChordRate,
+                                             profile.desiredSplitChordRate * 0.35,
+                                             profile.desiredSplitChordRate,
+                                             std::min(0.92, profile.desiredSplitChordRate * 1.80))
+                                 : 1.0;
     report.anchorPreserveScore =
         anchorPreserveScore(original, converted, sourceKeyCount, targetKeyCount);
     report.patternVocabularyScore =
@@ -636,9 +720,10 @@ void finalizeTargetKLikenessReport(QualityReport& report,
     const double sourceIntegrity =
         clamp01(report.anchorPreserveScore * 0.55 + report.patternVocabularyScore * 0.45);
     const double targetKSpace =
-        clamp01(report.laneCoverageScore * 0.22 + report.laneEntropyScore * 0.22 +
-                report.edgeUsageScore * 0.18 + report.activeLaneWindowScore * 0.24 +
-                report.spatialSpanScore * 0.14);
+        clamp01(report.laneCoverageScore * 0.18 + report.laneEntropyScore * 0.18 +
+                report.edgeUsageScore * 0.14 + report.activeLaneWindowScore * 0.19 +
+                report.spatialSpanScore * 0.11 + report.centerBridgeScore * 0.10 +
+                report.centerSplitBalanceScore * 0.05 + report.splitChordScore * 0.05);
     const double raw =
         clamp01(sourceIntegrity * 0.32 + targetKSpace * 0.30 +
                 report.adjacentExpansionScore * 0.16 + handBalanceScore * 0.12 +

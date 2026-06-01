@@ -37,10 +37,13 @@ int main() {
     const auto streamEchoProfile = keyconv::parseStreamEchoProfile("balanced");
     const auto streamTransformPolicy = keyconv::parseStreamTransformPolicy("superrandom");
     const auto jackPreservePolicy = keyconv::parseJackPreservePolicy("preserve-playable");
+    const auto tenKeyPlannerPolicy = keyconv::parseTenKeyPlannerPolicy("staged-7-9-10");
+    const auto mirrorTenKeyPlannerPolicy = keyconv::parseTenKeyPlannerPolicy("staged-7-14-10");
     if (!style.has_value() || !optimizer.has_value() || !compressPolicy.has_value() ||
         !distancePolicy.has_value() || !expansionPolicy.has_value() ||
         !lowExpansionPolicy.has_value() || !moreExpansionPolicy.has_value() || !echoPolicy.has_value() ||
-        !streamEchoProfile.has_value() || !streamTransformPolicy.has_value() || !jackPreservePolicy.has_value()) {
+        !streamEchoProfile.has_value() || !streamTransformPolicy.has_value() || !jackPreservePolicy.has_value() ||
+        !tenKeyPlannerPolicy.has_value() || !mirrorTenKeyPlannerPolicy.has_value()) {
         return 2;
     }
 

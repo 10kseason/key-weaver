@@ -112,20 +112,34 @@ OptimizationResult greedyOptimizeSlices(const Chart& chart, const ConvertOptions
     OptimizationResult result;
     const auto slices = buildTimeSlices(chart, options.sourceKeyCount, options.sameTimeEpsilonMs);
     result.patterns = detectPatternTokens(slices, options.jackWindowMs);
-    const auto gestureRail = buildGestureRail(chart,
-                                              options.sourceKeyCount,
-                                              options.targetKeyCount,
-                                              options.sameTimeEpsilonMs,
-                                              options.jackWindowMs,
-                                              options.gestureRailEnabled);
+    const bool fullFieldRemix = options.targetKeyCount == 10 && options.tenKFullFieldRemix;
+    const auto gestureRail = fullFieldRemix
+                                  ? buildFullFieldRail(chart,
+                                                       options.sourceKeyCount,
+                                                       options.targetKeyCount,
+                                                       options.sameTimeEpsilonMs,
+                                                       options.jackWindowMs,
+                                                       options.gestureRailEnabled)
+                                  : buildGestureRail(chart,
+                                                     options.sourceKeyCount,
+                                                     options.targetKeyCount,
+                                                     options.sameTimeEpsilonMs,
+                                                     options.jackWindowMs,
+                                                     options.gestureRailEnabled,
+                                                     options.sourceKeyCount == 7 &&
+                                                         options.targetKeyCount == 10 &&
+                                                         options.tenKeyPlannerPolicy ==
+                                                             TenKeyPlannerPolicy::StagedMirrorCompress);
 
     AssignmentContext context;
     context.sourceKeyCount = options.sourceKeyCount;
     context.targetKeyCount = options.targetKeyCount;
     context.jackWindowMs = options.jackWindowMs;
     context.style = options.style;
+    context.tenKeyPlannerPolicy = options.tenKeyPlannerPolicy;
     context.weights = weightsForStyle(options.style);
     context.preserveLaneDrift = options.preserveLaneDrift;
+    context.tenKFullFieldRemix = fullFieldRemix;
     context.preventedJacksByAssignment = &result.preventedJacksByAssignment;
     context.gestureRail = &gestureRail;
     context.laneUse.assign(static_cast<std::size_t>(options.targetKeyCount), 0);

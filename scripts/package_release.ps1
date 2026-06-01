@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.6.0",
+    [string]$Version = "1.0.0",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -118,6 +118,7 @@ Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keycon
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
 Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
+The GUI Target selector supports 4K through 10K; 10K GUI conversions use Full-Field Mirror-Remix by default.
 GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
 Source override is passed to GUI conversions.
 Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
@@ -129,12 +130,14 @@ Preserve Tap Plus uses key-growth budgets and 10K hand-zone balancing.
 With --target-profile, Adaptive Growth Budget uses 1000 ms densityBuckets.low/mid/high/chordHeavy/jackRisk windows for Composer pressure.
 Use --expansion-policy auto-low/auto-normal/auto-more for high-key generated-note budgets of 10%/15%/20%.
 8K+ generated notes prefer 8th-beat source slices, avoid both-edge trill reinforcement, and favor mirror-lane symmetry; target-10 adds extra quarter/eighth-beat density pressure.
+GUI target-10 default: --ten-key-planner staged-7-14-10 --ten-k-fullfield-remix, with the mode-local 1.6x total-density ceiling.
 Use --preserve-convert for faithful mapping, strict source-jack preservation, no generated notes, and adjacent safe-lane drift.
 Use --stream-transform superrandom for deterministic per-note random lane assignment, or full-jitter for 1-15 ms per-note zure-style timing spread.
 Use --seed to vary deterministic stream-transform output.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
 Normal-mode algorithm contract: docs/algorithm-lock-v0.6.0.md
+10K Full-Field Mirror-Remix design lock: docs/design-10k-fullfield-remix.md
 
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")

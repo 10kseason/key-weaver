@@ -195,6 +195,20 @@ std::string toString(JackPreservePolicy policy) {
     return "preserve-playable";
 }
 
+std::string toString(TenKeyPlannerPolicy policy) {
+    switch (policy) {
+        case TenKeyPlannerPolicy::Auto:
+            return "auto";
+        case TenKeyPlannerPolicy::Legacy:
+            return "legacy";
+        case TenKeyPlannerPolicy::StagedNative:
+            return "staged-7-9-10";
+        case TenKeyPlannerPolicy::StagedMirrorCompress:
+            return "staged-7-14-10";
+    }
+    return "auto";
+}
+
 std::optional<ConversionStyle> parseConversionStyle(const std::string& value) {
     if (value == "direct") {
         return ConversionStyle::Direct;
@@ -311,6 +325,24 @@ std::optional<ExpansionPolicy> parseExpansionPolicy(const std::string& value) {
     }
     if (value == "seeded-random") {
         return ExpansionPolicy::SeededRandomRemix;
+    }
+    return std::nullopt;
+}
+
+std::optional<TenKeyPlannerPolicy> parseTenKeyPlannerPolicy(const std::string& value) {
+    if (value == "auto") {
+        return TenKeyPlannerPolicy::Auto;
+    }
+    if (value == "legacy") {
+        return TenKeyPlannerPolicy::Legacy;
+    }
+    if (value == "staged" || value == "staged-native" || value == "staged-7-9-10" ||
+        value == "native") {
+        return TenKeyPlannerPolicy::StagedNative;
+    }
+    if (value == "staged-7-14-10" || value == "mirror-compress" ||
+        value == "staged-mirror-compress") {
+        return TenKeyPlannerPolicy::StagedMirrorCompress;
     }
     return std::nullopt;
 }
@@ -433,6 +465,9 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"leftHandNotes\": " << report.quality.leftHandNotes << ",\n";
     out << "    \"rightHandNotes\": " << report.quality.rightHandNotes << ",\n";
     out << "    \"handBalanceRatio\": " << report.quality.handBalanceRatio << ",\n";
+    out << "    \"centerBridgeRate\": " << report.quality.centerBridgeRate << ",\n";
+    out << "    \"centerSplitBalance\": " << report.quality.centerSplitBalance << ",\n";
+    out << "    \"splitChordRate\": " << report.quality.splitChordRate << ",\n";
     out << "    \"kLikenessScore\": " << report.quality.kLikenessScore << ",\n";
     out << "    \"targetProfileChartCount\": " << report.quality.targetProfileChartCount << ",\n";
     out << "    \"targetProfileWindowMs\": " << report.quality.targetProfileWindowMs << ",\n";
@@ -446,6 +481,9 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"activeLaneWindowScore\": " << report.quality.activeLaneWindowScore << ",\n";
     out << "    \"spatialSpanScore\": " << report.quality.spatialSpanScore << ",\n";
     out << "    \"adjacentExpansionScore\": " << report.quality.adjacentExpansionScore << ",\n";
+    out << "    \"centerBridgeScore\": " << report.quality.centerBridgeScore << ",\n";
+    out << "    \"centerSplitBalanceScore\": " << report.quality.centerSplitBalanceScore << ",\n";
+    out << "    \"splitChordScore\": " << report.quality.splitChordScore << ",\n";
     out << "    \"anchorPreserveScore\": " << report.quality.anchorPreserveScore << ",\n";
     out << "    \"patternVocabularyScore\": " << report.quality.patternVocabularyScore << ",\n";
     out << "    \"addedRatioFitScore\": " << report.quality.addedRatioFitScore << ",\n";
@@ -483,6 +521,7 @@ std::string reportToJson(const ConversionReport& report) {
     out << "    \"deterministic\": " << (report.quality.deterministic ? "true" : "false") << ",\n";
     out << "    \"algorithmVersion\": \"" << jsonEscape(report.quality.algorithmVersion) << "\",\n";
     out << "    \"expansionPolicy\": \"" << jsonEscape(report.quality.expansionPolicy) << "\",\n";
+    out << "    \"tenKeyPlanner\": \"" << jsonEscape(report.quality.tenKeyPlanner) << "\",\n";
     out << "    \"streamEchoProfile\": \"" << jsonEscape(report.quality.streamEchoProfile) << "\",\n";
     out << "    \"streamTransformPolicy\": \"" << jsonEscape(report.quality.streamTransformPolicy) << "\",\n";
     out << "    \"expansionComposerProfile\": \"" << jsonEscape(report.quality.expansionComposerProfile) << "\",\n";
@@ -643,6 +682,9 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Left hand notes: " << report.quality.leftHandNotes << "\n";
     out << "- Right hand notes: " << report.quality.rightHandNotes << "\n";
     out << "- Hand balance ratio: " << report.quality.handBalanceRatio << "\n";
+    out << "- Center bridge rate: " << report.quality.centerBridgeRate << "\n";
+    out << "- Center split balance: " << report.quality.centerSplitBalance << "\n";
+    out << "- Split chord rate: " << report.quality.splitChordRate << "\n";
     out << "- K-likeness score: " << report.quality.kLikenessScore << "\n";
     out << "- Target profile charts: " << report.quality.targetProfileChartCount << "\n";
     out << "- Target profile window: " << report.quality.targetProfileWindowMs << " ms\n";
@@ -656,6 +698,9 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Active lane window score: " << report.quality.activeLaneWindowScore << "\n";
     out << "- Spatial span score: " << report.quality.spatialSpanScore << "\n";
     out << "- Adjacent expansion score: " << report.quality.adjacentExpansionScore << "\n";
+    out << "- Center bridge score: " << report.quality.centerBridgeScore << "\n";
+    out << "- Center split balance score: " << report.quality.centerSplitBalanceScore << "\n";
+    out << "- Split chord score: " << report.quality.splitChordScore << "\n";
     out << "- Anchor preserve score: " << report.quality.anchorPreserveScore << "\n";
     out << "- Pattern vocabulary score: " << report.quality.patternVocabularyScore << "\n";
     out << "- Added ratio fit score: " << report.quality.addedRatioFitScore << "\n";
@@ -687,6 +732,7 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Deterministic: " << (report.quality.deterministic ? "yes" : "no") << "\n";
     out << "- Algorithm version: " << report.quality.algorithmVersion << "\n";
     out << "- Expansion policy: " << report.quality.expansionPolicy << "\n";
+    out << "- 10K planner: " << report.quality.tenKeyPlanner << "\n";
     out << "- Stream echo profile: " << report.quality.streamEchoProfile << "\n";
     out << "- Stream transform policy: " << report.quality.streamTransformPolicy << "\n";
     out << "- Expansion composer profile: " << report.quality.expansionComposerProfile << "\n";

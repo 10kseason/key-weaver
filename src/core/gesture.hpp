@@ -56,7 +56,15 @@ GestureRail buildGestureRail(const Chart& chart,
                              int targetKeyCount,
                              int sameTimeEpsilonMs,
                              int jackWindowMs,
-                             bool enabled);
+                             bool enabled,
+                             bool fullTenKeyGestureZone = false);
+
+GestureRail buildFullFieldRail(const Chart& chart,
+                               int sourceKeyCount,
+                               int targetKeyCount,
+                               int sameTimeEpsilonMs,
+                               int jackWindowMs,
+                               bool enabled);
 
 const GestureHint* findGestureHint(const GestureRail* rail, const std::string& noteId);
 

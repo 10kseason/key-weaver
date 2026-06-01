@@ -37,7 +37,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v0.6.0";
+constexpr const char* kToolVersion = "v1.0.0";
 
 class ConvertedInputError : public std::runtime_error {
 public:
@@ -207,12 +207,16 @@ struct CliOptions {
     keyconv::EchoPolicy echoPolicy = keyconv::EchoPolicy::Off;
     keyconv::StreamEchoProfile streamEchoProfile = keyconv::StreamEchoProfile::Conservative;
     keyconv::StreamTransformPolicy streamTransformPolicy = keyconv::StreamTransformPolicy::Off;
+    keyconv::TenKeyPlannerPolicy tenKeyPlannerPolicy = keyconv::TenKeyPlannerPolicy::Auto;
     unsigned int seed = 0;
     keyconv::JackPreservePolicy jackPreservePolicy = keyconv::JackPreservePolicy::PreservePlayable;
     bool gestureRailEnabled = true;
     bool preserveLaneDrift = false;
     bool echoDiagnostics = false;
     bool dpMode = false;
+    bool tenKFullFieldRemix = false;
+    double tenKFullFieldRemixDensityCeiling = 1.6;
+    int tenKFullFieldRemixPhaseStep = 2;
     int beamWidth = 16;
     int sameTimeEpsilonMs = 2;
     int minObjectGapMs = 16;
@@ -273,6 +277,11 @@ void printHelp(std::ostream& out) {
     out << "  --min-gap <ms>          Minimum positive object distance. Default: 16.\n";
     out << "  --same-lane-min-gap <ms> Minimum positive same-lane distance. Default: 20.\n";
     out << "  --jack-preserve-policy <p> preserve-strict | preserve-playable | avoid-new-jacks | smooth-all. Default: preserve-playable.\n";
+    out << "  --ten-key-planner <p> auto | legacy | staged-7-9-10 | staged-7-14-10. Default: auto.\n";
+    out << "                          Auto uses the staged 7K -> 9K -> 10K planner for 7K-to-10K playable conversion.\n";
+    out << "  --ten-k-fullfield-remix Enable gated 10K Full-Field Mirror-Remix mode.\n";
+    out << "  --ten-k-remix-density-ceiling <n> Total-note density ceiling for that mode. Default: 1.6.\n";
+    out << "  --ten-k-remix-phase-step <n> Echo phase rotation step for 5-lane zones, 2 or 3. Default: 2.\n";
     out << "  --jack-window-ms <ms>   Window for repeat/jack detection. Default: 500.\n";
     out << "  --strict-jack-window-ms <ms> Strict jack reference window. Default: 500.\n";
     out << "  --max-jack-split-lanes <n> Max target lanes counted as split jack. Default: 2.\n";
@@ -547,6 +556,19 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
                 throw std::runtime_error("Invalid jack preserve policy: " + value);
             }
             options.jackPreservePolicy = *policy;
+        } else if (arg == "--ten-key-planner") {
+            const auto value = requireValue(i, args, arg);
+            const auto policy = keyconv::parseTenKeyPlannerPolicy(value);
+            if (!policy.has_value()) {
+                throw std::runtime_error("Invalid 10K planner: " + value);
+            }
+            options.tenKeyPlannerPolicy = *policy;
+        } else if (arg == "--ten-k-fullfield-remix") {
+            options.tenKFullFieldRemix = true;
+        } else if (arg == "--ten-k-remix-density-ceiling") {
+            options.tenKFullFieldRemixDensityCeiling = parseDouble(requireValue(i, args, arg), arg);
+        } else if (arg == "--ten-k-remix-phase-step") {
+            options.tenKFullFieldRemixPhaseStep = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--jack-window-ms") {
             options.jackWindowMs = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--strict-jack-window-ms") {
@@ -984,6 +1006,9 @@ keyconv::TargetKBucketProfile loadTargetKBucketProfile(const std::string& bucket
     bucket.holdRate = loadTargetKFeatureStat(*featuresBody, "holdRate");
     bucket.jackRisk = loadTargetKFeatureStat(*featuresBody, "jackRisk");
     bucket.laneEntropy = loadTargetKFeatureStat(*featuresBody, "laneEntropy");
+    bucket.centerBridgeRate = loadTargetKFeatureStat(*featuresBody, "centerBridgeRate");
+    bucket.centerSplitBalance = loadTargetKFeatureStat(*featuresBody, "centerSplitBalance");
+    bucket.splitChordRate = loadTargetKFeatureStat(*featuresBody, "splitChordRate");
     return bucket;
 }
 
@@ -1057,6 +1082,15 @@ keyconv::TargetKProfile loadTargetKProfile(const std::filesystem::path& path) {
     if (const auto value = jsonNumberField(text, "desiredAdjacentExpansion"); value.has_value()) {
         profile.desiredAdjacentExpansion = *value;
     }
+    if (const auto value = jsonNumberField(text, "desiredCenterBridgeRate"); value.has_value()) {
+        profile.desiredCenterBridgeRate = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredCenterSplitBalance"); value.has_value()) {
+        profile.desiredCenterSplitBalance = *value;
+    }
+    if (const auto value = jsonNumberField(text, "desiredSplitChordRate"); value.has_value()) {
+        profile.desiredSplitChordRate = *value;
+    }
     profile.densityBuckets = loadTargetKDensityBuckets(text);
 
     if (profile.targetKeys <= 0 || profile.sampleCount <= 0) {
@@ -1111,6 +1145,9 @@ void validateOptions(const CliOptions& options) {
     if (options.source.has_value() && (*options.source < 1 || *options.source > 32)) {
         throw std::runtime_error("--source must be between 1 and 32");
     }
+    if (options.tenKFullFieldRemix && *options.target != 10) {
+        throw std::runtime_error("--ten-k-fullfield-remix requires --target 10");
+    }
     if (options.comparePolicies.has_value() && options.comparePolicies->empty()) {
         throw std::runtime_error("--compare-policies must not be empty");
     }
@@ -1162,6 +1199,12 @@ void validateOptions(const CliOptions& options) {
     }
     if (options.maxRollMs < 0) {
         throw std::runtime_error("--max-roll-ms must be non-negative");
+    }
+    if (options.tenKFullFieldRemixDensityCeiling < 1.0) {
+        throw std::runtime_error("--ten-k-remix-density-ceiling must be at least 1.0");
+    }
+    if (options.tenKFullFieldRemixPhaseStep != 2 && options.tenKFullFieldRemixPhaseStep != 3) {
+        throw std::runtime_error("--ten-k-remix-phase-step must be 2 or 3");
     }
     if (options.maxAddedNoteRatio < 0.0) {
         throw std::runtime_error("--max-added-ratio must be non-negative");
@@ -1469,7 +1512,8 @@ std::string comparisonToCsv(const std::vector<PolicyComparisonRow>& rows) {
     out << "policy,expansionPolicy,composerProfile,totalNotes,addedNotes,addedByTapPlus,addedNoteRatio,kLikenessScore,"
            "targetProfileChartCount,"
            "adaptiveGrowthBudgetEnabled,adaptiveBudgetAverageRatio,rejectedByAdaptiveBudget,"
-           "laneEntropy,"
+           "laneEntropy,centerBridgeRate,centerSplitBalance,splitChordRate,"
+           "centerBridgeScore,centerSplitBalanceScore,splitChordScore,"
            "patternPreserveScore,playabilityScore,collisionCount,lnConflictCount,nearTimeConflicts,"
            "unsnappedAddedNotes,sourceJackGroups,preservedJackGroups,splitJackGroups,createdJacks,preventedJacks,"
            "jackPreserveScore,densityDelta,chordRateBefore,chordRateAfter,laneCoverageBefore,"
@@ -1490,6 +1534,12 @@ std::string comparisonToCsv(const std::vector<PolicyComparisonRow>& rows) {
             << q.adaptiveBudgetAverageRatio << ","
             << q.rejectedByAdaptiveBudget << ","
             << q.laneEntropy << ","
+            << q.centerBridgeRate << ","
+            << q.centerSplitBalance << ","
+            << q.splitChordRate << ","
+            << q.centerBridgeScore << ","
+            << q.centerSplitBalanceScore << ","
+            << q.splitChordScore << ","
             << q.patternPreserveScore << ","
             << q.playabilityScore << ","
             << q.collisionCount << ","
@@ -1565,6 +1615,12 @@ std::string comparisonToJson(const std::vector<PolicyComparisonRow>& rows,
         out << "      \"activeLaneWindowScore\": " << q.activeLaneWindowScore << ",\n";
         out << "      \"spatialSpanScore\": " << q.spatialSpanScore << ",\n";
         out << "      \"adjacentExpansionScore\": " << q.adjacentExpansionScore << ",\n";
+        out << "      \"centerBridgeRate\": " << q.centerBridgeRate << ",\n";
+        out << "      \"centerSplitBalance\": " << q.centerSplitBalance << ",\n";
+        out << "      \"splitChordRate\": " << q.splitChordRate << ",\n";
+        out << "      \"centerBridgeScore\": " << q.centerBridgeScore << ",\n";
+        out << "      \"centerSplitBalanceScore\": " << q.centerSplitBalanceScore << ",\n";
+        out << "      \"splitChordScore\": " << q.splitChordScore << ",\n";
         out << "      \"anchorPreserveScore\": " << q.anchorPreserveScore << ",\n";
         out << "      \"patternVocabularyScore\": " << q.patternVocabularyScore << ",\n";
         out << "      \"addedRatioFitScore\": " << q.addedRatioFitScore << ",\n";
@@ -1682,12 +1738,16 @@ int runSingleConversion(const CliOptions& cli,
     convertOptions.echoPolicy = cli.echoPolicy;
     convertOptions.streamEchoProfile = cli.streamEchoProfile;
     convertOptions.streamTransformPolicy = cli.streamTransformPolicy;
+    convertOptions.tenKeyPlannerPolicy = cli.tenKeyPlannerPolicy;
     convertOptions.seed = cli.seed;
     convertOptions.jackPreservePolicy = cli.jackPreservePolicy;
     convertOptions.gestureRailEnabled = cli.gestureRailEnabled;
     convertOptions.preserveLaneDrift = cli.preserveLaneDrift;
     convertOptions.echoDiagnostics = cli.echoDiagnostics;
     convertOptions.dpMode = cli.dpMode;
+    convertOptions.tenKFullFieldRemix = cli.tenKFullFieldRemix;
+    convertOptions.tenKFullFieldRemixDensityCeiling = cli.tenKFullFieldRemixDensityCeiling;
+    convertOptions.tenKFullFieldRemixPhaseStep = cli.tenKFullFieldRemixPhaseStep;
     convertOptions.beamWidth = cli.beamWidth;
     convertOptions.sameTimeEpsilonMs = cli.sameTimeEpsilonMs;
     convertOptions.minObjectGapMs = cli.minObjectGapMs;
@@ -1797,6 +1857,12 @@ int runSingleConversion(const CliOptions& cli,
     out << "Min object gap: " << convertOptions.minObjectGapMs << " ms\n";
     out << "Same-lane min gap: " << convertOptions.sameLaneMinGapMs << " ms\n";
     out << "Jack preserve policy: " << keyconv::toString(convertOptions.jackPreservePolicy) << "\n";
+    out << "10K planner: " << keyconv::toString(convertOptions.tenKeyPlannerPolicy) << "\n";
+    out << "10K full-field remix: " << (convertOptions.tenKFullFieldRemix ? "on" : "off") << "\n";
+    if (convertOptions.tenKFullFieldRemix) {
+        out << "10K remix density ceiling: " << convertOptions.tenKFullFieldRemixDensityCeiling << "\n";
+        out << "10K remix phase step: " << convertOptions.tenKFullFieldRemixPhaseStep << "\n";
+    }
     out << "Gesture rail: " << (convertOptions.gestureRailEnabled ? "on" : "off") << "\n";
     out << "Jack window: " << convertOptions.jackWindowMs << " ms\n";
     out << "Strict jack window: " << convertOptions.strictJackWindowMs << " ms\n";

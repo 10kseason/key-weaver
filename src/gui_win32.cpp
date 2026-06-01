@@ -66,6 +66,7 @@ struct ToolOptions {
     std::wstring expansionPolicy = L"auto (normal)";
     std::wstring compressPolicy = L"auto";
     std::wstring streamTransform = L"off";
+    bool tenKFullFieldRemix = true;
     bool preserveConvert = false;
     bool debugReports = false;
 };
@@ -415,9 +416,16 @@ std::wstring chartOutputExtension(const ToolOptions& options) {
     return L".osu";
 }
 
+bool tenKFullFieldRemixActive(const ToolOptions& options) {
+    return options.tenKFullFieldRemix && !options.preserveConvert && trim(options.targetKeys) == L"10";
+}
+
 std::wstring expansionDifficultyTag(const ToolOptions& options) {
     if (options.preserveConvert) {
         return {};
+    }
+    if (tenKFullFieldRemixActive(options)) {
+        return L"fullfield";
     }
     if (options.expansionPolicy == L"auto (more)") {
         return L"more";
@@ -535,12 +543,18 @@ std::wstring buildSingleCommand(ToolOptions options,
     }
     appendArg(command, L"--target");
     appendArg(command, options.targetKeys);
+    const bool fullFieldRemix = tenKFullFieldRemixActive(options);
+    if (fullFieldRemix) {
+        appendArg(command, L"--ten-key-planner");
+        appendArg(command, L"staged-7-14-10");
+        appendArg(command, L"--ten-k-fullfield-remix");
+    }
     appendArg(command, L"--compress-policy");
     appendArg(command, options.compressPolicy);
     const auto expansionPolicy = expansionPolicyCliValue(options.expansionPolicy);
     if (options.preserveConvert) {
         appendArg(command, L"--preserve-convert");
-    } else if (expansionPolicy != L"auto" && expansionPolicy != L"auto-normal") {
+    } else if (!fullFieldRemix && expansionPolicy != L"auto" && expansionPolicy != L"auto-normal") {
         appendArg(command, L"--expansion-policy");
         appendArg(command, expansionPolicy);
     }
@@ -558,7 +572,9 @@ std::wstring buildSingleCommand(ToolOptions options,
 }
 
 std::wstring buildMatrixCommand(const ToolOptions& options, OutputPaths& paths) {
-    const auto base = makeOutputBase(options, L"compare");
+    ToolOptions matrixOutputOptions = options;
+    matrixOutputOptions.tenKFullFieldRemix = false;
+    const auto base = makeOutputBase(matrixOutputOptions, L"compare");
     paths.reportJson = base;
     paths.reportJson += L".json";
     paths.reportCsv = base;
@@ -810,6 +826,19 @@ std::optional<int> parseSourceOverrideKeyCount(const std::wstring& value) {
     return static_cast<int>(parsed);
 }
 
+std::optional<int> parseGuiTargetKeyCount(const std::wstring& value) {
+    const auto text = trim(value);
+    if (text.empty()) {
+        return std::nullopt;
+    }
+    wchar_t* end = nullptr;
+    const long parsed = std::wcstol(text.c_str(), &end, 10);
+    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 4 || parsed > 10) {
+        return -1;
+    }
+    return static_cast<int>(parsed);
+}
+
 struct FolderScanProgress {
     std::size_t visitedFiles = 0;
     std::size_t totalFiles = 0;
@@ -1035,7 +1064,7 @@ ToolOptions readToolOptions(const AppState& state) {
     options.outputDir = outputDirText.empty() ? options.inputFile.parent_path()
                                               : absolutePath(std::filesystem::path(outputDirText));
     options.sourceOverride = trim(getWindowText(state.sourceEdit));
-    options.targetKeys = trim(getWindowText(state.targetEdit));
+    options.targetKeys = trim(comboText(state.targetEdit));
     options.expansionPolicy = comboText(state.expansionCombo);
     options.compressPolicy = comboText(state.compressCombo);
     options.streamTransform = comboText(state.streamProfileCombo);
@@ -1057,6 +1086,11 @@ bool validateToolOptions(const ToolOptions& options, HWND owner) {
     }
     if (options.targetKeys.empty()) {
         MessageBoxW(owner, L"Target key count is required.", L"KeyWeaver GUI", MB_ICONERROR);
+        return false;
+    }
+    const auto targetKeyCount = parseGuiTargetKeyCount(options.targetKeys);
+    if (targetKeyCount.has_value() && *targetKeyCount < 0) {
+        MessageBoxW(owner, L"GUI Target must be a key count from 4 to 10.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     const auto sourceOverride = parseSourceOverrideKeyCount(options.sourceOverride);
@@ -1387,6 +1421,11 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
         MessageBoxW(state.hwnd, L"Target key count is required.", L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
+    const auto targetKeyCount = parseGuiTargetKeyCount(baseOptions.targetKeys);
+    if (targetKeyCount.has_value() && *targetKeyCount < 0) {
+        MessageBoxW(state.hwnd, L"GUI Target must be a key count from 4 to 10.", L"KeyWeaver GUI", MB_ICONERROR);
+        return;
+    }
     const auto sourceFilter = parseSourceOverrideKeyCount(baseOptions.sourceOverride);
     if (sourceFilter.has_value() && *sourceFilter < 0) {
         MessageBoxW(state.hwnd, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
@@ -1586,8 +1625,13 @@ void createUi(AppState& state) {
     state.sourceEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y + 24, 70, 24, kEditSource,
                                    WS_EX_CLIENTEDGE);
     makeControl(state, L"STATIC", L"Target", 0, 210, y + 28, 50, 20, -1);
-    state.targetEdit = makeControl(state, L"EDIT", L"10", ES_AUTOHSCROLL, 260, y + 24, 70, 24, kEditTarget,
-                                   WS_EX_CLIENTEDGE);
+    state.targetEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 260, y + 24, 70, 160,
+                                   kEditTarget);
+    for (const auto* item : {L"4", L"5", L"6", L"7", L"8", L"9", L"10"}) {
+        addComboItem(state.targetEdit, item);
+    }
+    setComboSelection(state.targetEdit, L"10");
+    makeControl(state, L"STATIC", L"4-10; 10K uses Full-Field Remix", 0, 340, y + 28, 280, 20, -1);
     y += 64;
 
     makeControl(state, L"STATIC", L"Expansion", 0, labelX, y + 4, 96, 20, -1);
@@ -1784,7 +1828,7 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v0.6.0 Playtest Tool",
+                                L"KeyWeaver v1.0.0 Stable Tool",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,

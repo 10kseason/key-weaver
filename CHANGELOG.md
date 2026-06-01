@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - Stable
 
+- Added a dedicated 7K-to-10K staged-native planner (`--ten-key-planner auto|legacy|staged-7-9-10`) that routes through a 9K scaffold before opening the 10K center split; reports now expose the effective `tenKeyPlanner`.
+- Added an explicit experimental 7K-to-10K mirror-compress planner (`--ten-key-planner staged-7-14-10`) that treats source lanes as mirrored 14K pairs, compresses them into 10K anchors, then lets the existing assignment safety and scoring rules choose the final lanes.
+- Tuned the `staged-7-14-10` mirror-compress planner to open gesture zones across the mirrored 10K field and backfill underused 5K panel-center lanes so lanes 3 and 8 do not stay visually hollow when adjacent source lanes can safely carry them.
+- Added gated 10K Full-Field Mirror-Remix mode (`--ten-k-fullfield-remix`) with a full-field hand rail, phase-rotated mirror echoes, and a mode-local 1.6x density ceiling that leaves the normal `--max-added-ratio 0.45` path unchanged.
+- Updated the Windows GUI for stable v1.0.0: Target is now a 4K-10K selector, and GUI 10K conversions default to `--ten-key-planner staged-7-14-10 --ten-k-fullfield-remix`.
+- Extended Target-K profiles and K-likeness reports with 10K center/split metrics: `centerBridgeRate`, `centerSplitBalance`, and `splitChordRate`, including density-bucket feature stats and bundled-profile values.
 - Added CLI batch worker parallelism; automatic batch mode now uses the detected CPU thread count by default while `--jobs` can override the worker count.
 - Added CLI/GUI batch progress text showing percent done and remaining chart count.
 - Re-enabled GUI Batch for tester packages and added a simple status line for Convert, Batch, and Matrix runs.

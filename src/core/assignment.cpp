@@ -4,6 +4,7 @@
 #include "core/mapping.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <set>
@@ -13,6 +14,8 @@ namespace keyconv {
 namespace {
 
 constexpr int kSourceLaneAnchorWindowMs = 4000;
+
+double sourceLaneAnchorScore(int targetLane, int anchorLane, int targetKeyCount);
 
 double normalizedLane(int lane, int keyCount) {
     if (keyCount <= 1) {
@@ -221,6 +224,124 @@ bool useDualFiveSplit(int sourceKeyCount, int targetKeyCount) {
     return sourceKeyCount == 7 && targetKeyCount == 10;
 }
 
+bool tenKeyStagedNativeActive(int sourceKeyCount,
+                              int targetKeyCount,
+                              ConversionStyle style,
+                              TenKeyPlannerPolicy tenKeyPlannerPolicy) {
+    if (sourceKeyCount != 7 || targetKeyCount != 10 ||
+        (tenKeyPlannerPolicy != TenKeyPlannerPolicy::Auto &&
+         tenKeyPlannerPolicy != TenKeyPlannerPolicy::StagedNative)) {
+        return false;
+    }
+    return style == ConversionStyle::Playable || style == ConversionStyle::Training;
+}
+
+bool tenKeyStagedNativeActive(const AssignmentContext& context) {
+    return tenKeyStagedNativeActive(context.sourceKeyCount,
+                                    context.targetKeyCount,
+                                    context.style,
+                                    context.tenKeyPlannerPolicy);
+}
+
+bool tenKeyMirrorCompressActive(int sourceKeyCount,
+                                int targetKeyCount,
+                                ConversionStyle style,
+                                TenKeyPlannerPolicy tenKeyPlannerPolicy) {
+    if (sourceKeyCount != 7 || targetKeyCount != 10 ||
+        tenKeyPlannerPolicy != TenKeyPlannerPolicy::StagedMirrorCompress) {
+        return false;
+    }
+    return style == ConversionStyle::Playable || style == ConversionStyle::Training;
+}
+
+bool tenKeyMirrorCompressActive(const AssignmentContext& context) {
+    return tenKeyMirrorCompressActive(context.sourceKeyCount,
+                                      context.targetKeyCount,
+                                      context.style,
+                                      context.tenKeyPlannerPolicy);
+}
+
+int stagedNineLaneForSevenSource(int sourceLane) {
+    static constexpr std::array<int, 7> kStageNineAnchors = {0, 1, 3, 4, 5, 7, 8};
+    return kStageNineAnchors[static_cast<std::size_t>(clampInt(sourceLane, 0, 6))];
+}
+
+int stagedTenLaneFromNine(int stageNineLane, int sourceLane) {
+    const int stage = clampInt(stageNineLane, 0, 8);
+    if (stage < 4) {
+        return stage;
+    }
+    if (stage == 4) {
+        return sourceLane <= 3 ? 4 : 5;
+    }
+    return clampInt(stage + 1, 0, 9);
+}
+
+int stagedTenBaseLaneForSource(int sourceLane) {
+    return stagedTenLaneFromNine(stagedNineLaneForSevenSource(sourceLane), sourceLane);
+}
+
+std::pair<int, int> stagedTenZoneForSevenSource(int sourceLane) {
+    if (sourceLane == 3) {
+        return {3, 6};
+    }
+    return sourceLane < 3 ? std::pair<int, int>{0, 4} : std::pair<int, int>{5, 9};
+}
+
+std::pair<int, int> stagedTenChordZoneForSlice(const TimeSlice& slice,
+                                               const std::vector<Note>& sourceNotes) {
+    if (slice.noteIndices.size() < 2) {
+        return {3, 6};
+    }
+    double sum = 0.0;
+    int count = 0;
+    for (const auto noteIndex : slice.noteIndices) {
+        if (noteIndex >= sourceNotes.size()) {
+            continue;
+        }
+        sum += static_cast<double>(sourceNotes[noteIndex].sourceLane.value_or(sourceNotes[noteIndex].lane));
+        ++count;
+    }
+    if (count <= 0) {
+        return {3, 6};
+    }
+    const double average = sum / static_cast<double>(count);
+    if (average <= 3.0) {
+        return {0, 4};
+    }
+    if (average >= 4.0) {
+        return {5, 9};
+    }
+    return {3, 6};
+}
+
+int mirrorFourteenLeftLaneForSevenSource(int sourceLane) {
+    return clampInt(sourceLane, 0, 6);
+}
+
+int mirrorFourteenRightLaneForSevenSource(int sourceLane) {
+    return 13 - clampInt(sourceLane, 0, 6);
+}
+
+int mirrorTenLaneFromFourteen(int fourteenLane) {
+    static constexpr std::array<int, 14> kMirrorCompressAnchors = {
+        0, 1, 2, 2, 3, 4, 4,
+        5, 5, 6, 7, 7, 8, 9,
+    };
+    return kMirrorCompressAnchors[static_cast<std::size_t>(clampInt(fourteenLane, 0, 13))];
+}
+
+std::pair<int, int> mirrorTenLanePairForSevenSource(int sourceLane) {
+    const int left = mirrorTenLaneFromFourteen(mirrorFourteenLeftLaneForSevenSource(sourceLane));
+    const int right = mirrorTenLaneFromFourteen(mirrorFourteenRightLaneForSevenSource(sourceLane));
+    return {left, right};
+}
+
+int mirrorTenBaseLaneForSource(int sourceLane) {
+    const auto [left, right] = mirrorTenLanePairForSevenSource(sourceLane);
+    return sourceLane <= 3 ? left : right;
+}
+
 bool useEvenHandSplit(int sourceKeyCount, int targetKeyCount) {
     return sourceKeyCount >= 2 && targetKeyCount >= 2 &&
            sourceKeyCount % 2 == 0 && targetKeyCount % 2 == 0;
@@ -291,6 +412,9 @@ double dualFivePanelScore(int sourceLane,
     if (!useDualFiveSplit(context.sourceKeyCount, context.targetKeyCount)) {
         return 0.0;
     }
+    if (tenKeyMirrorCompressActive(context)) {
+        return 0.0;
+    }
 
     int zoneStart = 0;
     int zoneEnd = 0;
@@ -298,6 +422,10 @@ double dualFivePanelScore(int sourceLane,
         (hint->role == PhraseRole::LeftHandVoice || hint->role == PhraseRole::RightHandVoice)) {
         zoneStart = hint->zoneStart;
         zoneEnd = hint->zoneEnd;
+    } else if (tenKeyStagedNativeActive(context)) {
+        const auto zone = stagedTenZoneForSevenSource(sourceLane);
+        zoneStart = zone.first;
+        zoneEnd = zone.second;
     } else {
         const auto zone = dualFiveZoneForSource(sourceLane);
         zoneStart = zone.first;
@@ -305,6 +433,129 @@ double dualFivePanelScore(int sourceLane,
     }
     return targetLane >= zoneStart && targetLane <= zoneEnd ? context.weights.shape * 0.5
                                                             : -context.weights.shape * 4.0;
+}
+
+double stagedTenKeyScore(int sourceLane,
+                         int targetLane,
+                         const GestureHint* hint,
+                         const AssignmentContext& context) {
+    if (!tenKeyStagedNativeActive(context)) {
+        return 0.0;
+    }
+
+    const int stageNineLane = stagedNineLaneForSevenSource(sourceLane);
+    const int projectedNineLane = targetLane <= 4 ? targetLane : targetLane - 1;
+    const int stageDistance = std::abs(projectedNineLane - stageNineLane);
+    double score = context.weights.shape *
+                   (1.15 - std::min(1.15, static_cast<double>(stageDistance) * 0.36));
+
+    const int baseLane = stagedTenBaseLaneForSource(sourceLane);
+    const int laneDistance = std::abs(targetLane - baseLane);
+    if (sourceLane == 3 && (targetLane == 4 || targetLane == 5)) {
+        score += context.weights.shape * 0.58;
+    } else if (laneDistance == 0) {
+        score += context.weights.shape * 0.65;
+    } else if (laneDistance == 1) {
+        score += context.weights.shape * 0.25;
+    } else {
+        score -= context.weights.shape * 0.30 * static_cast<double>(laneDistance);
+    }
+
+    const auto [zoneStart, zoneEnd] = stagedTenZoneForSevenSource(sourceLane);
+    if (targetLane < zoneStart || targetLane > zoneEnd) {
+        score -= context.weights.shape * 3.0;
+    }
+
+    if (targetLane >= 0 && targetLane < static_cast<int>(context.laneUse.size()) &&
+        targetLane >= zoneStart && targetLane <= zoneEnd && hint == nullptr) {
+        int zoneUse = 0;
+        for (int lane = zoneStart; lane <= zoneEnd; ++lane) {
+            zoneUse += context.laneUse[static_cast<std::size_t>(lane)];
+        }
+        const double zoneAverage =
+            static_cast<double>(zoneUse) / static_cast<double>(std::max(1, zoneEnd - zoneStart + 1));
+        const double laneUse = static_cast<double>(context.laneUse[static_cast<std::size_t>(targetLane)]);
+        score += context.weights.density *
+                 std::clamp((zoneAverage - laneUse) / std::max(1.0, zoneAverage), -0.45, 0.65);
+    }
+
+    if (sourceLane == 3 && context.laneUse.size() >= 6 && hint == nullptr) {
+        const double leftCenterUse = static_cast<double>(context.laneUse[4]);
+        const double rightCenterUse = static_cast<double>(context.laneUse[5]);
+        const double centerAverage = std::max(1.0, (leftCenterUse + rightCenterUse) / 2.0);
+        if (targetLane == 4) {
+            score += context.weights.density *
+                     std::clamp((rightCenterUse - leftCenterUse) / centerAverage, -0.60, 0.60);
+        } else if (targetLane == 5) {
+            score += context.weights.density *
+                     std::clamp((leftCenterUse - rightCenterUse) / centerAverage, -0.60, 0.60);
+        }
+    }
+
+    return score;
+}
+
+double mirrorCompressScore(int sourceLane,
+                           int targetLane,
+                           const GestureHint* hint,
+                           const AssignmentContext& context) {
+    if (!tenKeyMirrorCompressActive(context)) {
+        return 0.0;
+    }
+
+    const auto [leftLane, rightLane] = mirrorTenLanePairForSevenSource(sourceLane);
+    const int leftDistance = std::abs(targetLane - leftLane);
+    const int rightDistance = std::abs(targetLane - rightLane);
+    const int nearestDistance = std::min(leftDistance, rightDistance);
+    double score = context.weights.shape *
+                   (1.20 - std::min(1.20, static_cast<double>(nearestDistance) * 0.35));
+
+    if (leftDistance == 0 || rightDistance == 0) {
+        score += context.weights.shape * 0.55;
+    } else if (nearestDistance == 1) {
+        score += context.weights.shape * 0.20;
+    }
+
+    const bool strongJackHint = hint != nullptr && hint->kind == PatternKind::Jack && hint->motifHitCount >= 5;
+
+    if (hint != nullptr &&
+        (hint->role == PhraseRole::LeftHandVoice || hint->role == PhraseRole::RightHandVoice)) {
+        const int preferredLane = hint->role == PhraseRole::LeftHandVoice ? leftLane : rightLane;
+        const int oppositeLane = hint->role == PhraseRole::LeftHandVoice ? rightLane : leftLane;
+        score += context.weights.shape *
+                 (sourceLaneAnchorScore(targetLane, preferredLane, context.targetKeyCount) * 0.75);
+        score -= context.weights.shape *
+                 (sourceLaneAnchorScore(targetLane, oppositeLane, context.targetKeyCount) * 0.45);
+    } else if (context.laneUse.size() >= 10) {
+        const double leftUse = static_cast<double>(context.laneUse[static_cast<std::size_t>(leftLane)]);
+        const double rightUse = static_cast<double>(context.laneUse[static_cast<std::size_t>(rightLane)]);
+        const double average = std::max(1.0, (leftUse + rightUse) / 2.0);
+        if (targetLane == leftLane) {
+            const double balance = std::clamp((rightUse - leftUse) / average, -0.70, 0.70);
+            score += context.weights.density * balance * (strongJackHint ? 1.0 : 3.0);
+        } else if (targetLane == rightLane) {
+            const double balance = std::clamp((leftUse - rightUse) / average, -0.70, 0.70);
+            score += context.weights.density * balance * (strongJackHint ? 1.0 : 3.0);
+        }
+    }
+
+    if ((targetLane == 2 || targetLane == 7) && context.laneUse.size() >= 10) {
+        const int panelStart = targetLane < 5 ? 0 : 5;
+        const int panelEnd = panelStart + 4;
+        int panelUse = 0;
+        for (int lane = panelStart; lane <= panelEnd; ++lane) {
+            panelUse += context.laneUse[static_cast<std::size_t>(lane)];
+        }
+        const double panelAverage = static_cast<double>(panelUse) / 5.0;
+        const double centerUse = static_cast<double>(context.laneUse[static_cast<std::size_t>(targetLane)]);
+        const double centerNeed =
+            std::clamp((panelAverage - centerUse) / std::max(1.0, panelAverage), 0.0, 1.0);
+        if (!strongJackHint) {
+            score += context.weights.density * centerNeed * 4.0;
+        }
+    }
+
+    return score;
 }
 
 std::optional<int> recentSourceLaneAnchor(const std::vector<Note>& placed,
@@ -709,12 +960,31 @@ PpgWeights weightsForStyle(ConversionStyle style) {
 }
 
 LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK, ConversionStyle style) {
+    return generateCandidateLanes(sourceLane, sourceK, targetK, style, TenKeyPlannerPolicy::Legacy);
+}
+
+LaneCandidateSet generateCandidateLanes(int sourceLane,
+                                        int sourceK,
+                                        int targetK,
+                                        ConversionStyle style,
+                                        TenKeyPlannerPolicy tenKeyPlannerPolicy) {
     LaneCandidateSet set;
     set.sourceLane = sourceLane;
-    set.baseLane = useDualFiveSplit(sourceK, targetK)
+    const bool stagedTenKey = tenKeyStagedNativeActive(sourceK, targetK, style, tenKeyPlannerPolicy);
+    const bool mirrorTenKey = tenKeyMirrorCompressActive(sourceK, targetK, style, tenKeyPlannerPolicy);
+    set.baseLane = mirrorTenKey ? mirrorTenBaseLaneForSource(sourceLane)
+                   : stagedTenKey ? stagedTenBaseLaneForSource(sourceLane)
+                   : useDualFiveSplit(sourceK, targetK)
                        ? dualFiveBaseLaneForSource(sourceLane, targetK)
                        : mapLaneDirect(sourceLane, sourceK, targetK);
-    if (useDualFiveSplit(sourceK, targetK)) {
+    if (mirrorTenKey) {
+        set.hasPreferredZone = false;
+    } else if (stagedTenKey) {
+        const auto [zoneStart, zoneEnd] = stagedTenZoneForSevenSource(sourceLane);
+        set.hasPreferredZone = true;
+        set.preferredZoneStart = zoneStart;
+        set.preferredZoneEnd = zoneEnd;
+    } else if (useDualFiveSplit(sourceK, targetK)) {
         const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
         set.hasPreferredZone = true;
         set.preferredZoneStart = zoneStart;
@@ -738,10 +1008,47 @@ LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK
         set.radius = 2;
     }
 
-    addUnique(set.candidates, clampInt(set.baseLane, 0, targetK - 1));
-    for (int offset = 1; offset <= set.radius; ++offset) {
-        addUnique(set.candidates, clampInt(set.baseLane - offset, 0, targetK - 1));
-        addUnique(set.candidates, clampInt(set.baseLane + offset, 0, targetK - 1));
+    if (mirrorTenKey) {
+        const auto [leftLane, rightLane] = mirrorTenLanePairForSevenSource(sourceLane);
+        addUnique(set.candidates, leftLane);
+        addUnique(set.candidates, rightLane);
+        for (int distance = 1; distance <= set.radius; ++distance) {
+            const int leftVirtual = mirrorFourteenLeftLaneForSevenSource(sourceLane);
+            const int rightVirtual = mirrorFourteenRightLaneForSevenSource(sourceLane);
+            addUnique(set.candidates, mirrorTenLaneFromFourteen(leftVirtual - distance));
+            addUnique(set.candidates, mirrorTenLaneFromFourteen(leftVirtual + distance));
+            addUnique(set.candidates, mirrorTenLaneFromFourteen(rightVirtual - distance));
+            addUnique(set.candidates, mirrorTenLaneFromFourteen(rightVirtual + distance));
+        }
+    } else if (stagedTenKey) {
+        if (sourceLane == 3) {
+            addUnique(set.candidates, 4);
+            addUnique(set.candidates, 5);
+            addUnique(set.candidates, 3);
+            addUnique(set.candidates, 6);
+        }
+        const int stageNineLane = stagedNineLaneForSevenSource(sourceLane);
+        for (int distance = 0; distance <= set.radius; ++distance) {
+            const int leftStage = stageNineLane - distance;
+            const int rightStage = stageNineLane + distance;
+            if (leftStage >= 0) {
+                addUnique(set.candidates, stagedTenLaneFromNine(leftStage, sourceLane));
+            }
+            if (rightStage <= 8 && rightStage != leftStage) {
+                addUnique(set.candidates, stagedTenLaneFromNine(rightStage, sourceLane));
+            }
+        }
+        const auto [zoneStart, zoneEnd] = stagedTenZoneForSevenSource(sourceLane);
+        for (int offset = 1; offset <= 2; ++offset) {
+            addUnique(set.candidates, clampInt(set.baseLane - offset, zoneStart, zoneEnd));
+            addUnique(set.candidates, clampInt(set.baseLane + offset, zoneStart, zoneEnd));
+        }
+    } else {
+        addUnique(set.candidates, clampInt(set.baseLane, 0, targetK - 1));
+        for (int offset = 1; offset <= set.radius; ++offset) {
+            addUnique(set.candidates, clampInt(set.baseLane - offset, 0, targetK - 1));
+            addUnique(set.candidates, clampInt(set.baseLane + offset, 0, targetK - 1));
+        }
     }
     keepPreferredZoneCandidates(set);
     return set;
@@ -757,9 +1064,23 @@ std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
         const auto& note = sourceNotes[noteIndex];
         const int sourceLane = note.sourceLane.value_or(note.lane);
         auto baseSet =
-            generateCandidateLanes(sourceLane, context.sourceKeyCount, context.targetKeyCount, context.style);
+            generateCandidateLanes(sourceLane,
+                                   context.sourceKeyCount,
+                                   context.targetKeyCount,
+                                   context.style,
+                                   context.tenKeyPlannerPolicy);
+        if (tenKeyStagedNativeActive(context) && sourceLane == 3 && slice.noteIndices.size() >= 2) {
+            const auto [zoneStart, zoneEnd] = stagedTenChordZoneForSlice(slice, sourceNotes);
+            baseSet.hasPreferredZone = true;
+            baseSet.preferredZoneStart = zoneStart;
+            baseSet.preferredZoneEnd = zoneEnd;
+            keepPreferredZoneCandidates(baseSet);
+        }
         const auto* hint = findGestureHint(context.gestureRail, note.id);
         addGestureCandidates(baseSet, hint, context.targetKeyCount);
+        if (context.tenKFullFieldRemix && hint != nullptr) {
+            keepPreferredZoneCandidates(baseSet);
+        }
         auto candidates = noCreatedJackCandidates(baseSet, note, context);
         auto sourceAnchor =
             recentSourceLaneAnchor(context.placed, sourceLane, note.time, context.targetKeyCount);
@@ -840,6 +1161,8 @@ double scoreAssignment(const TimeSlice& slice,
         score += context.weights.position *
                  (1.0 - std::abs(normalizedLane(sourceLane, context.sourceKeyCount) -
                                   normalizedLane(targetLane, context.targetKeyCount)));
+        score += stagedTenKeyScore(sourceLane, targetLane, hint, context);
+        score += mirrorCompressScore(sourceLane, targetLane, hint, context);
         score += dualFivePanelScore(sourceLane, targetLane, hint, context);
         if (!sourceJackLike && !sourceRepeatNearby && (!sourceAnchor.has_value() || looseTenKeyNonJack)) {
             const double densityScale = sourceAnchor.has_value() ? 0.9 : 1.5;

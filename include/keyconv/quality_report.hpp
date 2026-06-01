@@ -86,6 +86,13 @@ enum class JackPreservePolicy {
     SmoothAll,
 };
 
+enum class TenKeyPlannerPolicy {
+    Auto,
+    Legacy,
+    StagedNative,
+    StagedMirrorCompress,
+};
+
 struct TargetKFeatureStat {
     bool present = false;
     double mean = 0.0;
@@ -110,6 +117,9 @@ struct TargetKBucketProfile {
     TargetKFeatureStat holdRate;
     TargetKFeatureStat jackRisk;
     TargetKFeatureStat laneEntropy;
+    TargetKFeatureStat centerBridgeRate;
+    TargetKFeatureStat centerSplitBalance;
+    TargetKFeatureStat splitChordRate;
 };
 
 struct TargetKDensityBuckets {
@@ -139,6 +149,9 @@ struct TargetKProfile {
     double desiredChordSpan = 0.45;
     double desiredHandBalance = 0.88;
     double desiredAdjacentExpansion = 0.18;
+    double desiredCenterBridgeRate = 0.42;
+    double desiredCenterSplitBalance = 0.82;
+    double desiredSplitChordRate = 0.45;
     TargetKDensityBuckets densityBuckets;
 };
 
@@ -176,6 +189,9 @@ struct ConversionReport {
         int leftHandNotes = 0;
         int rightHandNotes = 0;
         double handBalanceRatio = 1.0;
+        double centerBridgeRate = 0.0;
+        double centerSplitBalance = 0.0;
+        double splitChordRate = 0.0;
         double kLikenessScore = 0.0;
         int targetProfileChartCount = 0;
         int targetProfileWindowMs = 0;
@@ -189,6 +205,9 @@ struct ConversionReport {
         double activeLaneWindowScore = 0.0;
         double spatialSpanScore = 0.0;
         double adjacentExpansionScore = 0.0;
+        double centerBridgeScore = 0.0;
+        double centerSplitBalanceScore = 0.0;
+        double splitChordScore = 0.0;
         double anchorPreserveScore = 1.0;
         double patternVocabularyScore = 1.0;
         double addedRatioFitScore = 0.0;
@@ -213,8 +232,9 @@ struct ConversionReport {
         int droppedByDistanceGuard = 0;
         int rerolledByDistanceGuard = 0;
         bool deterministic = true;
-        std::string algorithmVersion = "v0.6.0";
+        std::string algorithmVersion = "v1.0.0";
         std::string expansionPolicy = "preserve";
+        std::string tenKeyPlanner = "legacy";
         std::string streamEchoProfile = "conservative";
         std::string streamTransformPolicy = "off";
         std::string expansionComposerProfile = "preserve";
@@ -329,6 +349,7 @@ std::string toString(EchoPolicy policy);
 std::string toString(StreamEchoProfile profile);
 std::string toString(StreamTransformPolicy policy);
 std::string toString(JackPreservePolicy policy);
+std::string toString(TenKeyPlannerPolicy policy);
 std::optional<ConversionStyle> parseConversionStyle(const std::string& value);
 std::optional<CollisionPolicy> parseCollisionPolicy(const std::string& value);
 std::optional<OptimizerKind> parseOptimizerKind(const std::string& value);
@@ -339,6 +360,7 @@ std::optional<EchoPolicy> parseEchoPolicy(const std::string& value);
 std::optional<StreamEchoProfile> parseStreamEchoProfile(const std::string& value);
 std::optional<StreamTransformPolicy> parseStreamTransformPolicy(const std::string& value);
 std::optional<JackPreservePolicy> parseJackPreservePolicy(const std::string& value);
+std::optional<TenKeyPlannerPolicy> parseTenKeyPlannerPolicy(const std::string& value);
 std::string reportToJson(const ConversionReport& report);
 std::string reportToText(const ConversionReport& report);
 

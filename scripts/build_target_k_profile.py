@@ -308,10 +308,18 @@ def window_features(notes, keys, window_ms):
         edge_count = sum(distribution[:edge_width]) + sum(distribution[keys - edge_width :])
         left = sum(distribution[: keys // 2])
         right = sum(distribution[keys // 2 :])
+        center_bridge_count = sum(distribution[lane] for lane in range(3, min(keys, 7))) if keys >= 10 else 0
+        center_left = distribution[4] if keys > 4 else 0
+        center_right = distribution[5] if keys > 5 else 0
+        center_split_total = center_left + center_right
         chord_slices = [lanes for lanes in by_time.values() if len(lanes) >= 2]
         chord_spans = [
             (max(lanes) - min(lanes)) / max(1, keys - 1)
             for lanes in chord_slices
+        ]
+        split_chords = [
+            lanes for lanes in chord_slices
+            if any(lane < keys // 2 for lane in lanes) and any(lane >= keys // 2 for lane in lanes)
         ]
 
         sorted_by_time = sorted(window, key=lambda item: (item[1], item[0]))
@@ -334,6 +342,12 @@ def window_features(notes, keys, window_ms):
                 "handBalance": 1.0 - abs(left - right) / total,
                 "adjacentExpansion": sum(distribution[lane] for lane in (2, 5, 7) if lane < keys) / total,
                 "jackRisk": same_lane_repeats / total,
+                "centerBridgeRate": center_bridge_count / total if total else 0.0,
+                "centerSplitBalance": (
+                    1.0 - abs(center_left - center_right) / center_split_total
+                    if center_split_total > 0 else 0.0
+                ),
+                "splitChordRate": len(split_chords) / len(chord_slices) if chord_slices else 0.0,
             }
         )
     return features
@@ -385,14 +399,21 @@ def chart_metrics(notes, keys, window_ms):
     right = sum(distribution[keys // 2 :])
     hand_balance = 1.0 if total <= 0 else 1.0 - abs(left - right) / total
     expanded_lane_count = sum(distribution[lane] for lane in (2, 5, 7) if lane < keys)
+    center_bridge_count = sum(distribution[lane] for lane in range(3, min(keys, 7))) if keys >= 10 else 0
+    center_left = distribution[4] if keys > 4 else 0
+    center_right = distribution[5] if keys > 5 else 0
+    center_split_total = center_left + center_right
 
     by_time = {}
     for lane, time in lane_times:
         by_time.setdefault(time, []).append(lane)
     chord_spans = []
+    split_chords = 0
     for lanes in by_time.values():
         if len(lanes) >= 2:
             chord_spans.append((max(lanes) - min(lanes)) / max(1, keys - 1))
+            if any(lane < keys // 2 for lane in lanes) and any(lane >= keys // 2 for lane in lanes):
+                split_chords += 1
 
     min_time = min(time for _, time in lane_times)
     max_time = max(time for _, time in lane_times)
@@ -418,6 +439,12 @@ def chart_metrics(notes, keys, window_ms):
         "chordSpan": sum(chord_spans) / len(chord_spans) if chord_spans else 0.0,
         "handBalance": hand_balance,
         "adjacentExpansion": expanded_lane_count / total if total else 0.0,
+        "centerBridgeRate": center_bridge_count / total if total else 0.0,
+        "centerSplitBalance": (
+            1.0 - abs(center_left - center_right) / center_split_total
+            if center_split_total > 0 else 0.0
+        ),
+        "splitChordRate": split_chords / len(chord_spans) if chord_spans else 0.0,
         "windows": window_features(notes, keys, window_ms),
     }
 
@@ -542,6 +569,9 @@ def build_profile(root,
         "desiredChordSpan": window_median("chordSpan", robust_field("chordSpan"), chord_window_features),
         "desiredHandBalance": window_median("handBalance", robust_field("handBalance")),
         "desiredAdjacentExpansion": window_median("adjacentExpansion", robust_field("adjacentExpansion")),
+        "desiredCenterBridgeRate": robust_field("centerBridgeRate"),
+        "desiredCenterSplitBalance": robust_field("centerSplitBalance"),
+        "desiredSplitChordRate": robust_field("splitChordRate"),
         "densityBuckets": bucket_summary,
         "chartSummary": feature_summary(
             [

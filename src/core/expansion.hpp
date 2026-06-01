@@ -86,7 +86,7 @@ struct ExpansionPlanStats {
     double streamEchoAddedRatio = 0.0;
     double maxObservedLocalNpsAfterEcho = 0.0;
     bool deterministic = true;
-    std::string algorithmVersion = "v0.6.0";
+    std::string algorithmVersion = "v1.0.0";
     StreamEchoProfile streamEchoProfile = StreamEchoProfile::Conservative;
     ExpansionPolicy policy = ExpansionPolicy::PreserveNoteCount;
     std::vector<GeneratedNoteInfo> generatedNotes;
@@ -94,6 +94,7 @@ struct ExpansionPlanStats {
 };
 
 ExpansionPolicy resolveExpansionPolicy(const ConvertOptions& options);
+int rotateWithinZone(int mirrorLane, int sliceIndex, int zoneStart, int zoneWidth, int phaseStep);
 ExpansionPlanStats applyExpansionPlanner(Chart& converted,
                                          const Chart& original,
                                          const ConvertOptions& options);

@@ -76,6 +76,30 @@ bool eightKeyUnintendedJackGuardActive(const ConvertOptions& options) {
            options.jackWindowMs > 0;
 }
 
+bool tenKeyStagedNativePlannerActive(const ConvertOptions& options) {
+    if (options.sourceKeyCount != 7 || options.targetKeyCount != 10 ||
+        (options.tenKeyPlannerPolicy != TenKeyPlannerPolicy::Auto &&
+         options.tenKeyPlannerPolicy != TenKeyPlannerPolicy::StagedNative)) {
+        return false;
+    }
+    return options.style == ConversionStyle::Playable || options.style == ConversionStyle::Training;
+}
+
+bool tenKeyStagedMirrorCompressPlannerActive(const ConvertOptions& options) {
+    if (options.sourceKeyCount != 7 || options.targetKeyCount != 10 ||
+        options.tenKeyPlannerPolicy != TenKeyPlannerPolicy::StagedMirrorCompress) {
+        return false;
+    }
+    return options.style == ConversionStyle::Playable || options.style == ConversionStyle::Training;
+}
+
+std::string effectiveTenKeyPlannerName(const ConvertOptions& options) {
+    if (tenKeyStagedMirrorCompressPlannerActive(options)) {
+        return "staged-7-14-10";
+    }
+    return tenKeyStagedNativePlannerActive(options) ? "staged-7-9-10" : "legacy";
+}
+
 double beatLengthAtOrFallback(int time, std::vector<TimingPoint> timingPoints) {
     std::stable_sort(timingPoints.begin(), timingPoints.end(), [](const TimingPoint& lhs, const TimingPoint& rhs) {
         return lhs.time < rhs.time;
@@ -1132,6 +1156,9 @@ std::string stripExistingKeyWeaverMarker(std::string value) {
 }
 
 std::string difficultyExpansionTag(const ConvertOptions& options) {
+    if (options.targetKeyCount == 10 && options.tenKFullFieldRemix) {
+        return "fullfield";
+    }
     if (options.targetKeyCount <= options.sourceKeyCount) {
         return {};
     }
@@ -1473,6 +1500,7 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     result.report.quality.deterministic = expansionStats.deterministic;
     result.report.quality.algorithmVersion = expansionStats.algorithmVersion;
     result.report.quality.expansionPolicy = toString(expansionStats.policy);
+    result.report.quality.tenKeyPlanner = effectiveTenKeyPlannerName(options);
     result.report.quality.streamEchoProfile = toString(expansionStats.streamEchoProfile);
     result.report.quality.streamTransformPolicy = toString(options.streamTransformPolicy);
     result.report.quality.streamTransformedNotes = streamTransformStats.transformedNotes;

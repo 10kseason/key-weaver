@@ -1,4 +1,4 @@
-# KeyWeaver v0.6.0
+# KeyWeaver v1.0.0
 
 C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
@@ -33,6 +33,8 @@ Current scope:
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
 - v0.6.0 algorithm lock is documented at `docs/algorithm-lock-v0.6.0.md`, freezing the current generated-note, jack, LN, stream-transform, and safety contracts
+- v1.0.0 promotes the GUI target range to 4K-10K and makes GUI 10K conversions use Full-Field Mirror-Remix by default
+- 10K staged-native planner is documented at `docs/algorithm-lock-v0.6.1.md`, adding the default 7K -> 9K -> 10K playable/training routing path
 - v0.6.0 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
 - v0.5.8 high-key generated-note presets use 10%/15%/20% low/normal/more budgets, 8K+ additions prefer 8th-beat slices with 16th-beat fallback, suppress additions on 32nd-or-faster even-key stairs, reduce outer-lane fill pressure, preserve long source jacks on one lane, and limit generated LNs to 8th-to-16th durations
 - v0.5.7 Preserve Convert lane drift for adjacent safe-lane movement without adding notes, plus deterministic stream transforms (`superrandom`, `full-jitter`)
@@ -44,6 +46,9 @@ Current scope:
 - v0.5.3 BMS key-mode export headers: 4K-8K write `#4K`-`#8K` as SP, 9K defaults to `.pms`, and 10K exports as scratchless 2P channels
 - v0.5.3 source-lane anchoring for stable 7K-to-10K phrase mapping across sparse same-lane repeats
 - v0.5.3 dual-5K split rail for 7K-to-10K phrase recomposition into left/right 5K panels
+- 7K-to-10K staged-native planner first maps through a readable 9K scaffold, then opens the 10K center split for source-lane-3 bridge phrases while keeping low/high phrases inside their panels
+- 7K-to-10K mirror-compress planner maps 7K lanes into mirrored 14K pairs, compresses those anchors into 10K, then applies the normal assignment safety and scoring rules
+- gated 10K Full-Field Mirror-Remix mode (`--ten-k-fullfield-remix`) uses a left/right full-field rail plus phase-rotated mirror echoes to target up to 1.6x total density without changing the normal 0.45 added-note cap
 - v0.5.3 source-panel candidate guard for 7K-to-10K non-gesture chords and sparse notes
 - v0.5.3 role voice-leading for 7K-to-10K dual-5K phrases so each hand panel keeps compact local motion
 - v0.5.3 low-key recreation default: high-to-low `auto` compression drops overflow objects instead of retiming every object
@@ -52,7 +57,7 @@ Current scope:
 - v0.5.5 profile-guided Adaptive Growth Budget for `preserve-tap-plus`, using 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` Target-K profile windows to open or throttle local fill while keeping a global added-note cap
 - v0.5.5 broad style-profile workflow validated on a 628-chart u_e + CircusGalop 10K reference set, with a sanitized reusable profile committed at `profiles/keyweaver_10k_broad_style_v1.json`
 - v0.5.5 automatically loads the bundled broad 10K style profile for target-10 conversions when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; `--target-profile` overrides it
-- v0.5.5 algorithm lock remains historical context at `docs/algorithm-lock-v0.5.5.md`; the current frozen contract is `docs/algorithm-lock-v0.6.0.md`
+- v0.5.5 algorithm lock remains historical context at `docs/algorithm-lock-v0.5.5.md`; the normal-mode frozen contract is `docs/algorithm-lock-v0.6.0.md`
 
 Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, seeded random remix, burst echo synthesis, or DP stream splitting.
 
@@ -72,10 +77,10 @@ cmake --build build --target keyconv_gui
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.6.0
+.\scripts\package_release.ps1 -Version 1.0.0
 ```
 
-The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v0.6.0-win64-<timestamp>.zip` plus a `.sha256` file.
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v1.0.0-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -125,6 +130,10 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --min-gap <ms>          minimum positive object distance, default 16
   --same-lane-min-gap <ms> minimum positive same-lane distance, default 20
   --jack-preserve-policy <p> preserve-strict | preserve-playable | avoid-new-jacks | smooth-all
+  --ten-key-planner <p> auto | legacy | staged-7-9-10 | staged-7-14-10, default auto
+  --ten-k-fullfield-remix enable gated 10K Full-Field Mirror-Remix mode
+  --ten-k-remix-density-ceiling <n> total-note density ceiling for that mode, default 1.6
+  --ten-k-remix-phase-step <n> echo phase rotation step for 5-lane zones, 2 or 3, default 2
   --jack-window-ms <ms>   repeat/jack detection window, default 500
   --strict-jack-window-ms <ms> strict jack reference window, default 500
   --max-jack-split-lanes <n> max lanes counted as a preserved split jack, default 2
@@ -188,6 +197,8 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --expansion-pol
 build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --expansion-policy harder-remix --max-added-ratio 0.2 --out dist/simple_10k_harder.osu --report dist/report_harder.json
 build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --compare-policies preserve,preserve-tap-plus,echo-balanced,training-scaffold,harder-balanced --emit-feel-report --emit-diff-report --report dist/compare.json --report-csv dist/compare.csv
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 4 --report dist/report_7k_4k.json
+build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --ten-key-planner staged-7-9-10 --dry-run
+build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --ten-key-planner staged-7-14-10 --dry-run --report dist/report_7k_14_10.json
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --expansion-policy auto-low --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --preserve-convert --dry-run
@@ -204,7 +215,7 @@ Already-converted inputs are skipped before conversion. KeyWeaver checks filenam
 
 `build/keyconv_gui.exe` is a Windows-only C++ playtest harness. It does not replace the core converter or implement chart editing; it shells out to `KeyWeaver.exe`, reads generated JSON/CSV reports, and displays a small summary/matrix for manual calibration.
 
-The JSON/text reports include `kLikenessScore` as a 0-100 Target-K diagnostic. For 7K-to-10K work it favors keeping the 7K anchor skeleton readable while rewarding natural adjacent-lane growth, fuller 10K lane use, balanced hands, and zero created-jack/near-conflict damage. Adjacent growth gates the final score so a chart with good lane entropy but a still-7K-like skeleton does not look falsely complete. Policy comparison JSON/CSV also includes the score so future adaptive budgets can pick candidates by score gain instead of a fixed added-note percentage.
+The JSON/text reports include `kLikenessScore` as a 0-100 Target-K diagnostic. For 7K-to-10K work it favors keeping the 7K anchor skeleton readable while rewarding natural adjacent-lane growth, fuller 10K lane use, balanced hands, and zero created-jack/near-conflict damage. Adjacent growth gates the final score so a chart with good lane entropy but a still-7K-like skeleton does not look falsely complete. Reports also include `tenKeyPlanner`, which is `staged-7-9-10` when the dedicated 7K-to-10K staged planner is active and `legacy` otherwise. Current Target-K profiles also measure 10K center/split behavior with `centerBridgeRate`, `centerSplitBalance`, and `splitChordRate`; reports expose both raw values and score components. Policy comparison JSON/CSV also includes the score so future adaptive budgets can pick candidates by score gain instead of a fixed added-note percentage.
 
 Style-profile workflow:
 
@@ -218,9 +229,9 @@ The broad profile scanner accepts osu!mania `CircleSize:10` charts whose `Creato
 
 `profiles/keyweaver_10k_broad_style_v1.json` is the sanitized committed broad profile. It keeps aggregate feature statistics and removes local Songs-folder paths. Target-10 conversions auto-load this bundled profile when it is next to the executable or in the current working folder; pass `--target-profile` to override it with a different profile.
 
-Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables an adaptive-growth-budget pass: the global added-note cap stays in place, but Composer pressure is based on the 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` features rather than chart-level summaries.
+Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians, including 10K center/split metrics `desiredCenterBridgeRate`, `desiredCenterSplitBalance`, and `desiredSplitChordRate`. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables an adaptive-growth-budget pass: the global added-note cap stays in place, but Composer pressure is based on the 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` features rather than chart-level summaries.
 
-The frozen v0.6.0 algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. Treat it as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, jack/LN handling, stream transforms, or safety guard behavior should update that document and the matching tests.
+The frozen v0.6.0 normal-mode algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. The 10K staged planner contract is in `docs/algorithm-lock-v0.6.1.md`, and the v1.0.0 GUI 10K default follows `docs/design-10k-fullfield-remix.md`. Treat these as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, 7K-to-10K planner behavior, jack/LN handling, stream transforms, or safety guard behavior should update the matching document and tests.
 
 GUI scope:
 
@@ -229,7 +240,8 @@ GUI scope:
 - output beside the input chart by default, with optional folder override
 - drag a chart file onto an already-open GUI window to convert with the current Target field
 - drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads the first chart so Target can be set before conversion
-- optional source-key override and target key
+- optional source-key override and a 4K-10K target selector
+- GUI target-10 conversions use `--ten-key-planner staged-7-14-10 --ten-k-fullfield-remix` by default
 - choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
 - run one conversion and parse report JSON
 - run GUI Batch from dropped charts or a selected songs/root folder, with status text showing percent done and remaining files
@@ -259,9 +271,11 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - Higher-key `preserve-tap-plus` also balances target hand zones. For even-key to even-key conversion, one-hand source slices keep generated additions inside the matching target hand; when the source slice uses both hands, the full target lane range can be used. For 10K, lanes 0-4 are treated as left hand and lanes 5-9 as right hand; reports include `leftHandNotes`, `rightHandNotes`, and `handBalanceRatio`.
 - Generated LNs are normalized only to same-time adjacent LN durations that still fit the 8th-to-16th generation window; generated long-hold clones are converted back to taps.
 - Gesture Rail is enabled by default and biases greedy assignment toward phrase-level source intent: ascending/descending stairs stay monotonic, two-lane trills stay centered on two nearby lanes, and source jacks stay same-lane or adjacent-safe. Collision, LN conflict, distance, and no-created-jack safety checks still take priority. Use `--gesture-rail off` to compare against the older lane scoring. Check `detectedStairs`, `preservedStairs`, `brokenStairs`, `detectedTrills`, `preservedTrills`, `brokenTrills`, `detectedJacks`, `preservedJacks`, `brokenJacks`, `handZoneBreaks`, `motifDirectionFlips`, `motifLaneScatterCount`, `gesturePreservationScore`, and `gestureRailEnabled` in the JSON report.
-- 7K-to-10K playable mapping uses a dual-5K split rail: lower phrases are recomposed inside lanes 0-4 and upper phrases inside lanes 5-9, so target patterns behave more like two 5K panels than one stretched 7K layout.
-- The same source-panel guard applies outside detected motifs too: ordinary 7K low-register notes prefer lanes 0-4 and high-register notes prefer lanes 5-9 before lane-balance scoring can spread them across the center split. If every in-panel candidate is blocked by collision, LN conflict, or no-created-jack safety, assignment may still use an out-of-panel fallback.
-- The 7K-to-10K dual-5K rail also tags detected motifs as left-hand or right-hand voices. Within those motifs, assignment prefers compact same-panel motion unless the source gesture itself requires a larger move, which makes phrase ownership more stable and less like a stretched 7K lane scale.
+- 7K-to-10K playable/training mapping uses the staged-native planner by default: source 7K lanes first map to a readable 9K scaffold, then project to 10K with the center source lane treated as a bridge across the split. This keeps the old 7K skeleton understandable while making center phrases breathe like native 10K.
+- The source-panel guard applies outside detected motifs too: ordinary 7K low-register notes prefer lanes 0-4, high-register notes prefer lanes 5-9, and center-bridge material stays near lanes 3-6 before lane-balance scoring can spread it. If every in-panel candidate is blocked by collision, LN conflict, or no-created-jack safety, assignment may still use an out-of-panel fallback.
+- The legacy dual-5K rail remains available with `--ten-key-planner legacy`. In `auto`, 7K-to-10K playable/training conversion uses `staged-7-9-10`; other source/target/style combinations keep the legacy planner. The explicit `staged-7-14-10` experiment exposes mirrored 14K compressed anchor pairs, such as source lane 0 to lanes 0/9, source lane 2 to lanes 2/7, and source lane 6 to lanes 4/5, before the normal balance, collision, LN, and no-created-jack rules choose the accepted lane. For this mirror-compress mode, gesture rail zones are opened across the full 10K field instead of forcing the old dual-5K hand zone. It also gives underused 5K panel-center lanes extra scoring pressure so lanes 3 and 8 do not stay visually hollow when adjacent source lanes can safely fill them.
+- The GUI's 10K default layers Full-Field Mirror-Remix on top of `staged-7-14-10`, deriving phase-rotated opposite-hand echoes under a mode-local 1.6x total-density ceiling. Use the CLI without `--ten-k-fullfield-remix` for normal 10K conversion, or `--preserve-convert` in the GUI when strict faithful mapping matters more than remix density.
+- The 7K-to-10K staged planner still tags detected motifs as left-hand or right-hand voices where the gesture rail has clear ownership. Within those motifs, assignment prefers compact same-panel motion unless the source gesture itself requires a larger move, which makes phrase ownership stable without locking the whole chart to a stretched 7K lane scale.
 - Source-lane anchoring is part of playable assignment for higher-key output: once a source lane has established a recent target lane inside a phrase, later sparse notes from that same source lane prefer that target lane over lane-balance spreading. This keeps same-source-lane instrument feel stable unless collision, LN conflict, no-created-jack, or explicit gesture logic requires another lane.
 - Repeat-aware jack handling is enabled by default with a 500 ms repeat window: source jack groups are reported, source jacks may be preserved or split by policy, long source jack phrases are kept on one target lane, source-different target repeats are hard-rejected during assignment/repair when an alternative exists, added-note candidates that would create no-source unwanted jacks are rejected, and final sanitization relanes or drops generated offenders before reporting unresolved pairs. Check `sourceJackGroups`, `preservedJackGroups`, `splitJackGroups`, `createdJacks`, `preventedJacks`, `createdJacksFromBaseMapping`, `createdJacksFromAddedNotes`, `preventedJacksByAssignment`, `preventedJacksByRepair`, `preventedJacksByExpansion`, `sanitizedCreatedJacks`, `unsolvedCreatedJacks`, `jackPreserveScore`, and `createdJackRate`.
 - Expansion Composer applies explicit expansion policies in deterministic order with profile budget caps; check `expansionComposerProfile`, `targetAddedNoteRatio`, `budgetUsedRatio`, `adaptiveGrowthBudgetEnabled`, `adaptiveBudgetAverageRatio`, `adaptiveBudgetMinRatio`, `adaptiveBudgetMaxRatio`, `acceptedByComposer`, `rejectedByComposerBudget`, `rejectedByAdaptiveBudget`, and `rejectedByComposerSafety`.

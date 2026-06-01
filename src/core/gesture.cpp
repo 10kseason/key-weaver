@@ -57,8 +57,11 @@ std::pair<int, int> dualFiveZoneForPhrase(const std::vector<PhraseNote>& notes) 
     return {5, 9};
 }
 
-PhraseRole phraseRoleFor(const std::vector<PhraseNote>& notes, int sourceKeyCount, int targetKeyCount) {
-    if (!useDualFiveSplit(sourceKeyCount, targetKeyCount) || notes.empty()) {
+PhraseRole phraseRoleFor(const std::vector<PhraseNote>& notes,
+                         int sourceKeyCount,
+                         int targetKeyCount,
+                         bool fullTenKeyGestureZone) {
+    if (fullTenKeyGestureZone || !useDualFiveSplit(sourceKeyCount, targetKeyCount) || notes.empty()) {
         return PhraseRole::Neutral;
     }
 
@@ -66,11 +69,17 @@ PhraseRole phraseRoleFor(const std::vector<PhraseNote>& notes, int sourceKeyCoun
     return zone.first < 5 ? PhraseRole::LeftHandVoice : PhraseRole::RightHandVoice;
 }
 
-std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes, int sourceKeyCount, int targetKeyCount) {
+std::pair<int, int> targetZoneFor(const std::vector<PhraseNote>& notes,
+                                  int sourceKeyCount,
+                                  int targetKeyCount,
+                                  bool fullTenKeyGestureZone = false) {
     if (targetKeyCount <= 1) {
         return {0, 0};
     }
     if (notes.empty()) {
+        return {0, targetKeyCount - 1};
+    }
+    if (fullTenKeyGestureZone) {
         return {0, targetKeyCount - 1};
     }
     if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
@@ -164,7 +173,8 @@ void addStairHints(GestureRail& rail,
                    const PatternToken& token,
                    int motifId,
                    int sourceKeyCount,
-                   int targetKeyCount) {
+                   int targetKeyCount,
+                   bool fullTenKeyGestureZone) {
     if (notes.empty()) {
         return;
     }
@@ -172,16 +182,17 @@ void addStairHints(GestureRail& rail,
     const auto [sourceMinIt, sourceMaxIt] = std::minmax_element(notes.begin(), notes.end(), [](const auto& a, const auto& b) {
         return a.sourceLane < b.sourceLane;
     });
-    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
-    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] =
+        targetZoneFor(notes, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
     for (const auto& note : notes) {
         GestureHint hint;
         hint.motifId = motifId;
         hint.kind = token.kind;
         hint.role = role;
-        hint.preferredLane = useDualFiveSplit(sourceKeyCount, targetKeyCount)
-                                 ? laneInDualFiveZone(note.sourceLane, zoneStart, zoneEnd, targetKeyCount)
-                                 : laneInZoneBySourcePosition(note.sourceLane,
+        hint.preferredLane = useDualFiveSplit(sourceKeyCount, targetKeyCount) && !fullTenKeyGestureZone
+                                  ? laneInDualFiveZone(note.sourceLane, zoneStart, zoneEnd, targetKeyCount)
+                                  : laneInZoneBySourcePosition(note.sourceLane,
                                                               sourceMinIt->sourceLane,
                                                               sourceMaxIt->sourceLane,
                                                               zoneStart,
@@ -198,13 +209,15 @@ void addTrillHints(GestureRail& rail,
                    const std::vector<PhraseNote>& notes,
                    int motifId,
                    int sourceKeyCount,
-                   int targetKeyCount) {
+                   int targetKeyCount,
+                   bool fullTenKeyGestureZone) {
     if (notes.size() < 2 || targetKeyCount <= 1) {
         return;
     }
 
-    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
-    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] =
+        targetZoneFor(notes, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
     std::vector<int> sourceLanes;
     for (const auto& note : notes) {
         if (std::find(sourceLanes.begin(), sourceLanes.end(), note.sourceLane) == sourceLanes.end()) {
@@ -252,18 +265,20 @@ void addJackHints(GestureRail& rail,
                   const std::vector<PhraseNote>& notes,
                   int motifId,
                   int sourceKeyCount,
-                  int targetKeyCount) {
+                  int targetKeyCount,
+                  bool fullTenKeyGestureZone) {
     if (notes.empty()) {
         return;
     }
 
     const int sourceLane = notes.front().sourceLane;
-    const auto [zoneStart, zoneEnd] = targetZoneFor(notes, sourceKeyCount, targetKeyCount);
-    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount);
+    const auto [zoneStart, zoneEnd] =
+        targetZoneFor(notes, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
+    const auto role = phraseRoleFor(notes, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
     const int motifHitCount = static_cast<int>(notes.size());
     const int motifDurationMs = motifHitCount >= 2 ? notes.back().time - notes.front().time : 0;
     const bool longJack = motifHitCount >= 5;
-    const int preferred = useDualFiveSplit(sourceKeyCount, targetKeyCount)
+    const int preferred = useDualFiveSplit(sourceKeyCount, targetKeyCount) && !fullTenKeyGestureZone
                               ? laneInDualFiveZone(sourceLane, zoneStart, zoneEnd, targetKeyCount)
                               : mapLaneDirect(sourceLane, sourceKeyCount, targetKeyCount);
     int jackZoneStart = clampInt(preferred, zoneStart, zoneEnd);
@@ -328,7 +343,8 @@ void addSourceJackGroupHints(GestureRail& rail,
                              int sourceKeyCount,
                              int targetKeyCount,
                              int jackWindowMs,
-                             int& motifId) {
+                             int& motifId,
+                             bool fullTenKeyGestureZone) {
     const auto groups = detectJackGroups(chart.notes, RepeatLaneMode::SourceLane, jackWindowMs);
     for (const auto& group : groups) {
         bool anyAlreadyHinted = false;
@@ -346,7 +362,283 @@ void addSourceJackGroupHints(GestureRail& rail,
         if (notes.size() < 3) {
             continue;
         }
-        addJackHints(rail, notes, motifId++, sourceKeyCount, targetKeyCount);
+        addJackHints(rail, notes, motifId++, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
+    }
+}
+
+std::pair<int, int> fullFieldHandZone(bool leftHand) {
+    return leftHand ? std::pair<int, int>{0, 4} : std::pair<int, int>{5, 9};
+}
+
+PhraseRole fullFieldRole(bool leftHand) {
+    return leftHand ? PhraseRole::LeftHandVoice : PhraseRole::RightHandVoice;
+}
+
+int fullFieldPreferredLane(int sourceLane,
+                           int sourceMin,
+                           int sourceMax,
+                           int zoneStart,
+                           int zoneEnd,
+                           int targetKeyCount) {
+    return laneInZoneBySourcePosition(sourceLane,
+                                      sourceMin,
+                                      sourceMax,
+                                      zoneStart,
+                                      zoneEnd,
+                                      targetKeyCount);
+}
+
+std::pair<int, int> sourceRangeForNotes(const std::vector<PhraseNote>& notes) {
+    if (notes.empty()) {
+        return {0, 0};
+    }
+    const auto [minIt, maxIt] = std::minmax_element(notes.begin(), notes.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.sourceLane < rhs.sourceLane;
+    });
+    return {minIt->sourceLane, maxIt->sourceLane};
+}
+
+std::vector<PhraseNote> sortedPhraseNotes(std::vector<PhraseNote> notes) {
+    std::stable_sort(notes.begin(), notes.end(), [](const PhraseNote& lhs, const PhraseNote& rhs) {
+        if (lhs.time != rhs.time) {
+            return lhs.time < rhs.time;
+        }
+        if (lhs.sourceLane != rhs.sourceLane) {
+            return lhs.sourceLane < rhs.sourceLane;
+        }
+        return lhs.id < rhs.id;
+    });
+    return notes;
+}
+
+bool fullFieldChordShouldSplit(const std::vector<PhraseNote>& notes, PatternKind kind) {
+    if (kind == PatternKind::Chord || kind == PatternKind::AnchorLn || kind == PatternKind::ReleaseLn) {
+        return true;
+    }
+    if (notes.size() < 2) {
+        return false;
+    }
+
+    std::map<int, std::vector<int>> lanesByTime;
+    for (const auto& note : notes) {
+        lanesByTime[note.time].push_back(note.sourceLane);
+    }
+    for (auto& [time, lanes] : lanesByTime) {
+        (void)time;
+        if (lanes.size() < 2) {
+            continue;
+        }
+        const auto [minIt, maxIt] = std::minmax_element(lanes.begin(), lanes.end());
+        if (*maxIt - *minIt >= 3) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void addFullFieldHint(GestureRail& rail,
+                      const PhraseNote& note,
+                      PatternKind kind,
+                      int motifId,
+                      bool leftHand,
+                      int sourceKeyCount,
+                      int targetKeyCount,
+                      int direction,
+                      int motifHitCount,
+                      int motifDurationMs,
+                      int sourceMin = 0,
+                      int sourceMax = -1) {
+    const auto [zoneStart, zoneEnd] = fullFieldHandZone(leftHand);
+    if (sourceMax < sourceMin) {
+        sourceMax = std::max(0, sourceKeyCount - 1);
+    }
+    GestureHint hint;
+    hint.motifId = motifId;
+    hint.kind = kind;
+    hint.role = fullFieldRole(leftHand);
+    hint.preferredLane =
+        fullFieldPreferredLane(note.sourceLane, sourceMin, sourceMax, zoneStart, zoneEnd, targetKeyCount);
+    hint.zoneStart = zoneStart;
+    hint.zoneEnd = zoneEnd;
+    hint.direction = direction;
+    hint.motifHitCount = motifHitCount;
+    hint.motifDurationMs = motifDurationMs;
+    rail.hintsByNoteId[note.id] = hint;
+}
+
+void addFullFieldTokenHints(GestureRail& rail,
+                            std::vector<PhraseNote> notes,
+                            const PatternToken& token,
+                            int motifId,
+                            int sourceKeyCount,
+                            int targetKeyCount,
+                            bool& primaryLeft) {
+    notes = sortedPhraseNotes(std::move(notes));
+    if (notes.empty()) {
+        return;
+    }
+
+    const int motifHitCount = static_cast<int>(notes.size());
+    const int motifDurationMs = motifHitCount >= 2 ? notes.back().time - notes.front().time : 0;
+    const auto [phraseSourceMin, phraseSourceMax] = sourceRangeForNotes(notes);
+    if (token.kind == PatternKind::Jack) {
+        for (const auto& note : notes) {
+            addFullFieldHint(rail,
+                             note,
+                             token.kind,
+                             motifId,
+                             primaryLeft,
+                             sourceKeyCount,
+                             targetKeyCount,
+                             token.direction,
+                             motifHitCount,
+                             motifDurationMs,
+                             phraseSourceMin,
+                             phraseSourceMax);
+        }
+        return;
+    }
+
+    if (token.kind == PatternKind::Trill) {
+        for (std::size_t index = 0; index < notes.size(); ++index) {
+            const bool leftHand = (index % 2 == 0) ? primaryLeft : !primaryLeft;
+            addFullFieldHint(rail,
+                             notes[index],
+                             token.kind,
+                             motifId,
+                             leftHand,
+                             sourceKeyCount,
+                             targetKeyCount,
+                             token.direction,
+                             motifHitCount,
+                             motifDurationMs,
+                             phraseSourceMin,
+                             phraseSourceMax);
+        }
+        primaryLeft = !primaryLeft;
+        return;
+    }
+
+    if (fullFieldChordShouldSplit(notes, token.kind)) {
+        const double sourceMid = static_cast<double>(std::max(0, sourceKeyCount - 1)) / 2.0;
+        std::vector<PhraseNote> leftNotes;
+        std::vector<PhraseNote> rightNotes;
+        for (const auto& note : notes) {
+            (static_cast<double>(note.sourceLane) <= sourceMid ? leftNotes : rightNotes).push_back(note);
+        }
+        const auto [leftSourceMin, leftSourceMax] = sourceRangeForNotes(leftNotes);
+        const auto [rightSourceMin, rightSourceMax] = sourceRangeForNotes(rightNotes);
+        for (const auto& note : notes) {
+            const bool leftHand = static_cast<double>(note.sourceLane) <= sourceMid;
+            addFullFieldHint(rail,
+                             note,
+                             token.kind,
+                             motifId,
+                             leftHand,
+                             sourceKeyCount,
+                             targetKeyCount,
+                             token.direction,
+                             motifHitCount,
+                             motifDurationMs,
+                             leftHand ? leftSourceMin : rightSourceMin,
+                             leftHand ? leftSourceMax : rightSourceMax);
+        }
+        primaryLeft = !primaryLeft;
+        return;
+    }
+
+    for (const auto& note : notes) {
+        addFullFieldHint(rail,
+                         note,
+                         token.kind,
+                         motifId,
+                         primaryLeft,
+                         sourceKeyCount,
+                         targetKeyCount,
+                         token.direction,
+                         motifHitCount,
+                         motifDurationMs,
+                         phraseSourceMin,
+                         phraseSourceMax);
+    }
+    primaryLeft = !primaryLeft;
+}
+
+void addFullFieldSourceJackGroupHints(GestureRail& rail,
+                                      const Chart& chart,
+                                      int sourceKeyCount,
+                                      int targetKeyCount,
+                                      int jackWindowMs,
+                                      int& motifId,
+                                      bool primaryLeft) {
+    const auto groups = detectJackGroups(chart.notes, RepeatLaneMode::SourceLane, jackWindowMs);
+    for (const auto& group : groups) {
+        bool anyAlreadyHinted = false;
+        for (const auto& id : group.noteIds) {
+            if (rail.hintsByNoteId.count(id) > 0) {
+                anyAlreadyHinted = true;
+                break;
+            }
+        }
+        if (anyAlreadyHinted) {
+            continue;
+        }
+
+        auto notes = sortedPhraseNotes(phraseNotesForJackGroup(chart, group));
+        if (notes.size() < 3) {
+            continue;
+        }
+        const int motifHitCount = static_cast<int>(notes.size());
+        const int motifDurationMs = notes.back().time - notes.front().time;
+        for (const auto& note : notes) {
+            addFullFieldHint(rail,
+                             note,
+                             PatternKind::Jack,
+                             motifId,
+                             primaryLeft,
+                             sourceKeyCount,
+                             targetKeyCount,
+                             0,
+                             motifHitCount,
+                             motifDurationMs);
+        }
+        ++motifId;
+    }
+}
+
+void addFullFieldFallbackHints(GestureRail& rail,
+                               const Chart& chart,
+                               int sourceKeyCount,
+                               int targetKeyCount,
+                               int& motifId,
+                               bool& primaryLeft) {
+    std::vector<PhraseNote> notes;
+    notes.reserve(chart.notes.size());
+    for (std::size_t index = 0; index < chart.notes.size(); ++index) {
+        const auto& note = chart.notes[index];
+        if (note.id.empty() || rail.hintsByNoteId.count(note.id) > 0) {
+            continue;
+        }
+        PhraseNote phraseNote;
+        phraseNote.noteIndex = index;
+        phraseNote.id = note.id;
+        phraseNote.sourceLane = note.sourceLane.value_or(note.lane);
+        phraseNote.time = note.time;
+        notes.push_back(std::move(phraseNote));
+    }
+
+    for (const auto& note : sortedPhraseNotes(std::move(notes))) {
+        addFullFieldHint(rail,
+                         note,
+                         PatternKind::Single,
+                         motifId++,
+                         primaryLeft,
+                         sourceKeyCount,
+                         targetKeyCount,
+                         0,
+                         1,
+                         0);
+        primaryLeft = !primaryLeft;
     }
 }
 
@@ -499,7 +791,8 @@ GestureRail buildGestureRail(const Chart& chart,
                              int targetKeyCount,
                              int sameTimeEpsilonMs,
                              int jackWindowMs,
-                             bool enabled) {
+                             bool enabled,
+                             bool fullTenKeyGestureZone) {
     GestureRail rail;
     rail.enabled = enabled;
     if (!enabled || chart.notes.empty() || sourceKeyCount <= 0 || targetKeyCount <= 0) {
@@ -518,17 +811,46 @@ GestureRail buildGestureRail(const Chart& chart,
             continue;
         }
         if (token.kind == PatternKind::StairUp || token.kind == PatternKind::StairDown) {
-            addStairHints(rail, notes, token, motifId, sourceKeyCount, targetKeyCount);
+            addStairHints(rail, notes, token, motifId, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
         } else if (token.kind == PatternKind::Trill) {
-            addTrillHints(rail, notes, motifId, sourceKeyCount, targetKeyCount);
+            addTrillHints(rail, notes, motifId, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
         } else if (token.kind == PatternKind::Jack) {
-            addJackHints(rail, notes, motifId, sourceKeyCount, targetKeyCount);
+            addJackHints(rail, notes, motifId, sourceKeyCount, targetKeyCount, fullTenKeyGestureZone);
         }
         ++motifId;
     }
 
-    addSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId);
+    addSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId, fullTenKeyGestureZone);
 
+    return rail;
+}
+
+GestureRail buildFullFieldRail(const Chart& chart,
+                               int sourceKeyCount,
+                               int targetKeyCount,
+                               int sameTimeEpsilonMs,
+                               int jackWindowMs,
+                               bool enabled) {
+    GestureRail rail;
+    rail.enabled = enabled;
+    if (!enabled || chart.notes.empty() || sourceKeyCount <= 0 || targetKeyCount != 10) {
+        return rail;
+    }
+
+    const auto slices = buildTimeSlices(chart, sourceKeyCount, sameTimeEpsilonMs);
+    const auto tokens = detectPatternTokens(slices, jackWindowMs);
+    int motifId = 0;
+    bool primaryLeft = true;
+    for (const auto& token : tokens) {
+        const auto notes = phraseNotesForToken(chart, slices, token);
+        if (notes.empty()) {
+            continue;
+        }
+        addFullFieldTokenHints(rail, notes, token, motifId++, sourceKeyCount, targetKeyCount, primaryLeft);
+    }
+
+    addFullFieldSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId, primaryLeft);
+    addFullFieldFallbackHints(rail, chart, sourceKeyCount, targetKeyCount, motifId, primaryLeft);
     return rail;
 }
 

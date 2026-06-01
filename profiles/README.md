@@ -24,3 +24,6 @@ as historical context for the density-bucket change.
 For 10K conversion tuning, Composer/Repair local pressure should use the 1000 ms
 `densityBuckets.low/mid/high/chordHeavy/jackRisk` window features from this profile,
 not chart-level `chartSummary` fields.
+Current profiles also include 10K center/split features (`centerBridgeRate`,
+`centerSplitBalance`, and `splitChordRate`) so the staged 7K -> 9K -> 10K planner
+can be judged against native 10K center usage instead of only lane entropy.

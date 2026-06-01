@@ -43,14 +43,21 @@ struct AssignmentContext {
     int targetKeyCount = 0;
     int jackWindowMs = 500;
     ConversionStyle style = ConversionStyle::Playable;
+    TenKeyPlannerPolicy tenKeyPlannerPolicy = TenKeyPlannerPolicy::Auto;
     PpgWeights weights;
     bool preserveLaneDrift = false;
+    bool tenKFullFieldRemix = false;
     int* preventedJacksByAssignment = nullptr;
     const GestureRail* gestureRail = nullptr;
 };
 
 PpgWeights weightsForStyle(ConversionStyle style);
 LaneCandidateSet generateCandidateLanes(int sourceLane, int sourceK, int targetK, ConversionStyle style);
+LaneCandidateSet generateCandidateLanes(int sourceLane,
+                                        int sourceK,
+                                        int targetK,
+                                        ConversionStyle style,
+                                        TenKeyPlannerPolicy tenKeyPlannerPolicy);
 std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
                                                       const std::vector<Note>& sourceNotes,
                                                       const AssignmentContext& context);

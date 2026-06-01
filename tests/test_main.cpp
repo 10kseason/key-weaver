@@ -4,6 +4,7 @@
 #include "core/convert.hpp"
 #include "core/expansion.hpp"
 #include "core/assignment.hpp"
+#include "core/gesture.hpp"
 #include "core/mapping.hpp"
 #include "core/optimizer.hpp"
 #include "core/pattern.hpp"
@@ -20,6 +21,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -93,6 +95,19 @@ void require(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+std::string distributionText(const std::vector<int>& values) {
+    std::ostringstream out;
+    out << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            out << ",";
+        }
+        out << values[i];
+    }
+    out << "]";
+    return out.str();
 }
 
 keyconv::Chart makeChart(int keyCount, const std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>>& notes) {
@@ -699,6 +714,252 @@ void testTenKeyNonJackSourceLaneAnchorRelaxesInsidePanel() {
             "10K non-jack relaxation should not create target jacks from different source lanes");
 }
 
+void testSevenToTenStagedPlannerSplitsCenterBridge() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    for (int i = 0; i < 10; ++i) {
+        keyconv::Note note;
+        note.id = "bridge" + std::to_string(i);
+        note.time = 1000 + i * 700;
+        note.lane = 3;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    std::set<int> unique(lanes.begin(), lanes.end());
+    require(result.report.quality.tenKeyPlanner == "staged-7-9-10",
+            "7K to 10K playable conversion should use the staged 7->9->10 planner by default");
+    require(unique.size() >= 2,
+            "the staged 9K center bridge should loosen source lane 3 across the 10K center split");
+    require(unique.count(4) > 0 || unique.count(3) > 0,
+            "center bridge should keep a left-center anchor");
+    require(unique.count(5) > 0 || unique.count(6) > 0,
+            "center bridge should expand into the right-center 5K panel");
+    for (const int lane : lanes) {
+        require(lane >= 3 && lane <= 6,
+                "center bridge expansion should stay near the middle lanes");
+    }
+    require(result.report.quality.createdJacks == 0,
+            "staged center bridge should not create target jacks");
+}
+
+void testSevenToTenMirrorCompressPlannerUsesFourteenLanePairs() {
+    const auto edgeSet =
+        keyconv::generateCandidateLanes(0,
+                                        7,
+                                        10,
+                                        keyconv::ConversionStyle::Playable,
+                                        keyconv::TenKeyPlannerPolicy::StagedMirrorCompress);
+    require(std::find(edgeSet.candidates.begin(), edgeSet.candidates.end(), 0) != edgeSet.candidates.end(),
+            "7->14->10 mirror planner should expose the left compressed edge");
+    require(std::find(edgeSet.candidates.begin(), edgeSet.candidates.end(), 9) != edgeSet.candidates.end(),
+            "7->14->10 mirror planner should expose the right compressed edge");
+
+    const auto centerSet =
+        keyconv::generateCandidateLanes(6,
+                                        7,
+                                        10,
+                                        keyconv::ConversionStyle::Playable,
+                                        keyconv::TenKeyPlannerPolicy::StagedMirrorCompress);
+    require(std::find(centerSet.candidates.begin(), centerSet.candidates.end(), 4) != centerSet.candidates.end(),
+            "7->14->10 mirror planner should expose the left center-compressed lane");
+    require(std::find(centerSet.candidates.begin(), centerSet.candidates.end(), 5) != centerSet.candidates.end(),
+            "7->14->10 mirror planner should expose the right center-compressed lane");
+
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    const int phrase[] = {0, 1, 2, 3, 4, 5, 6};
+    for (int i = 0; i < 21; ++i) {
+        keyconv::Note note;
+        note.id = "mirror" + std::to_string(i);
+        note.time = 1000 + i * 650;
+        note.lane = phrase[static_cast<std::size_t>(i % 7)];
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.tenKeyPlannerPolicy = keyconv::TenKeyPlannerPolicy::StagedMirrorCompress;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+
+    const auto result = keyconv::convertChart(chart, options);
+    require(result.report.quality.tenKeyPlanner == "staged-7-14-10",
+            "explicit 7->14->10 mirror-compress planner should be reported when active");
+    require(result.chart.notes.size() == chart.notes.size(),
+            "7->14->10 mirror-compress planner should preserve note count without tap-plus");
+    require(result.report.quality.createdJacks == 0,
+            "7->14->10 mirror-compress planner should not create target jacks");
+    require(result.report.quality.collisionCount == 0,
+            "7->14->10 mirror-compress planner should not create collisions");
+    require(result.report.quality.lnConflictCount == 0,
+            "7->14->10 mirror-compress planner should not create LN conflicts");
+}
+
+void testSevenToTenMirrorCompressPlannerFillsPanelCenters() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    const int phrase[] = {0, 1, 2, 4, 5, 6};
+    for (int i = 0; i < 120; ++i) {
+        keyconv::Note note;
+        note.id = "panel_center" + std::to_string(i);
+        note.time = 1000 + i * 220;
+        note.lane = phrase[static_cast<std::size_t>(i % 6)];
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.tenKeyPlannerPolicy = keyconv::TenKeyPlannerPolicy::StagedMirrorCompress;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+
+    const auto result = keyconv::convertChart(chart, options);
+    const auto distribution = result.report.laneDistribution;
+    require(distribution.size() == 10, "mirror-compress panel-center fixture should produce 10 lanes");
+    const double leftAverage =
+        static_cast<double>(distribution[0] + distribution[1] + distribution[2] + distribution[3] + distribution[4]) /
+        5.0;
+    const double rightAverage =
+        static_cast<double>(distribution[5] + distribution[6] + distribution[7] + distribution[8] + distribution[9]) /
+        5.0;
+    require(distribution[2] >= static_cast<int>(leftAverage * 0.55),
+            "mirror-compress should backfill left 5K panel center lane: " + distributionText(distribution));
+    require(distribution[7] >= static_cast<int>(rightAverage * 0.55),
+            "mirror-compress should backfill right 5K panel center lane: " + distributionText(distribution));
+    require(result.report.quality.createdJacks == 0,
+            "mirror-compress panel-center fill should not create target jacks");
+    require(result.report.quality.collisionCount == 0,
+            "mirror-compress panel-center fill should not create collisions");
+    require(result.report.quality.lnConflictCount == 0,
+            "mirror-compress panel-center fill should not create LN conflicts");
+}
+
+void testTenKeyFullFieldRemixRotatesEchoWithinOppositeZone() {
+    require(keyconv::rotateWithinZone(9, 0, 5, 5, 2) == 9,
+            "phase rotation should keep the mirror lane at slice zero");
+    require(keyconv::rotateWithinZone(9, 1, 5, 5, 2) == 6,
+            "phase step 2 should move through the 5-lane zone");
+    require(keyconv::rotateWithinZone(9, 4, 5, 5, 2) == 7,
+            "phase step 2 should visit the full 5-lane zone before repeating");
+}
+
+void testTenKeyFullFieldRailCoversAllNotesWithoutStructChanges() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    const int phrase[] = {0, 1, 2, 3, 4, 5, 6};
+    for (int i = 0; i < 14; ++i) {
+        keyconv::Note note;
+        note.id = "rail" + std::to_string(i);
+        note.time = 1000 + i * 250;
+        note.lane = phrase[static_cast<std::size_t>(i % 7)];
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    const auto rail = keyconv::buildFullFieldRail(chart, 7, 10, 2, 500, true);
+    require(rail.enabled, "full-field rail should stay enabled when requested");
+    require(rail.hintsByNoteId.size() == chart.notes.size(),
+            "full-field rail should provide a hint for each source note");
+    const auto first = rail.hintsByNoteId.find("rail0");
+    require(first != rail.hintsByNoteId.end(), "full-field rail should include the first note");
+    require(first->second.role == keyconv::PhraseRole::LeftHandVoice,
+            "full-field rail should start the primary phrase on the left hand");
+    require(first->second.zoneStart == 0 && first->second.zoneEnd == 4,
+            "left-hand full-field zone should be lanes 0..4");
+}
+
+void testTenKeyFullFieldRemixDensityAndSafety() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    addTimingPoint(chart);
+    const int phrase[] = {0, 1, 2, 3, 4, 5, 6};
+    for (int i = 0; i < 20; ++i) {
+        keyconv::Note note;
+        note.id = "fullfield" + std::to_string(i);
+        note.time = 1000 + i * 250;
+        note.lane = phrase[static_cast<std::size_t>(i % 7)];
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.collisionPolicy = keyconv::CollisionPolicy::ShiftNearest;
+    options.tenKFullFieldRemix = true;
+    options.tenKFullFieldRemixDensityCeiling = 1.6;
+    options.tenKFullFieldRemixPhaseStep = 2;
+    options.maxAddedPerMeasure = 64;
+
+    const keyconv::Converter converter;
+    const auto first = converter.convert(chart, options);
+    const auto second = converter.convert(chart, options);
+    require(keyconv::exportOsu(first.chart, 10) == keyconv::exportOsu(second.chart, 10),
+            "full-field remix should be deterministic");
+    require(keyconv::reportToJson(first.report) == keyconv::reportToJson(second.report),
+            "full-field remix report should be deterministic");
+
+    const auto& quality = first.report.quality;
+    require(quality.expansionComposerProfile == "full-field-remix",
+            "full-field remix should report the dedicated composer profile");
+    require(std::abs(quality.targetAddedNoteRatio - 0.60) < 1e-9,
+            "full-field remix should use the mode-local 60 percent added-note target");
+    const double totalRatio =
+        static_cast<double>(first.chart.notes.size()) / static_cast<double>(chart.notes.size());
+    require(totalRatio >= 1.45 && totalRatio <= 1.65,
+            "full-field remix should land near the 1.6x density target");
+    require(quality.createdJacks == 0, "full-field remix should not create target jacks");
+    require(quality.collisionCount == 0, "full-field remix should not create collisions");
+    require(quality.lnConflictCount == 0, "full-field remix should not create LN conflicts");
+
+    std::set<int> usedLanes;
+    std::map<int, std::vector<int>> lanesByTime;
+    for (const auto& note : first.chart.notes) {
+        usedLanes.insert(note.lane);
+        lanesByTime[note.time].push_back(note.lane);
+    }
+    require(usedLanes.size() == 10, "full-field remix should exercise all 10 lanes");
+    for (auto& [time, lanes] : lanesByTime) {
+        (void)time;
+        std::vector<int> left;
+        std::vector<int> right;
+        for (const int lane : lanes) {
+            (lane < 5 ? left : right).push_back(lane);
+        }
+        for (const auto& hand : {left, right}) {
+            if (hand.empty()) {
+                continue;
+            }
+            const auto [minIt, maxIt] = std::minmax_element(hand.begin(), hand.end());
+            require(*maxIt - *minIt <= 4,
+                    "full-field remix same-slice chord should stay within per-hand 5-lane reach");
+        }
+    }
+}
+
 void testEightKeyPlayableCandidateRadiusRemainsStable() {
     const auto eightKey = keyconv::generateCandidateLanes(1, 7, 8, keyconv::ConversionStyle::Playable);
 
@@ -830,6 +1091,12 @@ void testTargetKLikenessReportSevenToTen() {
             "Target-K likeness should keep anchor preservation visible while allowing 10K coverage pressure");
     require(quality.patternVocabularyScore > 0.0, "Target-K likeness should score preserved vocabulary");
     require(quality.addedRatioFitScore > 0.0, "Target-K likeness should score added-note fit without a fixed cap");
+    require(quality.centerBridgeRate > 0.0, "Target-K likeness should measure 10K center bridge usage");
+    require(quality.centerBridgeScore > 0.0, "Target-K likeness should score 10K center bridge usage");
+    require(quality.centerSplitBalanceScore >= 0.0,
+            "Target-K likeness should expose center split balance scoring");
+    require(quality.splitChordScore >= 0.0,
+            "Target-K likeness should expose split-chord scoring");
     require(quality.targetKSafetyScore == 1.0, "safe conversion should keep full Target-K safety score");
 
     const auto json = keyconv::reportToJson(result.report);
@@ -837,6 +1104,10 @@ void testTargetKLikenessReportSevenToTen() {
             "JSON report should include K-likeness score");
     require(json.find("\"adjacentExpansionScore\"") != std::string::npos,
             "JSON report should include adjacent expansion score");
+    require(json.find("\"centerBridgeRate\"") != std::string::npos,
+            "JSON report should include center bridge rate");
+    require(json.find("\"splitChordScore\"") != std::string::npos,
+            "JSON report should include split-chord score");
 }
 
 void testTargetKLikenessUsesReferenceProfile() {
@@ -865,6 +1136,9 @@ void testTargetKLikenessUsesReferenceProfile() {
     profile.desiredChordSpan = 0.55;
     profile.desiredHandBalance = 0.90;
     profile.desiredAdjacentExpansion = 0.25;
+    profile.desiredCenterBridgeRate = 0.45;
+    profile.desiredCenterSplitBalance = 0.50;
+    profile.desiredSplitChordRate = 0.20;
 
     keyconv::ConvertOptions options;
     options.sourceKeyCount = 7;
@@ -888,6 +1162,8 @@ void testTargetKLikenessUsesReferenceProfile() {
             "Target-K report should expose reference profile author");
     require(result.report.quality.kLikenessScore > 0.0,
             "Target-K report should still compute score with reference profile");
+    require(result.report.quality.centerBridgeScore > 0.0,
+            "Target-K report should use reference profile center bridge metrics");
 }
 
 void testAdaptiveGrowthBudgetReportsProfileWindows() {
@@ -3691,6 +3967,18 @@ int main() {
         {"7K to 10K sparse source-lane anchor", testSevenToTenSparseSourceLaneAnchor},
         {"10K non-jack source-lane anchor relaxes inside panel",
          testTenKeyNonJackSourceLaneAnchorRelaxesInsidePanel},
+        {"7K to 10K staged planner splits center bridge",
+         testSevenToTenStagedPlannerSplitsCenterBridge},
+        {"7K to 10K mirror-compress planner uses 14-lane pairs",
+         testSevenToTenMirrorCompressPlannerUsesFourteenLanePairs},
+        {"7K to 10K mirror-compress planner fills panel centers",
+         testSevenToTenMirrorCompressPlannerFillsPanelCenters},
+        {"10K full-field remix rotates echo within opposite zone",
+         testTenKeyFullFieldRemixRotatesEchoWithinOppositeZone},
+        {"10K full-field rail covers all notes",
+         testTenKeyFullFieldRailCoversAllNotesWithoutStructChanges},
+        {"10K full-field remix density and safety",
+         testTenKeyFullFieldRemixDensityAndSafety},
         {"8K playable candidate radius remains stable", testEightKeyPlayableCandidateRadiusRemainsStable},
         {"7K to 10K non-gesture chords stay in source panels",
          testSevenToTenNonGestureChordsStayInSourcePanels},

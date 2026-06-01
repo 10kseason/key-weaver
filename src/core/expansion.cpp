@@ -2,6 +2,7 @@
 
 #include "core/collision.hpp"
 #include "core/distance.hpp"
+#include "core/gesture.hpp"
 #include "core/mapping.hpp"
 #include "core/pattern.hpp"
 #include "core/repeat.hpp"
@@ -18,6 +19,20 @@
 #include <sstream>
 
 namespace keyconv {
+
+int rotateWithinZone(int mirrorLane, int sliceIndex, int zoneStart, int zoneWidth, int phaseStep) {
+    if (zoneWidth <= 0) {
+        return zoneStart;
+    }
+    const auto positiveModulo = [](int value, int modulo) {
+        const int result = value % modulo;
+        return result < 0 ? result + modulo : result;
+    };
+    const int base = mirrorLane - zoneStart;
+    const int offset = positiveModulo(sliceIndex * phaseStep, zoneWidth);
+    const int index = positiveModulo(base + offset, zoneWidth);
+    return zoneStart + index;
+}
 
 namespace {
 
@@ -186,6 +201,14 @@ ExpansionPolicy effectiveExpansionPolicy(const ConvertOptions& options) {
     return options.expansionPolicy;
 }
 
+bool tenKFullFieldRemixActive(const ConvertOptions& options) {
+    return options.targetKeyCount == 10 && options.tenKFullFieldRemix;
+}
+
+double tenKFullFieldRemixTargetRatio(const ConvertOptions& options) {
+    return std::max(0.0, options.tenKFullFieldRemixDensityCeiling - 1.0);
+}
+
 ExpansionComposerSettings composerSettingsForPolicy(ExpansionPolicy policy,
                                                     StreamEchoProfile streamProfile,
                                                     int sourceKeyCount,
@@ -227,6 +250,9 @@ ExpansionComposerSettings composerSettingsForPolicy(ExpansionPolicy policy,
 }
 
 ExpansionComposerSettings composerSettingsForOptions(const ConvertOptions& options) {
+    if (tenKFullFieldRemixActive(options)) {
+        return {"full-field-remix", tenKFullFieldRemixTargetRatio(options)};
+    }
     return composerSettingsForPolicy(effectiveExpansionPolicy(options),
                                      options.streamEchoProfile,
                                      options.sourceKeyCount,
@@ -234,6 +260,9 @@ ExpansionComposerSettings composerSettingsForOptions(const ConvertOptions& optio
 }
 
 double effectiveTargetAddedNoteRatio(const ConvertOptions& options) {
+    if (tenKFullFieldRemixActive(options)) {
+        return tenKFullFieldRemixTargetRatio(options);
+    }
     const auto composer = composerSettingsForOptions(options);
     if (composer.targetAddedRatio <= 0.0) {
         return 0.0;
@@ -473,6 +502,9 @@ int maxAddedTotal(const Chart& original, const ConvertOptions& options) {
     if (targetRatio <= 0.0 || original.notes.empty()) {
         return 0;
     }
+    if (tenKFullFieldRemixActive(options)) {
+        return static_cast<int>(std::floor(static_cast<double>(original.notes.size()) * targetRatio));
+    }
     if (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusMore ||
         effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
         effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow) {
@@ -491,6 +523,9 @@ int adaptiveBudgetWindowMs(const ConvertOptions& options) {
 }
 
 bool adaptiveBudgetEnabledFor(const ConvertOptions& options) {
+    if (tenKFullFieldRemixActive(options)) {
+        return options.targetKeyCount > options.sourceKeyCount;
+    }
     return options.targetKProfile.has_value() &&
            (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusMore ||
             effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
@@ -777,7 +812,6 @@ double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
         return 0.0;
     }
 
-    const auto& profile = *options.targetKProfile;
     const double densityNps = static_cast<double>(window.originalNotes) * 1000.0 /
                               static_cast<double>(std::max(1, window.endMs - window.startMs));
     const double holdRate = static_cast<double>(window.holdNotes) /
@@ -786,6 +820,15 @@ double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
                              static_cast<double>(std::max(1, window.totalSlices));
     const double jackRiskRate = static_cast<double>(window.jackRiskPairs) /
                                 static_cast<double>(std::max(1, window.originalNotes));
+    if (!options.targetKProfile.has_value()) {
+        const double densityRoom = adaptiveDensityRoom(densityNps);
+        const double patternSafety = adaptivePatternSafety(holdRate, chordRate);
+        const double hardMax =
+            tenKFullFieldRemixActive(options) ? globalTargetRatio : std::min(options.maxAddedNoteRatio, 0.45);
+        return std::clamp(globalTargetRatio * densityRoom * patternSafety, 0.0, hardMax);
+    }
+
+    const auto& profile = *options.targetKProfile;
     const auto bucketChoice =
         chooseAdaptiveBucket(window, options, densityNps, chordRate, jackRiskRate);
 
@@ -816,8 +859,10 @@ double adaptiveLocalRatio(const AdaptiveGrowthWindow& window,
         adjacentPressure = std::clamp(0.85 + profile.desiredAdjacentExpansion, 0.85, 1.25);
     }
     const bool lowGrowth = effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow;
-    const double hardMax = lowGrowth ? std::min(options.maxAddedNoteRatio, globalTargetRatio)
-                                     : std::min(options.maxAddedNoteRatio, 0.45);
+    const double hardMax = tenKFullFieldRemixActive(options)
+                               ? globalTargetRatio
+                               : lowGrowth ? std::min(options.maxAddedNoteRatio, globalTargetRatio)
+                                           : std::min(options.maxAddedNoteRatio, 0.45);
     return std::clamp(globalTargetRatio *
                           densityRoom *
                           patternSafety *
@@ -1484,6 +1529,32 @@ double mirrorSymmetryScore(const ExpansionContext& context, int lane) {
     return std::max(-8.0, std::min(8.0, static_cast<double>(mirrorUse - laneUse) * 1.75));
 }
 
+bool stagedMirrorCompressExpansionActive(const ConvertOptions& options) {
+    return options.sourceKeyCount == 7 &&
+           options.targetKeyCount == 10 &&
+           options.tenKeyPlannerPolicy == TenKeyPlannerPolicy::StagedMirrorCompress;
+}
+
+double stagedMirrorPanelCenterScore(const ExpansionContext& context, int lane) {
+    if (!stagedMirrorCompressExpansionActive(context.options) ||
+        (lane != 2 && lane != 7) ||
+        context.laneUse.size() < 10) {
+        return 0.0;
+    }
+
+    const int panelStart = lane < 5 ? 0 : 5;
+    const int panelEnd = panelStart + 4;
+    int panelUse = 0;
+    for (int panelLane = panelStart; panelLane <= panelEnd; ++panelLane) {
+        panelUse += context.laneUse[static_cast<std::size_t>(panelLane)];
+    }
+    const double panelAverage = static_cast<double>(panelUse) / 5.0;
+    const double centerUse = static_cast<double>(context.laneUse[static_cast<std::size_t>(lane)]);
+    const double centerNeed =
+        std::clamp((panelAverage - centerUse) / std::max(1.0, panelAverage), 0.0, 1.0);
+    return centerNeed * 32.0;
+}
+
 int positiveModulo(int value, int divisor) {
     if (divisor <= 0) {
         return 0;
@@ -1618,6 +1689,7 @@ void tuneHighKeyGeneratedCandidate(ExpansionCandidate& candidate, const Expansio
 
     candidate.score += tenKeyDenimBeatShiftScore(candidate, context);
     candidate.score += mirrorSymmetryScore(context, candidate.note.lane);
+    candidate.score += stagedMirrorPanelCenterScore(context, candidate.note.lane);
     candidate.score -= lightEdgePenalty(candidate.note.lane, context.options.targetKeyCount);
     candidate.score -= outerEdgeTrillPenalty(context.chart.notes,
                                              candidate.note.lane,
@@ -2047,6 +2119,81 @@ void applyPreserveTapPlus(ExpansionContext& context) {
                 ++addedInThisSlice;
             }
         }
+    }
+}
+
+bool fullFieldEchoSuppressed(PatternKind kind) {
+    return kind == PatternKind::Jack || kind == PatternKind::Trill || kind == PatternKind::Chord ||
+           kind == PatternKind::AnchorLn || kind == PatternKind::ReleaseLn;
+}
+
+std::optional<int> deriveFullFieldEchoLane(const GestureHint* hint,
+                                           int primaryLane,
+                                           int sliceIndex,
+                                           const ConvertOptions& options) {
+    const PatternKind kind = hint != nullptr ? hint->kind : PatternKind::Single;
+    if (fullFieldEchoSuppressed(kind) || primaryLane < 0 || primaryLane >= options.targetKeyCount ||
+        options.targetKeyCount != 10) {
+        return std::nullopt;
+    }
+
+    const int echoZoneStart = primaryLane < 5 ? 5 : 0;
+    const int mirrorLane = options.targetKeyCount - 1 - primaryLane;
+    const int phaseStep = options.tenKFullFieldRemixPhaseStep == 3 ? 3 : 2;
+    return rotateWithinZone(mirrorLane, sliceIndex, echoZoneStart, 5, phaseStep);
+}
+
+void applyFullFieldMirrorRemix(ExpansionContext& context) {
+    if (!tenKFullFieldRemixActive(context.options)) {
+        return;
+    }
+
+    const auto rail = buildFullFieldRail(context.original,
+                                         context.options.sourceKeyCount,
+                                         context.options.targetKeyCount,
+                                         context.options.sameTimeEpsilonMs,
+                                         context.options.jackWindowMs,
+                                         context.options.gestureRailEnabled);
+    auto slices = buildSliceViews(context.chart.notes, context.options.sameTimeEpsilonMs);
+    sortExpansionSlices(slices, context);
+    int ordinal = 0;
+    for (const auto& slice : slices) {
+        if (context.stats.addedNotes >= context.maxAdded) {
+            break;
+        }
+        if (slice.noteIndices.size() != 1) {
+            continue;
+        }
+        const auto noteIndex = slice.noteIndices.front();
+        if (noteIndex >= context.chart.notes.size()) {
+            continue;
+        }
+        const auto& primary = context.chart.notes[noteIndex];
+        const auto* hint = findGestureHint(&rail, primary.id);
+        const auto echoLane = deriveFullFieldEchoLane(hint, primary.lane, slice.index, context.options);
+        if (!echoLane.has_value()) {
+            continue;
+        }
+
+        ExpansionCandidate candidate;
+        candidate.note.time = primary.time;
+        candidate.note.lane = *echoLane;
+        candidate.note.type = NoteType::Tap;
+        candidate.note.sourceLane = primary.sourceLane.value_or(primary.lane);
+        candidate.ruleName = "echo";
+        candidate.echoKind = "fullfield";
+        candidate.sourceNoteIds = {primary.id};
+        candidate.sourcePatternStart = hint != nullptr ? hint->motifId : slice.index;
+        candidate.sourceSliceIndex = slice.index;
+        candidate.sourceNoteIndex = static_cast<int>(noteIndex);
+        candidate.ordinal = ordinal++;
+        candidate.score =
+            120.0 - static_cast<double>(context.laneUse[static_cast<std::size_t>(*echoLane)]) * 0.35;
+        candidate.rhythmDriftAbs = 0;
+        candidate.snapPriority = 1;
+        candidate.laneMovement = std::abs(primary.lane - *echoLane);
+        tuneHighKeyGeneratedCandidate(candidate, context);
+        context.tryAdd(candidate);
     }
 }
 
@@ -2640,6 +2787,11 @@ ExpansionPolicy resolveExpansionPolicy(const ConvertOptions& options) {
 }
 
 void applyExpansionComposer(ExpansionContext& context, ExpansionPolicy policy) {
+    if (tenKFullFieldRemixActive(context.options)) {
+        applyFullFieldMirrorRemix(context);
+        return;
+    }
+
     if (policy == ExpansionPolicy::PreserveTapPlusMore ||
         policy == ExpansionPolicy::PreserveTapPlus ||
         policy == ExpansionPolicy::PreserveTapPlusLow) {
@@ -2697,7 +2849,9 @@ ExpansionPlanStats applyExpansionPlanner(Chart& converted,
     const auto policy = resolveExpansionPolicy(options);
     context.stats.policy = policy;
     context.stats.streamEchoProfile = options.streamEchoProfile;
-    context.stats.deterministic = options.deterministicExpansion && policy != ExpansionPolicy::SeededRandomRemix;
+    context.stats.deterministic = options.deterministicExpansion &&
+                                  (tenKFullFieldRemixActive(options) ||
+                                   policy != ExpansionPolicy::SeededRandomRemix);
 
     if (!options.deterministicExpansion) {
         context.stats.warnings.push_back(
@@ -2705,12 +2859,12 @@ ExpansionPlanStats applyExpansionPlanner(Chart& converted,
         context.stats.deterministic = true;
     }
 
-    if (policy == ExpansionPolicy::PreserveNoteCount) {
+    if (policy == ExpansionPolicy::PreserveNoteCount && !tenKFullFieldRemixActive(options)) {
         finishStats(context);
         return context.stats;
     }
 
-    if (policy == ExpansionPolicy::SeededRandomRemix) {
+    if (policy == ExpansionPolicy::SeededRandomRemix && !tenKFullFieldRemixActive(options)) {
         context.stats.warnings.push_back(
             "Warning: seeded-random expansion is reserved but not implemented in this version; no random notes added.");
         finishStats(context);

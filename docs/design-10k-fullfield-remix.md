@@ -20,7 +20,7 @@ This document locks the gated `--ten-k-fullfield-remix` experiment. It is a tran
 
 - [LOCKED] `buildFullFieldRail` reuses detected `PatternToken`s and writes ordinary `GestureHint` entries.
 - [LOCKED] Left hand is lanes `0..4`; right hand is lanes `5..9`.
-- [LOCKED] Primary phrases start on the left hand and trade hands by phrase.
+- [LOCKED] Primary short phrases trade hands by phrase; long stream/burst/stair phrases alternate hands inside the phrase so one token cannot collapse into one side of the 10K field.
 - [LOCKED] Jacks keep their hand anchor and do not flip.
 - [LOCKED] Trills split alternating hands and suppress echoes.
 - [LOCKED] Wide chords split across hands and suppress echoes.

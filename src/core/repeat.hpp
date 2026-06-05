@@ -2,6 +2,7 @@
 
 #include "core/chart.hpp"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -44,7 +45,12 @@ struct CreatedJackPair {
     bool involvesGenerated = false;
 };
 
+struct SourceNoteIndex {
+    std::map<std::string, const Note*> byId;
+};
+
 bool isGeneratedNoteId(const std::string& id);
+SourceNoteIndex buildSourceNoteIndex(const Chart& chart);
 std::vector<JackGroup> detectJackGroups(const std::vector<Note>& notes,
                                         RepeatLaneMode laneMode,
                                         int jackWindowMs);
@@ -55,10 +61,23 @@ bool isSourceJackIntent(const Chart& original,
                         const Note& first,
                         const Note& second,
                         int jackWindowMs);
+bool isSourceJackIntent(const SourceNoteIndex& sourceIndex,
+                        const Note& first,
+                        const Note& second,
+                        int jackWindowMs);
 std::vector<CreatedJackPair> detectCreatedJackPairs(const Chart& original,
                                                     const std::vector<Note>& converted,
                                                     int jackWindowMs);
+std::vector<CreatedJackPair> detectCreatedJackPairs(const SourceNoteIndex& sourceIndex,
+                                                    const std::vector<Note>& converted,
+                                                    int jackWindowMs);
 bool wouldCreateCreatedJackOnLane(const Chart& original,
+                                  const std::vector<Note>& converted,
+                                  const Note& candidate,
+                                  int candidateLane,
+                                  int jackWindowMs,
+                                  int ignoredIndex = -1);
+bool wouldCreateCreatedJackOnLane(const SourceNoteIndex& sourceIndex,
                                   const std::vector<Note>& converted,
                                   const Note& candidate,
                                   int candidateLane,

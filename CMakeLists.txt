@@ -22,6 +22,10 @@ add_library(keyconv_core
     src/core/repeat.cpp
     src/core/report.cpp
     src/core/slice.cpp
+    src/nk2/intent_graph.cpp
+    src/nk2/layout_model.cpp
+    src/nk2/nk2_convert.cpp
+    src/nk2/nk2_report.cpp
     src/exporter/bms.cpp
     src/exporter/osu.cpp
     src/parser/bms.cpp

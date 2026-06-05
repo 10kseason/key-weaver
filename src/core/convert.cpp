@@ -550,7 +550,7 @@ std::vector<Note> notesExcept(const std::vector<Note>& notes, int ignoredIndex) 
     return others;
 }
 
-bool relaneCandidateIsSafe(const Chart& original,
+bool relaneCandidateIsSafe(const SourceNoteIndex& sourceIndex,
                            const std::vector<Note>& notes,
                            int noteIndex,
                            int candidateLane,
@@ -572,7 +572,7 @@ bool relaneCandidateIsSafe(const Chart& original,
         hasDistanceConflict(others, moved, options, false)) {
         return false;
     }
-    return !wouldCreateCreatedJackOnLane(original,
+    return !wouldCreateCreatedJackOnLane(sourceIndex,
                                         notes,
                                         moved,
                                         candidateLane,
@@ -596,17 +596,152 @@ std::vector<int> relaneOrder(const std::vector<Note>& notes, const CreatedJackPa
     return order;
 }
 
-bool tryRelaneCreatedJack(const Chart& original,
+bool tryRelaneCreatedJack(const SourceNoteIndex& sourceIndex,
                           std::vector<Note>& notes,
                           const CreatedJackPair& pair,
                           const ConvertOptions& options) {
     for (const int noteIndex : relaneOrder(notes, pair)) {
         const int currentLane = notes[static_cast<std::size_t>(noteIndex)].lane;
         for (const int lane : orderedLaneCandidates(currentLane, options.targetKeyCount)) {
-            if (relaneCandidateIsSafe(original, notes, noteIndex, lane, options)) {
+            if (relaneCandidateIsSafe(sourceIndex, notes, noteIndex, lane, options)) {
                 notes[static_cast<std::size_t>(noteIndex)].lane = lane;
                 return true;
             }
+        }
+    }
+    return false;
+}
+
+std::optional<int> sameTimeNoteIndexAtLane(const std::vector<Note>& notes,
+                                           int ignoredIndex,
+                                           int time,
+                                           int lane) {
+    for (std::size_t index = 0; index < notes.size(); ++index) {
+        if (static_cast<int>(index) == ignoredIndex) {
+            continue;
+        }
+        const auto& note = notes[index];
+        if (note.time == time && note.lane == lane) {
+            return static_cast<int>(index);
+        }
+    }
+    return std::nullopt;
+}
+
+bool relaneLayoutIsSafer(const Chart& original,
+                         const SourceNoteIndex& sourceIndex,
+                         const std::vector<Note>& notes,
+                         const ConvertOptions& options,
+                         int currentCreatedJacks) {
+    const auto collision = detectCollisions(notes);
+    if (collision.sameTimeCollisions > 0 || collision.longNoteConflicts > 0) {
+        return false;
+    }
+
+    const auto distance = validateDistance(notes, options, original.timingPoints, {});
+    if (distance.nearTimeConflicts > 0 || distance.sameLaneNearConflicts > 0) {
+        return false;
+    }
+
+    return static_cast<int>(detectCreatedJackPairs(sourceIndex, notes, options.jackWindowMs).size()) <
+           currentCreatedJacks;
+}
+
+bool relaneLayoutHasNoHardConflicts(const Chart& original,
+                                    const std::vector<Note>& notes,
+                                    const ConvertOptions& options) {
+    const auto collision = detectCollisions(notes);
+    if (collision.sameTimeCollisions > 0 || collision.longNoteConflicts > 0) {
+        return false;
+    }
+
+    const auto distance = validateDistance(notes, options, original.timingPoints, {});
+    return distance.nearTimeConflicts == 0 && distance.sameLaneNearConflicts == 0;
+}
+
+std::string createdJackPairKey(const CreatedJackPair& pair) {
+    return pair.firstId + "|" + pair.secondId + "|" + std::to_string(pair.lane);
+}
+
+bool containsCreatedJackPairKey(const std::vector<CreatedJackPair>& pairs, const std::string& key) {
+    return std::any_of(pairs.begin(), pairs.end(), [&](const auto& pair) {
+        return createdJackPairKey(pair) == key;
+    });
+}
+
+bool trySwapSameTimeBlockerForCreatedJack(const Chart& original,
+                                          const SourceNoteIndex& sourceIndex,
+                                          std::vector<Note>& notes,
+                                          const CreatedJackPair& pair,
+                                          const ConvertOptions& options) {
+    const int currentCreatedJacks =
+        static_cast<int>(detectCreatedJackPairs(sourceIndex, notes, options.jackWindowMs).size());
+    if (currentCreatedJacks <= 0) {
+        return false;
+    }
+
+    for (const int noteIndex : relaneOrder(notes, pair)) {
+        const auto& note = notes[static_cast<std::size_t>(noteIndex)];
+        const int originalLane = note.lane;
+        for (int targetLane = 0; targetLane < options.targetKeyCount; ++targetLane) {
+            if (targetLane == originalLane) {
+                continue;
+            }
+            const auto blockerIndex = sameTimeNoteIndexAtLane(notes, noteIndex, note.time, targetLane);
+            if (!blockerIndex.has_value()) {
+                continue;
+            }
+
+            for (const int blockerLane : orderedLaneCandidates(originalLane, options.targetKeyCount)) {
+                if (blockerLane == targetLane) {
+                    continue;
+                }
+                auto trial = notes;
+                trial[static_cast<std::size_t>(noteIndex)].lane = targetLane;
+                trial[static_cast<std::size_t>(*blockerIndex)].lane = blockerLane;
+                if (relaneLayoutIsSafer(original, sourceIndex, trial, options, currentCreatedJacks)) {
+                    notes = std::move(trial);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool tryChainRelaneCreatedJack(const Chart& original,
+                               const SourceNoteIndex& sourceIndex,
+                               std::vector<Note>& notes,
+                               const CreatedJackPair& pair,
+                               const ConvertOptions& options) {
+    const auto currentPairs = detectCreatedJackPairs(sourceIndex, notes, options.jackWindowMs);
+    const int currentCreatedJacks = static_cast<int>(currentPairs.size());
+    if (currentCreatedJacks <= 0) {
+        return false;
+    }
+    const auto currentPairKey = createdJackPairKey(pair);
+
+    for (const int noteIndex : relaneOrder(notes, pair)) {
+        const int currentLane = notes[static_cast<std::size_t>(noteIndex)].lane;
+        for (const int lane : orderedLaneCandidates(currentLane, options.targetKeyCount)) {
+            if (lane == currentLane) {
+                continue;
+            }
+
+            auto trial = notes;
+            trial[static_cast<std::size_t>(noteIndex)].lane = lane;
+            if (!relaneLayoutHasNoHardConflicts(original, trial, options)) {
+                continue;
+            }
+
+            const auto trialPairs = detectCreatedJackPairs(sourceIndex, trial, options.jackWindowMs);
+            if (static_cast<int>(trialPairs.size()) > currentCreatedJacks ||
+                containsCreatedJackPairKey(trialPairs, currentPairKey)) {
+                continue;
+            }
+
+            notes = std::move(trial);
+            return true;
         }
     }
     return false;
@@ -841,15 +976,17 @@ JackSanitizerStats sanitizeCreatedJacks(const Chart& original,
                                         std::vector<Note>& notes,
                                         const ConvertOptions& options) {
     JackSanitizerStats stats;
+    const auto sourceIndex = buildSourceNoteIndex(original);
+    std::set<std::string> seenFallbackPairs;
     int guard = 0;
     while (guard++ < 512) {
-        const auto pairs = detectCreatedJackPairs(original, notes, options.jackWindowMs);
+        const auto pairs = detectCreatedJackPairs(sourceIndex, notes, options.jackWindowMs);
         if (pairs.empty()) {
             return stats;
         }
 
         const auto& pair = pairs.front();
-        if (tryRelaneCreatedJack(original, notes, pair, options)) {
+        if (tryRelaneCreatedJack(sourceIndex, notes, pair, options)) {
             ++stats.sanitizedCreatedJacks;
             continue;
         }
@@ -869,16 +1006,28 @@ JackSanitizerStats sanitizeCreatedJacks(const Chart& original,
             continue;
         }
 
+        if (trySwapSameTimeBlockerForCreatedJack(original, sourceIndex, notes, pair, options)) {
+            ++stats.sanitizedCreatedJacks;
+            continue;
+        }
+
+        const auto pairKey = createdJackPairKey(pair);
+        if (seenFallbackPairs.insert(pairKey).second &&
+            tryChainRelaneCreatedJack(original, sourceIndex, notes, pair, options)) {
+            ++stats.sanitizedCreatedJacks;
+            continue;
+        }
+
         stats.unsolvedCreatedJacks = static_cast<int>(pairs.size());
         return stats;
     }
 
     stats.unsolvedCreatedJacks =
-        static_cast<int>(detectCreatedJackPairs(original, notes, options.jackWindowMs).size());
+        static_cast<int>(detectCreatedJackPairs(sourceIndex, notes, options.jackWindowMs).size());
     return stats;
 }
 
-bool retimeCandidateIsSafe(const Chart& original,
+bool retimeCandidateIsSafe(const SourceNoteIndex& sourceIndex,
                            const std::vector<Note>& notes,
                            int noteIndex,
                            int newTime,
@@ -907,7 +1056,7 @@ bool retimeCandidateIsSafe(const Chart& original,
         hasDistanceConflict(others, moved, options, false)) {
         return false;
     }
-    return !wouldCreateCreatedJackOnLane(original,
+    return !wouldCreateCreatedJackOnLane(sourceIndex,
                                         notes,
                                         moved,
                                         moved.lane,
@@ -1264,6 +1413,7 @@ DistanceSanitizerStats sanitizeNearTimeOverlaps(const Chart& original,
         return stats;
     }
 
+    const auto sourceIndex = buildSourceNoteIndex(original);
     int guard = 0;
     while (guard++ < 512) {
         const auto pair = firstNearTimePair(notes, options);
@@ -1276,12 +1426,12 @@ DistanceSanitizerStats sanitizeNearTimeOverlaps(const Chart& original,
         const int firstTime = notes[static_cast<std::size_t>(firstIndex)].time;
         const int secondTime = notes[static_cast<std::size_t>(secondIndex)].time;
 
-        if (retimeCandidateIsSafe(original, notes, secondIndex, firstTime, options)) {
+        if (retimeCandidateIsSafe(sourceIndex, notes, secondIndex, firstTime, options)) {
             retimeNotePreserveDuration(notes[static_cast<std::size_t>(secondIndex)], firstTime);
             ++stats.collapsedNearTimePairs;
             continue;
         }
-        if (retimeCandidateIsSafe(original, notes, firstIndex, secondTime, options)) {
+        if (retimeCandidateIsSafe(sourceIndex, notes, firstIndex, secondTime, options)) {
             retimeNotePreserveDuration(notes[static_cast<std::size_t>(firstIndex)], secondTime);
             ++stats.collapsedNearTimePairs;
             continue;

@@ -21,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -51,6 +52,23 @@ constexpr int kButtonBatch = 119;
 constexpr int kCheckPreserveConvert = 120;
 constexpr int kCheckDebugReports = 121;
 constexpr int kStaticStatus = 122;
+constexpr int kComboAlgorithm = 123;
+constexpr int kComboNk2Mode = 124;
+
+constexpr COLORREF kColorWindow = RGB(246, 248, 250);
+constexpr COLORREF kColorPanel = RGB(255, 255, 255);
+constexpr COLORREF kColorPanelBorder = RGB(218, 224, 229);
+constexpr COLORREF kColorSidebar = RGB(8, 25, 32);
+constexpr COLORREF kColorSidebarMuted = RGB(171, 190, 197);
+constexpr COLORREF kColorText = RGB(24, 31, 36);
+constexpr COLORREF kColorMutedText = RGB(91, 103, 112);
+constexpr COLORREF kColorAccent = RGB(0, 160, 151);
+constexpr COLORREF kColorAccentDark = RGB(0, 111, 112);
+constexpr COLORREF kColorAmber = RGB(232, 169, 54);
+
+constexpr int kSidebarWidth = 240;
+constexpr int kMainLeft = 270;
+constexpr int kMainRight = 1390;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -63,6 +81,8 @@ struct ToolOptions {
     std::filesystem::path outputDir;
     std::wstring sourceOverride;
     std::wstring targetKeys = L"10";
+    std::wstring algorithm = L"NK1 (Classic)";
+    std::wstring nk2Mode = L"faithful";
     std::wstring expansionPolicy = L"auto (normal)";
     std::wstring compressPolicy = L"auto";
     std::wstring streamTransform = L"off";
@@ -80,7 +100,11 @@ struct OutputPaths {
 struct ReportSummary {
     int totalNotes = 0;
     int addedNotes = 0;
+    int createdJacksFromAddedNotes = 0;
     double addedNoteRatio = 0.0;
+    double kLikenessScore = 0.0;
+    double laneEntropy = 0.0;
+    double centerBridgeRate = 0.0;
     int collisionCount = 0;
     int lnConflictCount = 0;
     int nearTimeConflicts = 0;
@@ -97,6 +121,8 @@ struct AppState {
     HWND outputDirEdit = nullptr;
     HWND sourceEdit = nullptr;
     HWND targetEdit = nullptr;
+    HWND algorithmCombo = nullptr;
+    HWND nk2ModeCombo = nullptr;
     HWND expansionCombo = nullptr;
     HWND compressCombo = nullptr;
     HWND streamProfileCombo = nullptr;
@@ -108,12 +134,30 @@ struct AppState {
     HWND summaryList = nullptr;
     HWND logEdit = nullptr;
     HFONT uiFont = nullptr;
+    HFONT titleFont = nullptr;
+    HFONT sectionFont = nullptr;
+    HFONT smallFont = nullptr;
+    HFONT monoFont = nullptr;
+    HBRUSH windowBrush = nullptr;
+    HBRUSH panelBrush = nullptr;
+    HBRUSH sidebarBrush = nullptr;
+    HBRUSH editBrush = nullptr;
     std::filesystem::path lastOutputPath;
     std::filesystem::path lastReportPath;
     std::wstring lastCommand;
     std::vector<std::filesystem::path> batchInputs;
     bool suppressInputChange = false;
 };
+
+struct DropTargetSubclass {
+    WNDPROC previousProc = nullptr;
+    AppState* state = nullptr;
+};
+
+constexpr const wchar_t* kDropTargetSubclassProp = L"KeyWeaverDropTargetSubclass";
+
+void loadDroppedFiles(AppState& state, std::vector<std::filesystem::path> files, bool runNow);
+std::vector<std::filesystem::path> filesFromDrop(HDROP drop);
 
 std::filesystem::path directoryForOpen(const std::filesystem::path& path) {
     if (path.empty()) {
@@ -234,6 +278,300 @@ void setInputText(AppState& state, const std::wstring& text) {
     state.suppressInputChange = true;
     setWindowText(state.inputEdit, text);
     state.suppressInputChange = false;
+}
+
+LRESULT CALLBACK dropTargetProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* subclass = reinterpret_cast<DropTargetSubclass*>(GetPropW(hwnd, kDropTargetSubclassProp));
+    if (msg == WM_DROPFILES && subclass != nullptr && subclass->state != nullptr) {
+        HDROP drop = reinterpret_cast<HDROP>(wParam);
+        auto files = filesFromDrop(drop);
+        DragFinish(drop);
+        loadDroppedFiles(*subclass->state, std::move(files), true);
+        return 0;
+    }
+
+    const WNDPROC previousProc = subclass != nullptr ? subclass->previousProc : nullptr;
+    if (msg == WM_NCDESTROY && subclass != nullptr) {
+        RemovePropW(hwnd, kDropTargetSubclassProp);
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(subclass->previousProc));
+        delete subclass;
+    }
+
+    if (previousProc != nullptr) {
+        return CallWindowProcW(previousProc, hwnd, msg, wParam, lParam);
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void enableDropTarget(AppState& state, HWND hwnd) {
+    if (hwnd == nullptr) {
+        return;
+    }
+
+    DragAcceptFiles(hwnd, TRUE);
+    if (GetPropW(hwnd, kDropTargetSubclassProp) != nullptr) {
+        return;
+    }
+
+    auto* subclass = new DropTargetSubclass;
+    subclass->state = &state;
+    subclass->previousProc = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_WNDPROC));
+    if (subclass->previousProc == nullptr) {
+        delete subclass;
+        return;
+    }
+    if (!SetPropW(hwnd, kDropTargetSubclassProp, subclass)) {
+        delete subclass;
+        return;
+    }
+    SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(dropTargetProc));
+}
+
+HFONT makeUiFont(int pixelHeight, int weight = FW_NORMAL) {
+    return CreateFontW(-pixelHeight,
+                       0,
+                       0,
+                       0,
+                       weight,
+                       FALSE,
+                       FALSE,
+                       FALSE,
+                       DEFAULT_CHARSET,
+                       OUT_DEFAULT_PRECIS,
+                       CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY,
+                       DEFAULT_PITCH | FF_DONTCARE,
+                       L"Segoe UI");
+}
+
+void deleteGdiObject(HGDIOBJ object) {
+    if (object != nullptr && object != GetStockObject(DEFAULT_GUI_FONT)) {
+        DeleteObject(object);
+    }
+}
+
+void releaseUiResources(AppState& state) {
+    deleteGdiObject(state.uiFont);
+    deleteGdiObject(state.titleFont);
+    deleteGdiObject(state.sectionFont);
+    deleteGdiObject(state.smallFont);
+    deleteGdiObject(state.monoFont);
+    deleteGdiObject(state.windowBrush);
+    deleteGdiObject(state.panelBrush);
+    deleteGdiObject(state.sidebarBrush);
+    deleteGdiObject(state.editBrush);
+    state.uiFont = nullptr;
+    state.titleFont = nullptr;
+    state.sectionFont = nullptr;
+    state.smallFont = nullptr;
+    state.monoFont = nullptr;
+    state.windowBrush = nullptr;
+    state.panelBrush = nullptr;
+    state.sidebarBrush = nullptr;
+    state.editBrush = nullptr;
+}
+
+void fillRect(HDC dc, const RECT& rect, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    FillRect(dc, &rect, brush);
+    DeleteObject(brush);
+}
+
+void roundRect(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius = 8) {
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    HGDIOBJ oldBrush = SelectObject(dc, brush);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+void drawUiText(HDC dc,
+                HFONT font,
+                COLORREF color,
+                const std::wstring& text,
+                RECT rect,
+                UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+    HGDIOBJ oldFont = font != nullptr ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextW(dc, text.c_str(), -1, &rect, format);
+    if (oldFont != nullptr) {
+        SelectObject(dc, oldFont);
+    }
+}
+
+void drawSidebarItem(HDC dc,
+                     const AppState& state,
+                     int top,
+                     const wchar_t* title,
+                     const wchar_t* subtitle,
+                     bool selected) {
+    RECT item{10, top, kSidebarWidth - 10, top + 58};
+    if (selected) {
+        roundRect(dc, item, RGB(27, 51, 58), RGB(27, 51, 58), 8);
+        RECT accent{10, top + 8, 14, top + 50};
+        fillRect(dc, accent, kColorAccent);
+    }
+
+    RECT icon{28, top + 18, 42, top + 32};
+    HPEN iconPen = CreatePen(PS_SOLID, 2, selected ? RGB(25, 214, 205) : RGB(205, 216, 220));
+    HGDIOBJ oldPen = SelectObject(dc, iconPen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(dc, icon.left, icon.top, icon.right, icon.bottom);
+    MoveToEx(dc, icon.left + 3, icon.top + 4, nullptr);
+    LineTo(dc, icon.right - 3, icon.top + 4);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(iconPen);
+
+    RECT titleRect{60, top + 12, kSidebarWidth - 18, top + 34};
+    RECT subtitleRect{60, top + 34, kSidebarWidth - 18, top + 54};
+    drawUiText(dc, state.sectionFont, RGB(244, 249, 250), title, titleRect);
+    drawUiText(dc, state.smallFont, kColorSidebarMuted, subtitle, subtitleRect);
+}
+
+void drawLogo(HDC dc, const AppState& state) {
+    const int baseX = 28;
+    const int baseY = 86;
+    const int widths[] = {7, 7, 7, 7, 7};
+    const int heights[] = {29, 48, 59, 38, 50};
+    for (int i = 0; i < 5; ++i) {
+        RECT bar{baseX + i * 12, baseY - heights[i], baseX + i * 12 + widths[i], baseY};
+        fillRect(dc, bar, i == 1 || i == 3 ? RGB(45, 220, 211) : RGB(122, 234, 226));
+        RECT shadow{bar.left + 3, bar.top - 10, bar.left + 6, bar.top - 1};
+        fillRect(dc, shadow, RGB(56, 76, 82));
+    }
+    RECT title{96, 32, kSidebarWidth - 18, 58};
+    RECT version{96, 60, kSidebarWidth - 18, 80};
+    RECT ready{96, 82, kSidebarWidth - 18, 104};
+    drawUiText(dc, state.titleFont, RGB(246, 250, 250), L"KeyWeaver", title);
+    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.0.0", version);
+    drawUiText(dc, state.smallFont, RGB(116, 232, 172), L"Ready", ready);
+}
+
+void drawLanePreview(HDC dc, const AppState& state) {
+    RECT title{kMainRight - 340, 248, kMainRight - 20, 272};
+    drawUiText(dc, state.sectionFont, kColorText, L"Lane Preview (Target 10K)", title);
+    const int x = kMainRight - 326;
+    const int y = 290;
+    const int laneW = 26;
+    const int laneH = 82;
+    HBRUSH dark = CreateSolidBrush(RGB(21, 28, 31));
+    HBRUSH teal = CreateSolidBrush(kColorAccent);
+    HBRUSH dimTeal = CreateSolidBrush(RGB(18, 82, 83));
+    HPEN gridPen = CreatePen(PS_SOLID, 1, RGB(53, 63, 68));
+    HPEN centerPen = CreatePen(PS_SOLID, 2, kColorAmber);
+    HGDIOBJ oldPen = SelectObject(dc, gridPen);
+    HGDIOBJ oldBrush = SelectObject(dc, dark);
+    Rectangle(dc, x, y, x + laneW * 10, y + laneH);
+    for (int lane = 0; lane < 10; ++lane) {
+        const int left = x + lane * laneW;
+        RECT number{left, y - 22, left + laneW, y - 3};
+        drawUiText(dc, state.smallFont, kColorText, std::to_wstring(lane + 1), number,
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        MoveToEx(dc, left, y, nullptr);
+        LineTo(dc, left, y + laneH);
+        const int barCount = 2 + ((lane * 7) % 3);
+        for (int i = 0; i < barCount; ++i) {
+            const int barTop = y + 14 + ((lane * 19 + i * 23) % 54);
+            RECT bar{left + 6, barTop, left + laneW - 6, barTop + 7};
+            SelectObject(dc, (lane == 3 || lane == 4 || lane == 5) ? teal : dimTeal);
+            Rectangle(dc, bar.left, bar.top, bar.right, bar.bottom);
+        }
+    }
+    SelectObject(dc, centerPen);
+    for (int lane : {4, 5}) {
+        const int lx = x + lane * laneW;
+        MoveToEx(dc, lx, y, nullptr);
+        LineTo(dc, lx, y + laneH);
+    }
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(centerPen);
+    DeleteObject(gridPen);
+    DeleteObject(dimTeal);
+    DeleteObject(teal);
+    DeleteObject(dark);
+
+    RECT legend1{x, y + laneH + 8, x + 120, y + laneH + 28};
+    RECT dot1{x, y + laneH + 16, x + 6, y + laneH + 22};
+    fillRect(dc, dot1, kColorAccent);
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Source anchors", legend1);
+    RECT legend2{x + 130, y + laneH + 8, x + 270, y + laneH + 28};
+    RECT dot2{x + 130, y + laneH + 16, x + 136, y + laneH + 22};
+    fillRect(dc, dot2, kColorAmber);
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Center bridge (3-6)", legend2);
+}
+
+void drawTimelinePreview(HDC dc, const AppState& state, const RECT& rect) {
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Timeline Density (target lanes used)",
+               RECT{rect.left, rect.top - 22, rect.right, rect.top - 2});
+    HPEN framePen = CreatePen(PS_SOLID, 1, RGB(224, 229, 233));
+    HGDIOBJ oldPen = SelectObject(dc, framePen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(framePen);
+
+    const int columns = 96;
+    const int chartWidth = static_cast<int>(rect.right - rect.left - 20);
+    const int barWidth = std::max(2, chartWidth / columns);
+    for (int i = 0; i < columns; ++i) {
+        const int laneUse = 2 + ((i * 37 + i / 3) % 9);
+        const int barHeight = 8 + laneUse * 5;
+        const int left = rect.left + 10 + i * barWidth;
+        RECT bar{left, rect.bottom - barHeight - 8, left + std::max(1, barWidth - 1), rect.bottom - 8};
+        fillRect(dc, bar, i % 7 == 0 ? RGB(0, 111, 112) : RGB(28, 159, 153));
+    }
+}
+
+void paintUiChrome(AppState& state, HDC dc) {
+    RECT client{};
+    GetClientRect(state.hwnd, &client);
+    fillRect(dc, client, kColorWindow);
+    RECT sidebar{0, 0, kSidebarWidth, client.bottom};
+    fillRect(dc, sidebar, kColorSidebar);
+
+    drawLogo(dc, state);
+    drawSidebarItem(dc, state, 128, L"Convert", L"Single conversion", true);
+    drawSidebarItem(dc, state, 198, L"Batch", L"Multiple files", false);
+    drawSidebarItem(dc, state, 268, L"Reports", L"History & compare", false);
+    drawSidebarItem(dc, state, 338, L"Profiles", L"Target-K profiles", false);
+    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"Settings",
+               RECT{54, client.bottom - 176, kSidebarWidth - 16, client.bottom - 150});
+    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"Help",
+               RECT{54, client.bottom - 130, kSidebarWidth - 16, client.bottom - 104});
+    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"About",
+               RECT{54, client.bottom - 84, kSidebarWidth - 16, client.bottom - 58});
+    fillRect(dc, RECT{0, client.bottom - 42, kSidebarWidth, client.bottom - 41}, RGB(28, 48, 55));
+    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"<  Collapse",
+               RECT{28, client.bottom - 36, kSidebarWidth - 16, client.bottom - 8});
+
+    roundRect(dc, RECT{kMainLeft, 166, kMainRight, 214}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{kMainLeft, 226, kMainRight, 426}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{kMainLeft, 432, kMainRight, 492}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{kMainLeft, 510, 840, client.bottom - 48}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{858, 510, kMainRight, client.bottom - 48}, kColorPanel, kColorPanelBorder);
+
+    drawLanePreview(dc, state);
+
+    drawUiText(dc, state.sectionFont, kColorText, L"Report / Matrix Preview",
+               RECT{kMainLeft + 18, 524, 600, 548});
+    drawUiText(dc, state.uiFont, kColorText, L"Summary",
+               RECT{kMainLeft + 18, 558, kMainLeft + 120, 582});
+    drawUiText(dc, state.uiFont, kColorMutedText, L"Per-Policy Matrix",
+               RECT{kMainLeft + 118, 558, kMainLeft + 280, 582});
+    fillRect(dc, RECT{kMainLeft + 18, 583, kMainLeft + 86, 585}, kColorAccent);
+    drawTimelinePreview(dc, state, RECT{kMainLeft + 18, client.bottom - 118, 822, client.bottom - 68});
+
+    drawUiText(dc, state.sectionFont, kColorText, L"Log", RECT{876, 524, 1040, 548});
+    drawUiText(dc, state.smallFont, kColorMutedText, L"CPU: auto workers  |  Drag charts or folders onto the window",
+               RECT{kMainLeft, client.bottom - 34, kMainRight, client.bottom - 8});
 }
 
 std::filesystem::path moduleDirectory() {
@@ -417,10 +755,31 @@ std::wstring chartOutputExtension(const ToolOptions& options) {
 }
 
 bool tenKFullFieldRemixActive(const ToolOptions& options) {
-    return options.tenKFullFieldRemix && !options.preserveConvert && trim(options.targetKeys) == L"10";
+    return options.tenKFullFieldRemix && options.algorithm != L"NK2 (Experimental)" &&
+           !options.preserveConvert && trim(options.targetKeys) == L"10";
+}
+
+bool nk2EngineActive(const ToolOptions& options) {
+    return options.algorithm == L"NK2 (Experimental)";
+}
+
+std::wstring nk2ModeCliValue(const std::wstring& value) {
+    if (value == L"native") {
+        return L"native";
+    }
+    if (value == L"harder") {
+        return L"harder";
+    }
+    if (value == L"transform") {
+        return L"transform";
+    }
+    return L"faithful";
 }
 
 std::wstring expansionDifficultyTag(const ToolOptions& options) {
+    if (nk2EngineActive(options)) {
+        return L"NK2-" + nk2ModeCliValue(options.nk2Mode);
+    }
     if (options.preserveConvert) {
         return {};
     }
@@ -451,7 +810,7 @@ std::wstring streamDifficultyTag(const ToolOptions& options) {
 
 std::wstring keyWeaverConversionMarker(const ToolOptions& options) {
     std::wstring marker = L"KeyWeaver" + options.targetKeys + L"K";
-    const auto streamTag = streamDifficultyTag(options);
+    const auto streamTag = nk2EngineActive(options) ? std::wstring{} : streamDifficultyTag(options);
     if (!streamTag.empty()) {
         marker += L"-";
         marker += streamTag;
@@ -543,6 +902,19 @@ std::wstring buildSingleCommand(ToolOptions options,
     }
     appendArg(command, L"--target");
     appendArg(command, options.targetKeys);
+    if (nk2EngineActive(options)) {
+        appendArg(command, L"--engine");
+        appendArg(command, L"nk2");
+        appendArg(command, L"--nk2-mode");
+        appendArg(command, nk2ModeCliValue(options.nk2Mode));
+        appendArg(command, L"--out");
+        appendArg(command, quoteArg(paths.outputChart));
+        if (options.debugReports) {
+            appendArg(command, L"--report");
+            appendArg(command, quoteArg(paths.reportJson));
+        }
+        return command;
+    }
     const bool fullFieldRemix = tenKFullFieldRemixActive(options);
     if (fullFieldRemix) {
         appendArg(command, L"--ten-key-planner");
@@ -568,6 +940,87 @@ std::wstring buildSingleCommand(ToolOptions options,
         appendArg(command, L"--report");
         appendArg(command, quoteArg(paths.reportJson));
     }
+    return command;
+}
+
+std::filesystem::path makeBatchInputListPath() {
+    std::error_code error;
+    auto dir = std::filesystem::temp_directory_path(error);
+    if (error || dir.empty()) {
+        dir = std::filesystem::current_path(error);
+    }
+    const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::wstring name = L"keyweaver_batch_";
+    name += std::to_wstring(GetCurrentProcessId());
+    name += L"_";
+    name += std::to_wstring(static_cast<long long>(ticks));
+    name += L".txt";
+    return dir / name;
+}
+
+void writeBatchInputList(const std::filesystem::path& path,
+                         const std::vector<std::filesystem::path>& inputs) {
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("Could not write batch input list");
+    }
+    for (const auto& input : inputs) {
+        out << narrowLossy(input.wstring()) << "\n";
+    }
+}
+
+std::wstring buildBatchCommand(const ToolOptions& options,
+                               const std::filesystem::path& inputList,
+                               const std::optional<std::filesystem::path>& forcedOutputDir) {
+    std::wstring command = quoteArg(options.keyconvExe);
+    appendArg(command, L"--batch");
+    appendArg(command, L"--input-list");
+    appendArg(command, quoteArg(inputList));
+    if (!trim(options.sourceOverride).empty()) {
+        appendArg(command, L"--source");
+        appendArg(command, trim(options.sourceOverride));
+    }
+    appendArg(command, L"--target");
+    appendArg(command, options.targetKeys);
+    if (nk2EngineActive(options)) {
+        appendArg(command, L"--engine");
+        appendArg(command, L"nk2");
+        appendArg(command, L"--nk2-mode");
+        appendArg(command, nk2ModeCliValue(options.nk2Mode));
+        if (forcedOutputDir.has_value()) {
+            appendArg(command, L"--out-dir");
+            appendArg(command, quoteArg(*forcedOutputDir));
+        }
+        appendArg(command, L"--batch-quiet");
+        return command;
+    }
+    const bool fullFieldRemix = tenKFullFieldRemixActive(options);
+    if (fullFieldRemix) {
+        appendArg(command, L"--ten-key-planner");
+        appendArg(command, L"staged-7-14-10");
+        appendArg(command, L"--ten-k-fullfield-remix");
+    }
+    appendArg(command, L"--compress-policy");
+    appendArg(command, options.compressPolicy);
+    const auto expansionPolicy = expansionPolicyCliValue(options.expansionPolicy);
+    if (options.preserveConvert) {
+        appendArg(command, L"--preserve-convert");
+    } else if (!fullFieldRemix && expansionPolicy != L"auto" && expansionPolicy != L"auto-normal") {
+        appendArg(command, L"--expansion-policy");
+        appendArg(command, expansionPolicy);
+    }
+    if (!options.preserveConvert && options.streamTransform != L"off") {
+        appendArg(command, L"--stream-transform");
+        appendArg(command, options.streamTransform);
+    }
+    if (forcedOutputDir.has_value()) {
+        appendArg(command, L"--out-dir");
+        appendArg(command, quoteArg(*forcedOutputDir));
+    }
+    appendArg(command, L"--batch-quiet");
     return command;
 }
 
@@ -623,12 +1076,33 @@ ProcessResult runProcess(const std::wstring& command, const std::filesystem::pat
     PROCESS_INFORMATION process{};
     std::wstring mutableCommand = command;
     const std::wstring cwd = workingDirectory.wstring();
+    HANDLE killOnCloseJob = CreateJobObjectW(nullptr, nullptr);
+    if (killOnCloseJob == nullptr) {
+        CloseHandle(readPipe);
+        std::ostringstream out;
+        out << "CreateJobObject failed: " << GetLastError() << "\n";
+        return {1, out.str()};
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo{};
+    jobInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(killOnCloseJob,
+                                 JobObjectExtendedLimitInformation,
+                                 &jobInfo,
+                                 sizeof(jobInfo))) {
+        const DWORD jobError = GetLastError();
+        CloseHandle(readPipe);
+        CloseHandle(killOnCloseJob);
+        std::ostringstream out;
+        out << "SetInformationJobObject failed: " << jobError << "\n";
+        return {1, out.str()};
+    }
+
     const BOOL ok = CreateProcessW(nullptr,
                                    mutableCommand.data(),
                                    nullptr,
                                    nullptr,
                                    TRUE,
-                                   CREATE_NO_WINDOW,
+                                   CREATE_NO_WINDOW | CREATE_SUSPENDED,
                                    nullptr,
                                    cwd.empty() ? nullptr : cwd.c_str(),
                                    &startup,
@@ -637,10 +1111,25 @@ ProcessResult runProcess(const std::wstring& command, const std::filesystem::pat
 
     if (!ok) {
         CloseHandle(readPipe);
+        CloseHandle(killOnCloseJob);
         std::ostringstream out;
         out << "CreateProcess failed: " << GetLastError() << "\n";
         return {1, out.str()};
     }
+    if (!AssignProcessToJobObject(killOnCloseJob, process.hProcess)) {
+        const DWORD assignError = GetLastError();
+        TerminateProcess(process.hProcess, 1);
+        ResumeThread(process.hThread);
+        WaitForSingleObject(process.hProcess, INFINITE);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        CloseHandle(readPipe);
+        CloseHandle(killOnCloseJob);
+        std::ostringstream out;
+        out << "AssignProcessToJobObject failed: " << assignError << "\n";
+        return {1, out.str()};
+    }
+    ResumeThread(process.hThread);
 
     std::string output;
     std::array<char, 4096> buffer{};
@@ -655,6 +1144,7 @@ ProcessResult runProcess(const std::wstring& command, const std::filesystem::pat
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
     CloseHandle(readPipe);
+    CloseHandle(killOnCloseJob);
     return {exitCode, output};
 }
 
@@ -711,6 +1201,15 @@ std::optional<bool> findJsonBool(std::string_view text, std::string_view field) 
     return std::nullopt;
 }
 
+std::optional<double> findJsonNumberFallback(std::string_view text,
+                                             std::string_view primary,
+                                             std::string_view fallback) {
+    if (const auto value = findJsonNumber(text, primary)) {
+        return value;
+    }
+    return findJsonNumber(text, fallback);
+}
+
 ReportSummary parseReportSummary(const std::filesystem::path& reportPath) {
     std::ifstream in(reportPath, std::ios::binary);
     if (!in) {
@@ -723,9 +1222,27 @@ ReportSummary parseReportSummary(const std::filesystem::path& reportPath) {
     ReportSummary summary;
     summary.totalNotes = static_cast<int>(findJsonNumber(text, "totalNotes").value_or(0.0));
     summary.addedNotes = static_cast<int>(findJsonNumber(text, "addedNotes").value_or(0.0));
+    summary.createdJacksFromAddedNotes =
+        static_cast<int>(findJsonNumberFallback(text, "createdJacksFromAddedNotes", "createdJacks")
+                             .value_or(0.0));
     summary.addedNoteRatio = findJsonNumber(text, "addedNoteRatio").value_or(0.0);
-    summary.collisionCount = static_cast<int>(findJsonNumber(text, "collisionCount").value_or(0.0));
-    summary.lnConflictCount = static_cast<int>(findJsonNumber(text, "lnConflictCount").value_or(0.0));
+    if (summary.addedNoteRatio == 0.0 && summary.totalNotes > 0 && summary.addedNotes > 0) {
+        summary.addedNoteRatio = static_cast<double>(summary.addedNotes) /
+                                 static_cast<double>(summary.totalNotes);
+    }
+    if (const auto kLikeness = findJsonNumber(text, "kLikenessScore")) {
+        summary.kLikenessScore = *kLikeness;
+    } else if (const auto sourceAnchorScore = findJsonNumber(text, "sourceAnchorScore")) {
+        summary.kLikenessScore = *sourceAnchorScore * 100.0;
+    }
+    summary.laneEntropy = findJsonNumber(text, "laneEntropy").value_or(0.0);
+    summary.centerBridgeRate = findJsonNumber(text, "centerBridgeRate").value_or(0.0);
+    summary.collisionCount =
+        static_cast<int>(findJsonNumberFallback(text, "collisionCount", "sameTimeCollisions")
+                             .value_or(0.0));
+    summary.lnConflictCount =
+        static_cast<int>(findJsonNumberFallback(text, "lnConflictCount", "longNoteConflicts")
+                             .value_or(0.0));
     summary.nearTimeConflicts = static_cast<int>(findJsonNumber(text, "nearTimeConflicts").value_or(0.0));
     summary.unsnappedAddedNotes = static_cast<int>(findJsonNumber(text, "unsnappedAddedNotes").value_or(0.0));
     summary.playabilityScore = findJsonNumber(text, "playabilityScore").value_or(0.0);
@@ -936,6 +1453,54 @@ std::vector<std::filesystem::path> collectOsuFilesRecursively(
     return files;
 }
 
+std::vector<std::filesystem::path> collectSupportedChartFilesRecursively(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> files;
+    std::error_code error;
+    if (!std::filesystem::exists(root, error)) {
+        return files;
+    }
+    if (!std::filesystem::is_directory(root, error)) {
+        if (std::filesystem::is_regular_file(root, error) && isSupportedChartPath(root)) {
+            files.push_back(absolutePath(root));
+        }
+        return files;
+    }
+
+    const auto options = std::filesystem::directory_options::skip_permission_denied;
+    for (std::filesystem::recursive_directory_iterator it(root, options, error), end; it != end; it.increment(error)) {
+        if (error) {
+            error.clear();
+            continue;
+        }
+        const auto& entry = *it;
+        if (!entry.is_regular_file(error)) {
+            error.clear();
+            continue;
+        }
+        const auto path = entry.path();
+        if (isSupportedChartPath(path)) {
+            files.push_back(absolutePath(path));
+        }
+        if ((files.size() % 256) == 0 && !files.empty()) {
+            pumpPendingUiMessages();
+        }
+    }
+    std::stable_sort(files.begin(), files.end());
+    return files;
+}
+
+std::vector<std::filesystem::path> expandDroppedPaths(const std::vector<std::filesystem::path>& droppedPaths) {
+    std::vector<std::filesystem::path> files;
+    for (const auto& rawPath : droppedPaths) {
+        const auto path = absolutePath(rawPath);
+        auto expanded = collectSupportedChartFilesRecursively(path);
+        files.insert(files.end(), expanded.begin(), expanded.end());
+    }
+    std::stable_sort(files.begin(), files.end());
+    files.erase(std::unique(files.begin(), files.end()), files.end());
+    return files;
+}
+
 bool matchesSourceOverride(const std::filesystem::path& path, int sourceKeyCount) {
     if (!isOsuPath(path)) {
         return true;
@@ -971,6 +1536,7 @@ HWND makeControl(AppState& state,
                                 GetModuleHandleW(nullptr),
                                 nullptr);
     setChildFont(hwnd, state.uiFont);
+    enableDropTarget(state, hwnd);
     return hwnd;
 }
 
@@ -995,6 +1561,14 @@ void setComboSelection(HWND combo, const wchar_t* value) {
     if (index >= 0) {
         SendMessageW(combo, CB_SETCURSEL, index, 0);
     }
+}
+
+void updateAlgorithmControlState(AppState& state) {
+    if (state.nk2ModeCombo == nullptr || state.algorithmCombo == nullptr) {
+        return;
+    }
+    const bool nk2 = comboText(state.algorithmCombo) == L"NK2 (Experimental)";
+    EnableWindow(state.nk2ModeCombo, nk2 ? TRUE : FALSE);
 }
 
 void appendLog(AppState& state, const std::wstring& text) {
@@ -1039,20 +1613,32 @@ void showReportSummary(AppState& state, const ReportSummary& summary) {
         addSummaryLine(state, L"Report parse failed.");
         return;
     }
+    const int warningCount = summary.collisionCount + summary.lnConflictCount +
+                             summary.nearTimeConflicts + summary.unsnappedAddedNotes;
     std::wostringstream line;
-    line << L"totalNotes: " << summary.totalNotes;
+    line << L"Summary";
     addSummaryLine(state, line.str());
     line.str(L"");
-    line << L"addedNotes: " << summary.addedNotes << L"  ratio: " << std::fixed << std::setprecision(4)
-         << summary.addedNoteRatio;
+    line << L"  Notes: " << summary.totalNotes << L" total, " << summary.addedNotes << L" added";
     addSummaryLine(state, line.str());
     line.str(L"");
-    line << L"collision: " << summary.collisionCount << L"  LN: " << summary.lnConflictCount
-         << L"  near: " << summary.nearTimeConflicts << L"  unsnappedAdded: " << summary.unsnappedAddedNotes;
+    line << L"  K-Likeness: " << std::fixed << std::setprecision(1) << summary.kLikenessScore
+         << L"/100     Added: " << std::setprecision(1) << (summary.addedNoteRatio * 100.0) << L"%";
     addSummaryLine(state, line.str());
     line.str(L"");
-    line << L"playability: " << std::fixed << std::setprecision(2) << summary.playabilityScore
-         << L"  deterministic: " << (summary.deterministic ? L"yes" : L"no");
+    line << L"  Jack Integrity: "
+         << (summary.createdJacksFromAddedNotes == 0 ? L"100% (no new jacks)" : L"needs review");
+    addSummaryLine(state, line.str());
+    line.str(L"");
+    line << L"  Lane Entropy: " << std::fixed << std::setprecision(2) << summary.laneEntropy
+         << L"     Center Bridge: " << std::setprecision(2) << summary.centerBridgeRate;
+    addSummaryLine(state, line.str());
+    line.str(L"");
+    line << L"  Warnings: " << warningCount
+         << L"     Playability: " << std::setprecision(2) << summary.playabilityScore;
+    addSummaryLine(state, line.str());
+    line.str(L"");
+    line << L"  Deterministic: " << (summary.deterministic ? L"yes" : L"no");
     addSummaryLine(state, line.str());
 }
 
@@ -1065,6 +1651,8 @@ ToolOptions readToolOptions(const AppState& state) {
                                               : absolutePath(std::filesystem::path(outputDirText));
     options.sourceOverride = trim(getWindowText(state.sourceEdit));
     options.targetKeys = trim(comboText(state.targetEdit));
+    options.algorithm = comboText(state.algorithmCombo);
+    options.nk2Mode = comboText(state.nk2ModeCombo);
     options.expansionPolicy = comboText(state.expansionCombo);
     options.compressPolicy = comboText(state.compressCombo);
     options.streamTransform = comboText(state.streamProfileCombo);
@@ -1098,6 +1686,10 @@ bool validateToolOptions(const ToolOptions& options, HWND owner) {
         MessageBoxW(owner, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
+    if (nk2EngineActive(options) && nk2ModeCliValue(options.nk2Mode).empty()) {
+        MessageBoxW(owner, L"NK2 mode is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
+        return false;
+    }
     return true;
 }
 
@@ -1105,9 +1697,9 @@ void updateDetectedSource(AppState& state) {
     const auto input = std::filesystem::path(getWindowText(state.inputEdit));
     const auto detected = detectCircleSize(input);
     if (detected.has_value()) {
-        setWindowText(state.detectedLabel, L"Source: " + std::to_wstring(*detected) + L"K");
+        setWindowText(state.detectedLabel, L"Detected: " + std::to_wstring(*detected) + L"K");
     } else {
-        setWindowText(state.detectedLabel, L"Source: auto");
+        setWindowText(state.detectedLabel, L"Detected: auto");
     }
 }
 
@@ -1231,6 +1823,14 @@ void executeSingleConvert(AppState& state) {
 void executeMatrix(AppState& state) {
     auto options = readToolOptions(state);
     if (!validateToolOptions(options, state.hwnd)) {
+        return;
+    }
+    if (nk2EngineActive(options)) {
+        MessageBoxW(state.hwnd,
+                    L"Matrix is a Classic/NK1 policy comparison tool. Switch Algorithm to NK1 (Classic) to run it.",
+                    L"KeyWeaver GUI",
+                    MB_ICONINFORMATION);
+        setStatus(state, L"Matrix unavailable for NK2");
         return;
     }
     if (!options.outputDir.empty()) {
@@ -1400,6 +2000,14 @@ void applyBatchJobResult(AppState& state, const BatchJobResult& result, int& suc
 
 void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
     auto baseOptions = readToolOptions(state);
+    if (nk2EngineActive(baseOptions)) {
+        MessageBoxW(state.hwnd,
+                    L"NK2 is single-input only in this milestone. Use Convert for one chart, or switch Algorithm to NK1 (Classic) for Batch.",
+                    L"KeyWeaver batch",
+                    MB_ICONINFORMATION);
+        setStatus(state, L"Batch unavailable for NK2");
+        return;
+    }
     auto inputs = chooseFolderFirst ? chooseBatchFolderInputs(state) : batchInputsForState(state);
     const auto inputText = trim(getWindowText(state.inputEdit));
     const auto inputPath = inputText.empty() ? std::filesystem::path() : absolutePath(std::filesystem::path(inputText));
@@ -1440,6 +2048,109 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
                      L" file(s), target " + baseOptions.targetKeys + L"K\r\n");
     if (sourceFilter.has_value()) {
         appendLog(state, L"Source filter: only " + std::to_wstring(*sourceFilter) + L"K .osu charts\r\n");
+    }
+
+    if (!baseOptions.debugReports) {
+        int prefilteredFailed = 0;
+        int prefilteredSkipped = 0;
+        std::vector<std::filesystem::path> fastInputs;
+        fastInputs.reserve(inputs.size());
+        for (std::size_t index = 0; index < inputs.size(); ++index) {
+            if ((index % 128) == 0) {
+                const auto text = progressText(index, inputs.size(), L"Batch prepare");
+                setStatus(state, text);
+                if ((index % 1024) == 0) {
+                    appendLog(state, L"[progress] " + text + L"\r\n");
+                }
+                pumpPendingUiMessages();
+            }
+
+            const auto input = absolutePath(inputs[index]);
+            if (!std::filesystem::exists(input) || !isSupportedChartPath(input)) {
+                ++prefilteredFailed;
+                if (prefilteredFailed <= 32) {
+                    addSummaryLine(state, L"[fail] " + input.filename().wstring() + L" invalid input");
+                    appendLog(state, L"[fail] " + input.wstring() + L" invalid input\r\n");
+                }
+                continue;
+            }
+            if (convertedPathMarkerReason(input).has_value()) {
+                ++prefilteredSkipped;
+                if (prefilteredSkipped <= 32) {
+                    addSummaryLine(state, L"[skip] " + input.filename().wstring() + L" already converted");
+                }
+                continue;
+            }
+            if (sourceFilter.has_value() && !matchesSourceOverride(input, *sourceFilter)) {
+                ++prefilteredSkipped;
+                if (prefilteredSkipped <= 32) {
+                    const auto detected = isOsuPath(input) ? detectCircleSize(input) : std::nullopt;
+                    std::wstring sourceText = detected.has_value() ? std::to_wstring(*detected) + L"K" : L"unknown";
+                    addSummaryLine(state, L"[skip] " + input.filename().wstring() + L" source=" + sourceText);
+                }
+                continue;
+            }
+            fastInputs.push_back(input);
+        }
+
+        if (fastInputs.empty()) {
+            const std::wstring done = L"Batch done: ok=0 fail=" + std::to_wstring(prefilteredFailed) +
+                                      L" skip=" + std::to_wstring(prefilteredSkipped);
+            setStatus(state, done);
+            appendLog(state, done + L"\r\n");
+            return;
+        }
+
+        if (forcedOutputDir.has_value()) {
+            std::filesystem::create_directories(*forcedOutputDir);
+        }
+
+        const auto inputList = makeBatchInputListPath();
+        try {
+            writeBatchInputList(inputList, fastInputs);
+        } catch (const std::exception& error) {
+            setStatus(state, L"Batch failed");
+            appendLog(state, L"Could not prepare batch input list: " + widen(error.what()) + L"\r\n");
+            MessageBoxW(state.hwnd, L"Could not prepare batch input list.", L"KeyWeaver batch", MB_ICONERROR);
+            return;
+        }
+
+        const std::wstring command = buildBatchCommand(baseOptions, inputList, forcedOutputDir);
+        state.lastCommand = command;
+        setStatus(state, L"Batch: running fast CLI batch");
+        addSummaryLine(state, L"Fast batch process: " + std::to_wstring(fastInputs.size()) + L" file(s)");
+        if (prefilteredSkipped > 0 || prefilteredFailed > 0) {
+            addSummaryLine(state,
+                           L"Prefilter: fail=" + std::to_wstring(prefilteredFailed) +
+                               L" skip=" + std::to_wstring(prefilteredSkipped));
+        }
+        appendLog(state, L"Fast batch uses one KeyWeaver.exe process with an input list.\r\n");
+        appendLog(state, L"> " + command + L"\r\n");
+        UpdateWindow(state.hwnd);
+
+        auto future = std::async(std::launch::async,
+                                 [command, workingDir = baseOptions.keyconvExe.parent_path()]() {
+                                     return runProcess(command, workingDir);
+                                 });
+        while (future.wait_for(std::chrono::milliseconds(80)) != std::future_status::ready) {
+            pumpPendingUiMessages();
+            Sleep(20);
+        }
+        const auto result = future.get();
+        std::error_code removeError;
+        std::filesystem::remove(inputList, removeError);
+        appendLog(state, widen(result.output) + L"\r\n");
+
+        if (result.exitCode != 0) {
+            setStatus(state, L"Batch failed");
+            addSummaryLine(state, L"Fast batch failed. See log output.");
+            MessageBoxW(state.hwnd, L"Batch failed. See log output.", L"KeyWeaver batch", MB_ICONWARNING);
+            return;
+        }
+
+        setStatus(state, L"Batch process done");
+        addSummaryLine(state, L"Batch process done. See log summary.");
+        return;
     }
 
     int succeeded = 0;
@@ -1550,21 +2261,22 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
 void loadDroppedFiles(AppState& state,
                       std::vector<std::filesystem::path> files,
                       bool runNow) {
-    files.erase(std::remove_if(files.begin(), files.end(), [](const std::filesystem::path& path) {
-                    return !isSupportedChartPath(path);
-                }),
-                files.end());
+    files = expandDroppedPaths(files);
     if (files.empty()) {
-        MessageBoxW(state.hwnd, L"Drop osu/BMS-family chart files.", L"KeyWeaver GUI", MB_ICONERROR);
+        MessageBoxW(state.hwnd,
+                    L"Drop osu/BMS-family chart files or folders containing charts.",
+                    L"KeyWeaver GUI",
+                    MB_ICONERROR);
         return;
     }
 
-    for (auto& file : files) {
-        file = absolutePath(file);
-    }
     state.batchInputs = files;
     setInputText(state, files.front().wstring());
-    setWindowText(state.outputDirEdit, files.front().parent_path().wstring());
+    if (files.size() == 1) {
+        setWindowText(state.outputDirEdit, files.front().parent_path().wstring());
+    } else {
+        setWindowText(state.outputDirEdit, L"");
+    }
     updateDetectedSource(state);
     appendLog(state, L"\r\nLoaded dropped chart(s): " + std::to_wstring(files.size()) + L"\r\n");
     if (files.size() > 1) {
@@ -1595,117 +2307,170 @@ std::vector<std::filesystem::path> filesFromDrop(HDROP drop) {
 }
 
 void createUi(AppState& state) {
-    state.uiFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    const int labelX = 12;
-    const int editX = 118;
-    const int buttonX = 650;
-    int y = 12;
+    state.uiFont = makeUiFont(15);
+    state.titleFont = makeUiFont(20, FW_BOLD);
+    state.sectionFont = makeUiFont(16, FW_SEMIBOLD);
+    state.smallFont = makeUiFont(13);
+    state.monoFont = CreateFontW(-14,
+                                 0,
+                                 0,
+                                 0,
+                                 FW_NORMAL,
+                                 FALSE,
+                                 FALSE,
+                                 FALSE,
+                                 DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY,
+                                 FIXED_PITCH | FF_MODERN,
+                                 L"Consolas");
+    if (state.uiFont == nullptr) {
+        state.uiFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+    state.windowBrush = CreateSolidBrush(kColorWindow);
+    state.panelBrush = CreateSolidBrush(kColorPanel);
+    state.sidebarBrush = CreateSolidBrush(kColorSidebar);
+    state.editBrush = CreateSolidBrush(RGB(253, 254, 255));
 
-    makeControl(state, L"STATIC", L"KeyWeaver", 0, labelX, y + 4, 96, 20, -1);
-    state.keyconvEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, 520, 24, kEditKeyconv,
+    const int labelX = kMainLeft + 4;
+    const int editX = kMainLeft + 158;
+    const int editW = 842;
+    const int buttonX = kMainLeft + 1016;
+    int y = 30;
+
+    makeControl(state, L"STATIC", L"KeyWeaver (exe)", 0, labelX, y + 6, 140, 22, -1);
+    state.keyconvEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, editW, 28, kEditKeyconv,
                                     WS_EX_CLIENTEDGE);
-    makeControl(state, L"BUTTON", L"Browse", BS_PUSHBUTTON, buttonX, y, 86, 24, kButtonBrowseKeyconv);
-    y += 34;
+    makeControl(state, L"BUTTON", L"Browse...", BS_PUSHBUTTON, buttonX, y, 110, 28, kButtonBrowseKeyconv);
+    y += 44;
 
-    makeControl(state, L"STATIC", L"Input", 0, labelX, y + 4, 96, 20, -1);
-    state.inputEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, 520, 24, kEditInput,
+    makeControl(state, L"STATIC", L"Input (chart)", 0, labelX, y + 6, 140, 22, -1);
+    state.inputEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, editW, 28, kEditInput,
                                   WS_EX_CLIENTEDGE);
-    makeControl(state, L"BUTTON", L"Browse", BS_PUSHBUTTON, buttonX, y, 86, 24, kButtonBrowseInput);
-    y += 34;
+    makeControl(state, L"BUTTON", L"Browse...", BS_PUSHBUTTON, buttonX, y, 110, 28, kButtonBrowseInput);
+    y += 44;
 
-    makeControl(state, L"STATIC", L"Output", 0, labelX, y + 4, 96, 20, -1);
-    state.outputDirEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, 520, 24, kEditOutputDir,
+    makeControl(state, L"STATIC", L"Output (folder)", 0, labelX, y + 6, 140, 22, -1);
+    state.outputDirEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, editW, 28, kEditOutputDir,
                                       WS_EX_CLIENTEDGE);
-    makeControl(state, L"BUTTON", L"Browse", BS_PUSHBUTTON, buttonX, y, 86, 24, kButtonBrowseOutputDir);
-    y += 36;
+    makeControl(state, L"BUTTON", L"Browse...", BS_PUSHBUTTON, buttonX, y, 110, 28, kButtonBrowseOutputDir);
 
-    state.detectedLabel = makeControl(state, L"STATIC", L"Source: auto", 0, editX, y, 160, 20,
-                                      kStaticDetected);
-    makeControl(state, L"STATIC", L"Source override", 0, labelX, y + 28, 100, 20, -1);
-    state.sourceEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y + 24, 70, 24, kEditSource,
+    y = 178;
+    makeControl(state, L"STATIC", L"Source:", 0, kMainLeft + 18, y + 9, 64, 22, -1);
+    state.sourceEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, kMainLeft + 82, y + 5, 62, 26, kEditSource,
                                    WS_EX_CLIENTEDGE);
-    makeControl(state, L"STATIC", L"Target", 0, 210, y + 28, 50, 20, -1);
-    state.targetEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 260, y + 24, 70, 160,
-                                   kEditTarget);
+    makeControl(state, L"STATIC", L"auto", SS_CENTER, kMainLeft + 152, y + 8, 46, 22, -1);
+    state.detectedLabel = makeControl(state, L"STATIC", L"Detected: auto", 0, kMainLeft + 366, y + 9, 130, 22,
+                                      kStaticDetected);
+    makeControl(state, L"STATIC", L"->", SS_CENTER, kMainLeft + 500, y + 9, 42, 22, -1);
+    makeControl(state, L"STATIC", L"Target:", 0, kMainLeft + 574, y + 9, 70, 22, -1);
+    state.targetEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                                   kMainLeft + 640, y + 5, 150, 180, kEditTarget);
     for (const auto* item : {L"4", L"5", L"6", L"7", L"8", L"9", L"10"}) {
         addComboItem(state.targetEdit, item);
     }
     setComboSelection(state.targetEdit, L"10");
-    makeControl(state, L"STATIC", L"4-10; 10K uses Full-Field Remix", 0, 340, y + 28, 280, 20, -1);
-    y += 64;
 
-    makeControl(state, L"STATIC", L"Expansion", 0, labelX, y + 4, 96, 20, -1);
-    state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, editX, y, 180, 160,
-                                       kComboExpansion);
+    y = 242;
+    makeControl(state, L"STATIC", L"Algorithm", 0, kMainLeft + 18, y + 6, 86, 22, -1);
+    state.algorithmCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                                       kMainLeft + 106, y, 168, 110, kComboAlgorithm);
+    for (const auto* item : {L"NK1 (Classic)", L"NK2 (Experimental)"}) {
+        addComboItem(state.algorithmCombo, item);
+    }
+    setComboSelection(state.algorithmCombo, L"NK1 (Classic)");
+
+    makeControl(state, L"STATIC", L"NK2 Mode", 0, kMainLeft + 300, y + 6, 86, 22, -1);
+    state.nk2ModeCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                                     kMainLeft + 386, y, 134, 130, kComboNk2Mode);
+    for (const auto* item : {L"faithful", L"native", L"harder", L"transform"}) {
+        addComboItem(state.nk2ModeCombo, item);
+    }
+    setComboSelection(state.nk2ModeCombo, L"faithful");
+
+    makeControl(state, L"STATIC", L"Expansion", 0, kMainLeft + 548, y + 6, 86, 22, -1);
+    state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                                       kMainLeft + 636, y, 186, 170, kComboExpansion);
     for (const auto* item : {L"auto (more)", L"auto (normal)", L"auto (low)"}) {
         addComboItem(state.expansionCombo, item);
     }
     setComboSelection(state.expansionCombo, L"auto (normal)");
+    y += 42;
 
-    makeControl(state, L"STATIC", L"Compress", 0, 320, y + 4, 70, 20, -1);
-    state.compressCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 392, y, 180, 180,
-                                      kComboCompress);
+    makeControl(state, L"STATIC", L"Compress", 0, kMainLeft + 18, y + 6, 86, 22, -1);
+    state.compressCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                                      kMainLeft + 106, y, 176, 180, kComboCompress);
     for (const auto* item : {L"auto"}) {
         addComboItem(state.compressCombo, item);
     }
     setComboSelection(state.compressCombo, L"auto");
 
-    makeControl(state, L"STATIC", L"Stream", 0, 584, y + 4, 58, 20, -1);
+    makeControl(state, L"STATIC", L"Stream", 0, kMainLeft + 320, y + 6, 64, 22, -1);
     state.streamProfileCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                           642, y, 120, 140, kComboStreamProfile);
+                                           kMainLeft + 384, y, 172, 150, kComboStreamProfile);
     for (const auto* item : {L"off", L"superrandom", L"full-jitter"}) {
         addComboItem(state.streamProfileCombo, item);
     }
     setComboSelection(state.streamProfileCombo, L"off");
-    y += 38;
+    y += 42;
 
     state.preserveConvertCheck = makeControl(state,
                                              L"BUTTON",
                                              L"Preserve Convert",
                                              BS_AUTOCHECKBOX,
-                                             editX,
+                                             kMainLeft + 18,
                                              y,
                                              180,
                                              22,
                                              kCheckPreserveConvert);
     makeControl(state, L"STATIC", L"faithful mapping, strict source jacks", 0,
-                editX + 190, y + 2, 300, 20, -1);
+                kMainLeft + 202, y + 2, 300, 22, -1);
     state.debugReportsCheck = makeControl(state,
                                           L"BUTTON",
                                           L"Debug JSON",
                                           BS_AUTOCHECKBOX,
-                                          editX + 500,
+                                          kMainLeft + 650,
                                           y,
                                           124,
                                           22,
                                           kCheckDebugReports);
-    y += 32;
+    y += 40;
 
-    makeControl(state, L"BUTTON", L"Convert", BS_PUSHBUTTON, editX, y, 96, 28, kButtonConvert);
-    state.batchButton = makeControl(state, L"BUTTON", L"Batch", BS_PUSHBUTTON, editX + 104, y, 96, 28, kButtonBatch);
-    makeControl(state, L"BUTTON", L"Matrix", BS_PUSHBUTTON, editX + 208, y, 86, 28, kButtonMatrix);
-    makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, editX + 302, y, 112, 28, kButtonOpenOutput);
-    makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, editX + 422, y, 104, 28, kButtonOpenReport);
-    makeControl(state, L"BUTTON", L"Copy CLI", BS_PUSHBUTTON, editX + 534, y, 90, 28, kButtonCopyCommand);
-    y += 36;
+    makeControl(state, L"STATIC", L"Planner", 0, kMainLeft + 18, y + 5, 82, 22, -1);
+    makeControl(state, L"STATIC", L"auto (staged 7-14-10 for 10K)", 0, kMainLeft + 106, y + 5, 260, 22, -1);
+    y += 38;
 
-    makeControl(state, L"STATIC", L"Status", 0, labelX, y + 4, 100, 20, -1);
-    state.statusLabel = makeControl(state, L"STATIC", L"Ready", 0, editX, y + 4, 644, 20, kStaticStatus);
-    y += 30;
+    makeControl(state, L"STATIC", L"Profile (Target-K)", 0, kMainLeft + 18, y + 5, 122, 22, -1);
+    makeControl(state, L"STATIC", L"keyweaver_10k_broad_style_v1.json (auto)", 0,
+                kMainLeft + 148, y + 5, 360, 22, -1);
 
-    makeControl(state, L"STATIC", L"Report / Matrix", 0, labelX, y + 4, 100, 20, -1);
+    y = 440;
+    makeControl(state, L"BUTTON", L">  Convert    F5", BS_DEFPUSHBUTTON, kMainLeft, y, 176, 34, kButtonConvert);
+    state.batchButton = makeControl(state, L"BUTTON", L"Batch    F6", BS_PUSHBUTTON, kMainLeft + 198, y, 170, 34,
+                                    kButtonBatch);
+    makeControl(state, L"BUTTON", L"Matrix    F7", BS_PUSHBUTTON, kMainLeft + 390, y, 170, 34, kButtonMatrix);
+    makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, kMainLeft + 632, y, 156, 34, kButtonOpenOutput);
+    makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, kMainLeft + 804, y, 156, 34, kButtonOpenReport);
+    makeControl(state, L"BUTTON", L"Copy CLI", BS_PUSHBUTTON, kMainLeft + 976, y, 128, 34, kButtonCopyCommand);
+    y += 42;
+
+    state.statusLabel = makeControl(state, L"STATIC", L"Ready", 0, kMainLeft + 18, y + 4, 520, 22, kStaticStatus);
+
     state.summaryList = makeControl(state, L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_HSCROLL,
-                                    editX, y, 644, 118, kListSummary, WS_EX_CLIENTEDGE);
-    y += 130;
+                                    kMainLeft + 18, 612, 520, 78, kListSummary, WS_EX_CLIENTEDGE);
 
-    makeControl(state, L"STATIC", L"Log", 0, labelX, y + 4, 100, 20, -1);
     state.logEdit = makeControl(state, L"EDIT", L"", ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
                                                    ES_READONLY | WS_VSCROLL | WS_HSCROLL,
-                                editX, y, 644, 172, kEditLog, WS_EX_CLIENTEDGE);
+                                876, 566, 496, 220, kEditLog, WS_EX_CLIENTEDGE);
+    if (state.monoFont != nullptr) {
+        setChildFont(state.logEdit, state.monoFont);
+    }
 
     const auto exe = preferredKeyWeaverExe();
     setWindowText(state.keyconvEdit, exe.wstring());
     setWindowText(state.outputDirEdit, L"");
+    updateAlgorithmControlState(state);
 }
 
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1729,6 +2494,48 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             break;
+        case WM_ERASEBKGND:
+            if (state) {
+                return 1;
+            }
+            break;
+        case WM_PAINT:
+            if (state) {
+                PAINTSTRUCT paint{};
+                HDC dc = BeginPaint(hwnd, &paint);
+                paintUiChrome(*state, dc);
+                EndPaint(hwnd, &paint);
+                return 0;
+            }
+            break;
+        case WM_CTLCOLORSTATIC:
+            if (state) {
+                HDC dc = reinterpret_cast<HDC>(wParam);
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, kColorText);
+                return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
+            }
+            break;
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORLISTBOX:
+            if (state) {
+                HDC dc = reinterpret_cast<HDC>(wParam);
+                SetBkMode(dc, OPAQUE);
+                SetBkColor(dc, RGB(253, 254, 255));
+                SetTextColor(dc, kColorText);
+                return reinterpret_cast<LRESULT>(state->editBrush != nullptr ? state->editBrush
+                                                                              : GetStockObject(WHITE_BRUSH));
+            }
+            break;
+        case WM_CTLCOLORBTN:
+            if (state) {
+                HDC dc = reinterpret_cast<HDC>(wParam);
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, kColorText);
+                return reinterpret_cast<LRESULT>(state->panelBrush != nullptr ? state->panelBrush
+                                                                               : GetStockObject(WHITE_BRUSH));
+            }
+            break;
         case WM_COMMAND: {
             if (!state) {
                 break;
@@ -1737,6 +2544,9 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             const auto notification = HIWORD(wParam);
             if (controlId == kEditInput && notification == EN_CHANGE && !state->suppressInputChange) {
                 state->batchInputs.clear();
+            }
+            if (controlId == kComboAlgorithm && notification == CBN_SELCHANGE) {
+                updateAlgorithmControlState(*state);
             }
             switch (controlId) {
                 case kButtonBrowseKeyconv: {
@@ -1805,7 +2615,26 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
         }
+        case WM_KEYDOWN:
+            if (state) {
+                if (wParam == VK_F5) {
+                    executeSingleConvert(*state);
+                    return 0;
+                }
+                if (wParam == VK_F6) {
+                    executeBatchConvert(*state, true);
+                    return 0;
+                }
+                if (wParam == VK_F7) {
+                    executeMatrix(*state);
+                    return 0;
+                }
+            }
+            break;
         case WM_DESTROY:
+            if (state) {
+                releaseUiResources(*state);
+            }
             PostQuitMessage(0);
             return 0;
         default:
@@ -1823,17 +2652,17 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"KeyConvPlaytestGui";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.hbrBackground = nullptr;
     RegisterClassW(&wc);
 
     HWND hwnd = CreateWindowExW(0,
                                 wc.lpszClassName,
-                                L"KeyWeaver v1.0.0 Stable Tool",
-                                WS_OVERLAPPEDWINDOW,
+                                L"KeyWeaver",
+                                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,
-                                810,
-                                680,
+                                1440,
+                                880,
                                 nullptr,
                                 nullptr,
                                 wc.hInstance,
@@ -1904,6 +2733,31 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         }
     }
 
+    ToolOptions nk2Options = options;
+    nk2Options.algorithm = L"NK2 (Experimental)";
+    nk2Options.nk2Mode = L"faithful";
+    nk2Options.targetKeys = L"5";
+    nk2Options.outputDir = options.outputDir / L"nk2";
+    nk2Options.debugReports = true;
+    std::filesystem::create_directories(nk2Options.outputDir);
+    OutputPaths nk2Paths;
+    const auto nk2Command = buildSingleCommand(nk2Options, nk2Paths);
+    if (nk2Command.find(L"--engine nk2") == std::wstring::npos ||
+        nk2Command.find(L"--nk2-mode faithful") == std::wstring::npos) {
+        std::cerr << "GUI smoke expected NK2 command flags\n";
+        return 1;
+    }
+    const auto nk2 = runProcess(nk2Command, nk2Options.keyconvExe.parent_path());
+    if (nk2.exitCode != 0) {
+        std::cerr << nk2.output;
+        return 1;
+    }
+    const auto nk2Summary = parseReportSummary(nk2Paths.reportJson);
+    if (!nk2Summary.valid || nk2Summary.totalNotes <= 0) {
+        std::cerr << "GUI smoke failed to parse NK2 report\n";
+        return 1;
+    }
+
     OutputPaths matrixPaths;
     const auto matrixCommand = buildMatrixCommand(options, matrixPaths);
     const auto matrix = runProcess(matrixCommand, options.keyconvExe.parent_path());
@@ -1918,6 +2772,7 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
     }
 
     std::cout << "gui smoke ok: totalNotes=" << summary.totalNotes
+              << " nk2Notes=" << nk2Summary.totalNotes
               << " matrixRows=" << rows.size() << "\n";
     return 0;
 }

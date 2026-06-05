@@ -13,6 +13,8 @@
 #include "core/slice.hpp"
 #include "exporter/bms.hpp"
 #include "exporter/osu.hpp"
+#include "nk2/nk2_convert.hpp"
+#include "nk2/nk2_report.hpp"
 #include "parser/bms.hpp"
 #include "parser/osu.hpp"
 #include "keyconv/reconvert_guard.hpp"
@@ -108,6 +110,20 @@ std::string distributionText(const std::vector<int>& values) {
     }
     out << "]";
     return out.str();
+}
+
+int activeLaneCount(const std::vector<int>& values) {
+    return static_cast<int>(std::count_if(values.begin(), values.end(), [](int value) {
+        return value > 0;
+    }));
+}
+
+int laneDistributionRange(const std::vector<int>& values) {
+    if (values.empty()) {
+        return 0;
+    }
+    const auto [minValue, maxValue] = std::minmax_element(values.begin(), values.end());
+    return *maxValue - *minValue;
 }
 
 keyconv::Chart makeChart(int keyCount, const std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>>& notes) {
@@ -886,6 +902,69 @@ void testTenKeyFullFieldRailCoversAllNotesWithoutStructChanges() {
             "full-field rail should start the primary phrase on the left hand");
     require(first->second.zoneStart == 0 && first->second.zoneEnd == 4,
             "left-hand full-field zone should be lanes 0..4");
+}
+
+void testTenKeyFullFieldStreamAlternatesHandsInsideLongToken() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    addTimingPoint(chart);
+    const int phrase[] = {0, 1, 2, 3, 4, 5, 6, 5};
+    for (int i = 0; i < 24; ++i) {
+        keyconv::Note note;
+        note.id = "stream" + std::to_string(i);
+        note.time = 1000 + i * 120;
+        note.lane = phrase[static_cast<std::size_t>(i % 8)];
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    const auto rail = keyconv::buildFullFieldRail(chart, 7, 10, 2, 500, true);
+    int left = 0;
+    int right = 0;
+    for (int i = 0; i < 24; ++i) {
+        const auto found = rail.hintsByNoteId.find("stream" + std::to_string(i));
+        require(found != rail.hintsByNoteId.end(), "full-field stream rail should cover each stream note");
+        if (found->second.role == keyconv::PhraseRole::LeftHandVoice) {
+            ++left;
+        } else if (found->second.role == keyconv::PhraseRole::RightHandVoice) {
+            ++right;
+        }
+    }
+
+    require(left > 0 && right > 0, "long full-field stream should not collapse into one hand");
+    require(std::abs(left - right) <= 1, "long full-field stream should alternate primary hands evenly");
+}
+
+void testTenKeyFullFieldLongStairAlternatesHandsInsideToken() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    addTimingPoint(chart);
+    const int phrase[] = {0, 1, 2, 3, 4, 5, 6};
+    for (int i = 0; i < 14; ++i) {
+        keyconv::Note note;
+        note.id = "stair" + std::to_string(i);
+        note.time = 1000 + i * 250;
+        note.lane = phrase[static_cast<std::size_t>(i % 7)];
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    const auto rail = keyconv::buildFullFieldRail(chart, 7, 10, 2, 500, true);
+    int left = 0;
+    int right = 0;
+    for (int i = 0; i < 7; ++i) {
+        const auto found = rail.hintsByNoteId.find("stair" + std::to_string(i));
+        require(found != rail.hintsByNoteId.end(), "full-field stair rail should cover each stair note");
+        if (found->second.role == keyconv::PhraseRole::LeftHandVoice) {
+            ++left;
+        } else if (found->second.role == keyconv::PhraseRole::RightHandVoice) {
+            ++right;
+        }
+    }
+
+    require(left > 0 && right > 0, "long full-field stair should not collapse into one hand");
 }
 
 void testTenKeyFullFieldRemixDensityAndSafety() {
@@ -3940,6 +4019,742 @@ void testConvertedChartMarkerGuard() {
             "plain source key labels should not be treated as converted markers");
 }
 
+void testNk2ReportOnlyIntentGraph() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1500, 4, keyconv::NoteType::Hold, 1900},
+                                  {2000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {2125, 5, keyconv::NoteType::Tap, std::nullopt},
+                                  {2250, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {2375, 5, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Report;
+
+    const auto report = keyconv::nk2::analyzeReportOnly(chart, options);
+    require(!report.chartMutated, "NK2 milestone 1 must not mutate charts");
+    require(!report.noOp, "7K to 10K should not be same-K no-op");
+    require(report.intent.totalNotes == 8, "NK2 intent should count notes");
+    require(report.intent.holdNotes == 1, "NK2 intent should count LN anchors");
+    require(report.intent.stairMotifs > 0, "NK2 intent should detect stair motif");
+    require(report.intent.trillMotifs > 0, "NK2 intent should detect trill motif");
+    require(report.intent.mirrorSupportCandidates > 0, "NK2 should expose mirror support candidates");
+    require(report.layout.targetKeyCount == 10, "NK2 target layout should track target K");
+    require(report.layout.hasPanels, "10K layout should expose 5K panels");
+    require(report.layout.hasBridge, "10K layout should expose bridge lanes");
+    require(report.options.layoutWeights.panel == 3 &&
+                report.options.layoutWeights.bridge == 2 &&
+                report.options.layoutWeights.fullField == 6,
+            "NK2 default 10K layout weights should be 3/2/6");
+
+    const auto json = keyconv::nk2::reportToJson(report);
+    require(json.find("\"engine\": \"nk2\"") != std::string::npos, "NK2 JSON should include engine");
+    require(json.find("\"chartMutated\": false") != std::string::npos, "NK2 JSON should report no mutation");
+}
+
+void testNk2SameKeyNoOpUnlessTransform() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1100, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1200, 2, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 7;
+    options.mode = keyconv::nk2::Mode::Native;
+    const auto nativeReport = keyconv::nk2::analyzeReportOnly(chart, options);
+    require(nativeReport.noOp, "same-K NK2 native should no-op");
+    require(nativeReport.noOpReason.find("same key count") != std::string::npos,
+            "same-K no-op should explain why");
+
+    options.mode = keyconv::nk2::Mode::Transform;
+    const auto transformReport = keyconv::nk2::analyzeReportOnly(chart, options);
+    require(!transformReport.noOp, "same-K NK2 transform should not be treated as no-op");
+    require(!transformReport.chartMutated, "NK2 analysis-only transform report should not mutate charts");
+}
+
+void testNk2FourToFiveGenericPrototypeConversion() {
+    auto chart = makeChart(4, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1500, 3, keyconv::NoteType::Hold, 1900},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 5;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.chartMutated, "NK2 generic 4K to 5K should mutate chart lanes");
+    require(result.report.prototypeName == "nk2-generic-nk-relane-compress",
+            "NK2 generic 4K to 5K should use the generic prototype");
+    require(result.chart.meta.targetKeyCount == 5, "NK2 generic output should set target key count");
+    require(result.chart.notes.size() > chart.notes.size(),
+            "NK2 generic 4K to 5K should add fill notes");
+    require(result.report.addedNotes > 0,
+            "NK2 generic 4K to 5K should report added fill notes");
+    require(result.report.strongBeatSupportAccepted + result.report.mirrorSupportAccepted +
+                result.report.lnSupportAccepted == result.report.addedNotes,
+            "NK2 generic 4K to 5K support counters should match added notes");
+    require(result.report.droppedNotes == 0,
+            "NK2 generic 4K to 5K should not drop notes");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 generic 4K to 5K should avoid collisions");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 generic 4K to 5K should avoid LN conflicts");
+    require(result.report.createdJacks == 0,
+            "NK2 generic 4K to 5K should avoid created jacks");
+    require(result.report.laneDistribution.size() == 5,
+            "NK2 generic 4K to 5K should report 5 target lanes");
+    for (const auto& note : result.chart.notes) {
+        require(note.lane >= 0 && note.lane < 5,
+                "NK2 generic 4K to 5K lane should stay inside target field");
+    }
+    const auto hold = std::find_if(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.type == keyconv::NoteType::Hold;
+    });
+    require(hold != result.chart.notes.end() && hold->endTime == 1900,
+            "NK2 generic 4K to 5K should preserve LN duration");
+}
+
+void testNk2FourToFiveGenericUsesWholeFieldSpread() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 40; ++i) {
+        notes.push_back({1000 + i * 140, i % 4, keyconv::NoteType::Tap, std::nullopt});
+    }
+    notes.push_back({7000, 3, keyconv::NoteType::Hold, 7440});
+    auto chart = makeChart(4, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 5;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.chart.notes.size() > chart.notes.size(),
+            "NK2 generic 4K to 5K whole-field spread should add fill notes");
+    require(result.report.addedNotes > 0,
+            "NK2 generic 4K to 5K whole-field spread should report fill notes");
+    require(result.report.droppedNotes == 0,
+            "NK2 generic 4K to 5K whole-field spread should not drop notes");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 generic 4K to 5K whole-field spread should avoid collisions");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 generic 4K to 5K whole-field spread should avoid LN conflicts");
+    require(result.report.createdJacks == 0,
+            "NK2 generic 4K to 5K whole-field spread should avoid created jacks");
+    require(activeLaneCount(result.report.laneDistribution) == 5,
+            "NK2 generic 4K to 5K should use every target lane: " +
+                distributionText(result.report.laneDistribution));
+    require(laneDistributionRange(result.report.laneDistribution) <= 8,
+            "NK2 generic 4K to 5K should not starve one lane: " +
+                distributionText(result.report.laneDistribution));
+}
+
+void testNk2SevenToEightGenericPrototypeConversion() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1375, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {1500, 4, keyconv::NoteType::Tap, std::nullopt},
+                                  {1625, 5, keyconv::NoteType::Tap, std::nullopt},
+                                  {1750, 6, keyconv::NoteType::Hold, 2200},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 8;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.chartMutated, "NK2 generic 7K to 8K should mutate chart lanes");
+    require(result.report.prototypeName == "nk2-generic-nk-relane-compress",
+            "NK2 generic 7K to 8K should use the generic prototype");
+    require(result.chart.meta.targetKeyCount == 8, "NK2 generic 7K to 8K output should set target key count");
+    require(result.chart.notes.size() == chart.notes.size(),
+            "NK2 generic 7K to 8K should preserve source note count");
+    require(result.report.droppedNotes == 0,
+            "NK2 generic 7K to 8K should not drop notes");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 generic 7K to 8K should avoid collisions");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 generic 7K to 8K should avoid LN conflicts");
+    require(result.report.createdJacks == 0,
+            "NK2 generic 7K to 8K should avoid created jacks");
+    require(result.report.laneDistribution.size() == 8,
+            "NK2 generic 7K to 8K should report 8 target lanes");
+    for (const auto& note : result.chart.notes) {
+        require(note.lane >= 0 && note.lane < 8,
+                "NK2 generic 7K to 8K lane should stay inside target field");
+    }
+    const auto hold = std::find_if(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.type == keyconv::NoteType::Hold;
+    });
+    require(hold != result.chart.notes.end() && hold->endTime == 2200,
+            "NK2 generic 7K to 8K should preserve LN duration");
+}
+
+void testNk2SevenToEightGenericUsesWholeFieldSpread() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 56; ++i) {
+        notes.push_back({1000 + i * 120, i % 7, keyconv::NoteType::Tap, std::nullopt});
+    }
+    notes.push_back({8000, 6, keyconv::NoteType::Hold, 8440});
+    auto chart = makeChart(7, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 8;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.droppedNotes == 0,
+            "NK2 generic 7K to 8K whole-field spread should not drop notes");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 generic 7K to 8K whole-field spread should avoid collisions");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 generic 7K to 8K whole-field spread should avoid LN conflicts");
+    require(result.report.createdJacks == 0,
+            "NK2 generic 7K to 8K whole-field spread should avoid created jacks");
+    require(activeLaneCount(result.report.laneDistribution) == 8,
+            "NK2 generic 7K to 8K should use every target lane: " +
+                distributionText(result.report.laneDistribution));
+    require(laneDistributionRange(result.report.laneDistribution) <= 10,
+            "NK2 generic 7K to 8K should not leave a lane under-filled: " +
+                distributionText(result.report.laneDistribution));
+    require(result.report.sourceAnchorScore <= 0.75,
+            "NK2 generic 7K to 8K should soften fixed source anchors");
+}
+
+void testNk2SevenToEightLongLnCopiesAdjacentPlacement() {
+    auto chart = makeChart(7, {
+                                  {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 3, keyconv::NoteType::Hold, 3200},
+                                  {3600, 5, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 8;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const auto anchor = std::find_if(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.id == "n0";
+    });
+    const auto hold = std::find_if(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.id == "n1";
+    });
+
+    require(anchor != result.chart.notes.end(), "NK2 adjacent-copy fixture should keep anchor tap");
+    require(hold != result.chart.notes.end(), "NK2 adjacent-copy fixture should keep long LN");
+    require(hold->type == keyconv::NoteType::Hold && hold->endTime == 3200,
+            "NK2 adjacent-copy fixture should preserve long LN duration");
+    require(hold->lane == anchor->lane + 1,
+            "NK2 long LN should copy the adjacent source placement");
+    require(hold->lane == 3,
+            "NK2 long LN should prefer adjacent-copy lane over the direct 7K-to-8K lane");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 adjacent-copy long LN should avoid collisions");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 adjacent-copy long LN should avoid LN conflicts");
+    require(result.report.createdJacks == 0,
+            "NK2 adjacent-copy long LN should avoid created jacks");
+}
+
+void testNk2SevenToFourGenericPrototypeCompression() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 4, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 5, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 6, keyconv::NoteType::Tap, std::nullopt},
+                                  {1750, 1, keyconv::NoteType::Hold, 2200},
+                                  {2200, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {2500, 5, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 4;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.chartMutated, "NK2 generic 7K to 4K should mutate chart lanes");
+    require(result.report.prototypeName == "nk2-generic-nk-relane-compress",
+            "NK2 generic 7K to 4K should use the generic prototype");
+    require(result.chart.meta.targetKeyCount == 4, "NK2 generic down output should set target key count");
+    require(result.chart.notes.size() < chart.notes.size(),
+            "NK2 generic 7K to 4K should drop only impossible overflow notes");
+    require(result.report.droppedNotes > 0,
+            "NK2 generic 7K to 4K should report dropped overflow notes");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 generic 7K to 4K should avoid collisions");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 generic 7K to 4K should avoid LN conflicts");
+    const auto collisionScan = keyconv::detectCollisions(result.chart.notes);
+    require(collisionScan.longNoteConflicts == 0,
+            "NK2 generic 7K to 4K should avoid LN-tail overlaps in the exported chart");
+    require(result.report.createdJacks == 0,
+            "NK2 generic 7K to 4K should avoid created jacks");
+    require(result.report.laneDistribution.size() == 4,
+            "NK2 generic 7K to 4K should report 4 target lanes");
+    for (const auto& note : result.chart.notes) {
+        require(note.lane >= 0 && note.lane < 4,
+                "NK2 generic 7K to 4K lane should stay inside target field");
+    }
+    const auto hold = std::find_if(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.type == keyconv::NoteType::Hold;
+    });
+    require(hold != result.chart.notes.end() && hold->endTime == 2200,
+            "NK2 generic 7K to 4K should preserve surviving LN duration");
+}
+
+void testNk2SevenToTenPrototypeConversion() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1250, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1375, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {1750, 4, keyconv::NoteType::Hold, 2350},
+                                  {2250, 6, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.chartMutated, "NK2 7K to 10K prototype should mutate chart lanes");
+    require(result.chart.meta.targetKeyCount == 10, "NK2 converted chart should set target key count");
+    require(result.chart.notes.size() == chart.notes.size(), "NK2 prototype should preserve note count");
+    require(result.report.addedNotes == 0, "NK2 faithful prototype should not add support notes");
+    require(result.report.sameTimeCollisions == 0, "NK2 prototype should avoid same-time lane collisions");
+    require(result.report.longNoteConflicts == 0, "NK2 prototype should avoid LN conflicts");
+    require(result.report.createdJacks == 0, "NK2 prototype should avoid new target jacks");
+    require(result.report.laneDistribution.size() == 10, "NK2 report should include 10K lane distribution");
+    require(result.report.sourceAnchorTotal == static_cast<int>(chart.notes.size()),
+            "NK2 source-anchor diagnostic should count original notes");
+    require(result.report.sourceAnchorMatches > 0,
+            "NK2 source-anchor diagnostic should see preserved direct anchors");
+    require(result.report.sourceAnchorScore > 0.0 && result.report.sourceAnchorScore <= 1.0,
+            "NK2 source-anchor score should be normalized");
+
+    const auto lanes = lanesOf(result.chart);
+    require(lanes.size() == chart.notes.size(), "NK2 lane list should match note count");
+    require(lanes[0] < lanes[1] && lanes[1] < lanes[2] && lanes[2] < lanes[3],
+            "NK2 7K stair should keep ascending target direction");
+    for (const int lane : lanes) {
+        require(lane >= 0 && lane < 10, "NK2 converted lane should stay inside 10K field");
+    }
+    const auto hold = std::find_if(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.type == keyconv::NoteType::Hold;
+    });
+    require(hold != result.chart.notes.end(), "NK2 should preserve hold note");
+    require(hold->endTime == 2350, "NK2 must preserve LN duration exactly");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"chartMutated\": true") != std::string::npos, "NK2 JSON should report mutation");
+    require(json.find("\"prototypeName\": \"nk2-7k10k-panel-bridge-fullfield\"") != std::string::npos,
+            "NK2 JSON should name the prototype");
+    require(json.find("\"sourceAnchorScore\"") != std::string::npos,
+            "NK2 JSON should include source-anchor score");
+}
+
+void testNk2SevenToTenPreservesSourceJack() {
+    auto chart = makeChart(7, {
+                                  {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1120, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1500, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1650, 3, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    require(lanes.size() == 4, "NK2 source jack fixture should keep note count");
+    require(lanes[0] == lanes[1], "NK2 should preserve source jack as same target lane");
+    require(result.report.preservedSourceJacks > 0, "NK2 report should count preserved source jacks");
+    require(result.report.createdJacks == 0, "NK2 source jack preservation should not count as created jack");
+}
+
+void testNk2SevenToTenSupportNotesAreGated() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Hold, 1600},
+                                  {1125, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1500, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {2000, 5, keyconv::NoteType::Hold, 2600},
+                                  {2125, 4, keyconv::NoteType::Tap, std::nullopt},
+                                  {2500, 6, keyconv::NoteType::Tap, std::nullopt},
+                                  {3000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {3500, 3, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Native;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.chartMutated, "NK2 support fixture should convert chart");
+    require(result.chart.notes.size() > chart.notes.size(), "NK2 native should add limited support notes");
+    require(result.report.addedNotes > 0, "NK2 report should count added support notes");
+    require(result.report.lnSupportCandidates > 0, "NK2 should expose LN support candidates");
+    require(result.report.mirrorSupportCandidates > 0, "NK2 should expose mirror support candidates");
+    require(result.report.lnSupportAccepted + result.report.strongBeatSupportAccepted +
+                result.report.mirrorSupportAccepted == result.report.addedNotes,
+            "NK2 support accepted counters should match added notes");
+    require(result.report.sourceAnchorTotal == static_cast<int>(chart.notes.size()),
+            "NK2 source-anchor diagnostic should ignore generated support notes");
+    const int generatedProvenance =
+        result.report.generatedFromJackMotif + result.report.generatedFromTrillMotif +
+        result.report.generatedFromStairMotif + result.report.generatedFromStreamMotif +
+        result.report.generatedFromChordMotif + result.report.generatedFromLnMotif +
+        result.report.generatedFromNeutralMotif;
+    require(generatedProvenance == result.report.addedNotes,
+            "NK2 generated provenance counters should match added notes");
+    require(result.report.supportRejectedByBudget > 0,
+            "NK2 support generation should expose budget rejections on dense candidate sets");
+    require(result.report.supportPhraseWindows > 0,
+            "NK2 support generation should report phrase-local budget windows");
+    require(result.report.phraseProfileWindows > 0,
+            "NK2 support generation should report phrase-profile windows");
+    require(result.report.phraseProfileOverBudgetWindows == 0,
+            "NK2 support generation should keep support inside phrase profile caps");
+    require(result.report.phraseProfileScore > 0.0 && result.report.phraseProfileScore <= 1.0,
+            "NK2 phrase-profile score should be normalized");
+    require(result.report.sameTimeCollisions == 0, "NK2 support notes should pass collision gate");
+    require(result.report.longNoteConflicts == 0, "NK2 support notes should pass LN conflict gate");
+    require(result.report.createdJacks == 0, "NK2 support notes should pass created-jack gate");
+
+    for (const auto& note : result.chart.notes) {
+        if (note.id == "n0") {
+            require(note.type == keyconv::NoteType::Hold && note.endTime == 1600,
+                    "NK2 support generation must preserve first LN duration");
+        }
+        if (note.id == "n3") {
+            require(note.type == keyconv::NoteType::Hold && note.endTime == 2600,
+                    "NK2 support generation must preserve second LN duration");
+        }
+        if (note.id.find("nk2-") == 0) {
+            require(note.type == keyconv::NoteType::Tap, "NK2 support notes should be taps in milestone 3");
+            require(!note.endTime.has_value(), "NK2 support notes should not introduce new LN durations");
+        }
+    }
+    const bool hasLnProvenanceId = std::any_of(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.id.find("nk2-ln-ln-") == 0;
+    });
+    const bool hasBeatProvenanceId = std::any_of(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.id.find("nk2-beat-") == 0 && note.id.find("nk2-beat--") != 0;
+    });
+    const bool hasMirrorProvenanceId = std::any_of(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.id.find("nk2-mirror-") == 0 && note.id.find("nk2-mirror--") != 0;
+    });
+    require(result.report.lnSupportAccepted == 0 || hasLnProvenanceId,
+            "NK2 LN support IDs should include LN provenance");
+    require(result.report.strongBeatSupportAccepted == 0 || hasBeatProvenanceId,
+            "NK2 beat support IDs should include motif provenance");
+    require(result.report.mirrorSupportAccepted == 0 || hasMirrorProvenanceId,
+            "NK2 mirror support IDs should include motif provenance");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"support\"") != std::string::npos, "NK2 JSON should include support counters");
+    require(json.find("\"lnAccepted\"") != std::string::npos, "NK2 JSON should include LN accepted count");
+    require(json.find("\"strongBeatAccepted\"") != std::string::npos,
+            "NK2 JSON should include strong-beat accepted count");
+    require(json.find("\"mirrorAccepted\"") != std::string::npos,
+            "NK2 JSON should include mirror accepted count");
+    require(json.find("\"generatedProvenance\"") != std::string::npos,
+            "NK2 JSON should include generated provenance counters");
+    require(json.find("\"phraseProfile\"") != std::string::npos,
+            "NK2 JSON should include phrase-profile diagnostics");
+}
+
+void testNk2SevenToTenMirrorSupportUsesOppositePanel() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Native;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.mirrorSupportCandidates > 0,
+            "NK2 mirror support should emit independent candidates");
+    require(result.report.mirrorSupportAccepted > 0,
+            "NK2 mirror support should accept a safe opposite-hand note");
+    require(result.report.addedNotes == result.report.mirrorSupportAccepted,
+            "single-note mirror fixture should spend its support budget on mirror support");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 mirror support should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 mirror support should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 mirror support should keep created-jack gate intact");
+
+    const auto mirror = std::find_if(result.chart.notes.begin(), result.chart.notes.end(), [](const auto& note) {
+        return note.id.find("nk2-mirror-") == 0;
+    });
+    require(mirror != result.chart.notes.end(), "NK2 mirror support should write a mirror note ID");
+    require(mirror->lane >= 5 && mirror->lane < 10,
+            "left-source mirror support should land in the right 5K panel");
+}
+
+void testNk2SevenToTenPhraseBudgetLimitsClusteredSupport() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 14; ++i) {
+        notes.push_back({1000 + (i % 2) * 500, i % 7, keyconv::NoteType::Tap, std::nullopt});
+    }
+    for (int i = 0; i < 36; ++i) {
+        notes.push_back({2500 + i * 500, i % 7, keyconv::NoteType::Tap, std::nullopt});
+    }
+    auto chart = makeChart(7, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Native;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.addedNotes > 0,
+            "NK2 phrase-budget fixture should still accept some support notes");
+    require(result.report.supportPhraseWindows > 1,
+            "NK2 phrase-budget fixture should span multiple phrase windows");
+    require(result.report.supportRejectedByPhraseBudget > 0,
+            "NK2 phrase budget should reject clustered support candidates");
+    require(result.report.phraseProfileOverBudgetWindows == 0,
+            "NK2 phrase profile should confirm accepted support stayed under local caps");
+    require(result.report.supportRejectedByBudget >= result.report.supportRejectedByPhraseBudget,
+            "NK2 phrase-budget rejects should also be counted as budget rejects");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 phrase budget should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 phrase budget should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 phrase budget should keep created-jack gate intact");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"rejectedByPhraseBudget\"") != std::string::npos,
+            "NK2 JSON should include phrase-budget rejections");
+    require(json.find("\"phraseWindows\"") != std::string::npos,
+            "NK2 JSON should include phrase-budget windows");
+}
+
+void testNk2SevenToTenLnAnchorsUseFreerField() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 20; ++i) {
+        const int time = 1000 + i * 900;
+        notes.push_back({time, 0, keyconv::NoteType::Hold, time + 360});
+    }
+    auto chart = makeChart(7, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    const std::set<int> uniqueLanes(lanes.begin(), lanes.end());
+    const bool usesOppositePanel = std::any_of(lanes.begin(), lanes.end(), [](int lane) {
+        return lane >= 5;
+    });
+
+    require(result.report.addedNotes == 0,
+            "NK2 faithful LN freedom fixture should not add support notes");
+    require(uniqueLanes.size() >= 5,
+            "NK2 LN anchors should use a freer target field: " + distributionText(result.report.laneDistribution));
+    require(usesOppositePanel,
+            "NK2 repeated side-lane LN anchors should be able to reach the opposite panel");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 freer LN placement should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 freer LN placement should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 freer LN placement should keep created-jack gate intact");
+    for (const auto& note : result.chart.notes) {
+        require(note.type == keyconv::NoteType::Hold && note.endTime.has_value(),
+                "NK2 freer LN placement should keep source LN type");
+        require(*note.endTime - note.time == 360,
+                "NK2 freer LN placement must preserve LN duration exactly");
+    }
+}
+
+void testNk2SevenToTenOriginalTapsUseFreerField() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 24; ++i) {
+        notes.push_back({1000 + i * 900, 0, keyconv::NoteType::Tap, std::nullopt});
+    }
+    auto chart = makeChart(7, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    const std::set<int> uniqueLanes(lanes.begin(), lanes.end());
+    const bool usesOppositePanel = std::any_of(lanes.begin(), lanes.end(), [](int lane) {
+        return lane >= 5;
+    });
+
+    require(result.report.addedNotes == 0,
+            "NK2 faithful tap freedom fixture should not add support notes");
+    require(uniqueLanes.size() >= 6,
+            "NK2 original taps should use a freer target field: " + distributionText(result.report.laneDistribution));
+    require(usesOppositePanel,
+            "NK2 repeated side-lane taps should be able to reach the opposite panel");
+    require(result.report.sourceAnchorMatches < result.report.sourceAnchorTotal / 2,
+            "NK2 original tap freedom should reduce direct source-anchor locking");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 freer tap placement should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 freer tap placement should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 freer tap placement should keep created-jack gate intact");
+}
+
+void testNk2SevenToTenCoveragePressureFillsBridgeGaps() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 24; ++i) {
+        notes.push_back({1000 + i * 600, 3, keyconv::NoteType::Tap, std::nullopt});
+    }
+    auto chart = makeChart(7, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const auto& distribution = result.report.laneDistribution;
+    require(distribution.size() == 10, "NK2 coverage fixture should report 10K distribution");
+    require(distribution[4] > 0,
+            "NK2 coverage pressure should use the low bridge target lane: " + distributionText(distribution));
+    require(distribution[5] < static_cast<int>(chart.notes.size()),
+            "NK2 coverage pressure should not pin every center source note to the direct lane");
+    require(result.report.createdJacks == 0, "NK2 coverage pressure must not create target jacks");
+    require(result.report.layoutCoverageScore > 0.0, "NK2 report should score layout coverage");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"layoutScores\"") != std::string::npos, "NK2 JSON should include layout scores");
+    require(json.find("\"coverage\"") != std::string::npos, "NK2 JSON should include coverage score");
+}
+
+void testNk2SevenToTenPanelCoverageFillsRightPanelGaps() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 30; ++i) {
+        notes.push_back({1000 + i * 600, 6, keyconv::NoteType::Tap, std::nullopt});
+    }
+    auto chart = makeChart(7, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const auto& distribution = result.report.laneDistribution;
+    require(distribution.size() == 10, "NK2 right-panel fixture should report 10K distribution");
+    require(distribution[8] > 0,
+            "NK2 panel pressure should use the under-filled right-panel target lane: " +
+                distributionText(distribution));
+    require(distribution[9] < static_cast<int>(chart.notes.size()),
+            "NK2 panel pressure should not pin every far-right source note to the direct lane");
+    require(result.report.createdJacks == 0, "NK2 right-panel coverage must not create target jacks");
+    require(result.report.rightPanelScore > 0.0, "NK2 report should score right-panel spread");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"rightPanel\"") != std::string::npos, "NK2 JSON should include right-panel score");
+}
+
+void testNk2SevenToTenMotifPoliciesAreSeparated() {
+    auto chart = makeChart(7, {
+                                  {1000, 3, keyconv::NoteType::Hold, 1500},
+                                  {1900, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1900, 6, keyconv::NoteType::Tap, std::nullopt},
+                                  {2500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {2620, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {3200, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {3320, 4, keyconv::NoteType::Tap, std::nullopt},
+                                  {3440, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {3560, 4, keyconv::NoteType::Tap, std::nullopt},
+                                  {4200, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {4320, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {4440, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {4560, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {5200, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {5320, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {5440, 5, keyconv::NoteType::Tap, std::nullopt},
+                                  {5560, 3, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.motifLnPlacements > 0, "NK2 motif policy should count LN anchors");
+    require(result.report.motifChordPlacements > 0, "NK2 motif policy should count chord placements");
+    require(result.report.motifJackPlacements > 0, "NK2 motif policy should count source jacks");
+    require(result.report.motifTrillPlacements > 0, "NK2 motif policy should count trills");
+    require(result.report.motifStairPlacements > 0, "NK2 motif policy should count stairs");
+    require(result.report.motifStreamPlacements > 0, "NK2 motif policy should count streams");
+    require(result.report.sameTimeCollisions == 0, "NK2 motif policies should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0, "NK2 motif policies should keep LN gate intact");
+    require(result.report.createdJacks == 0, "NK2 motif policies should keep created-jack gate intact");
+
+    const auto lanes = lanesOf(result.chart);
+    require(lanes[5] != lanes[6] && lanes[6] != lanes[7] && lanes[7] != lanes[8],
+            "NK2 trill policy should avoid collapsing alternating notes to one lane");
+    require(lanes[9] < lanes[10] && lanes[10] < lanes[11] && lanes[11] < lanes[12],
+            "NK2 stair policy should preserve ascending direction");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"motifPlacements\"") != std::string::npos,
+            "NK2 JSON should include motif placement counters");
+    require(json.find("\"trill\"") != std::string::npos, "NK2 JSON should include trill counter");
+    require(json.find("\"stair\"") != std::string::npos, "NK2 JSON should include stair counter");
+}
+
 }  // namespace
 
 int main() {
@@ -3977,6 +4792,10 @@ int main() {
          testTenKeyFullFieldRemixRotatesEchoWithinOppositeZone},
         {"10K full-field rail covers all notes",
          testTenKeyFullFieldRailCoversAllNotesWithoutStructChanges},
+        {"10K full-field stream alternates hands inside long token",
+         testTenKeyFullFieldStreamAlternatesHandsInsideLongToken},
+        {"10K full-field long stair alternates hands inside token",
+         testTenKeyFullFieldLongStairAlternatesHandsInsideToken},
         {"10K full-field remix density and safety",
          testTenKeyFullFieldRemixDensityAndSafety},
         {"8K playable candidate radius remains stable", testEightKeyPlayableCandidateRadiusRemainsStable},
@@ -4082,6 +4901,37 @@ int main() {
         {"difficulty name marks expansion and stream transform",
          testDifficultyNameMarksExpansionAndStreamTransform},
         {"converted chart marker guard", testConvertedChartMarkerGuard},
+        {"NK2 report-only intent graph", testNk2ReportOnlyIntentGraph},
+        {"NK2 same-key no-op unless transform", testNk2SameKeyNoOpUnlessTransform},
+        {"NK2 4K to 5K generic prototype conversion",
+         testNk2FourToFiveGenericPrototypeConversion},
+        {"NK2 4K to 5K generic uses whole-field spread",
+         testNk2FourToFiveGenericUsesWholeFieldSpread},
+        {"NK2 7K to 8K generic prototype conversion",
+         testNk2SevenToEightGenericPrototypeConversion},
+        {"NK2 7K to 8K generic uses whole-field spread",
+         testNk2SevenToEightGenericUsesWholeFieldSpread},
+        {"NK2 7K to 8K long LN copies adjacent placement",
+         testNk2SevenToEightLongLnCopiesAdjacentPlacement},
+        {"NK2 7K to 4K generic prototype compression",
+         testNk2SevenToFourGenericPrototypeCompression},
+        {"NK2 7K to 10K prototype conversion", testNk2SevenToTenPrototypeConversion},
+        {"NK2 7K to 10K preserves source jack", testNk2SevenToTenPreservesSourceJack},
+        {"NK2 7K to 10K support notes are gated", testNk2SevenToTenSupportNotesAreGated},
+        {"NK2 7K to 10K mirror support uses opposite panel",
+         testNk2SevenToTenMirrorSupportUsesOppositePanel},
+        {"NK2 7K to 10K phrase budget limits clustered support",
+         testNk2SevenToTenPhraseBudgetLimitsClusteredSupport},
+        {"NK2 7K to 10K LN anchors use freer field",
+         testNk2SevenToTenLnAnchorsUseFreerField},
+        {"NK2 7K to 10K original taps use freer field",
+         testNk2SevenToTenOriginalTapsUseFreerField},
+        {"NK2 7K to 10K coverage pressure fills bridge gaps",
+         testNk2SevenToTenCoveragePressureFillsBridgeGaps},
+        {"NK2 7K to 10K panel coverage fills right-panel gaps",
+         testNk2SevenToTenPanelCoverageFillsRightPanelGaps},
+        {"NK2 7K to 10K motif policies are separated",
+         testNk2SevenToTenMotifPoliciesAreSeparated},
     };
 
     try {

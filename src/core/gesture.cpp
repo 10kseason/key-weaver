@@ -20,6 +20,11 @@ struct PhraseNote {
     int time = 0;
 };
 
+struct FullFieldHandBalance {
+    int leftNotes = 0;
+    int rightNotes = 0;
+};
+
 int signOf(int value) {
     if (value > 0) {
         return 1;
@@ -436,6 +441,28 @@ bool fullFieldChordShouldSplit(const std::vector<PhraseNote>& notes, PatternKind
     return false;
 }
 
+bool fullFieldTokenShouldAlternateHands(PatternKind kind, std::size_t noteCount) {
+    if (kind == PatternKind::Stream || kind == PatternKind::Burst) {
+        return true;
+    }
+    if ((kind == PatternKind::StairUp || kind == PatternKind::StairDown) && noteCount >= 6) {
+        return true;
+    }
+    return false;
+}
+
+bool chooseFullFieldPrimaryLeft(const FullFieldHandBalance& balance) {
+    return balance.leftNotes <= balance.rightNotes;
+}
+
+void recordFullFieldHand(FullFieldHandBalance& balance, bool leftHand, int count = 1) {
+    if (leftHand) {
+        balance.leftNotes += count;
+    } else {
+        balance.rightNotes += count;
+    }
+}
+
 void addFullFieldHint(GestureRail& rail,
                       const PhraseNote& note,
                       PatternKind kind,
@@ -472,12 +499,13 @@ void addFullFieldTokenHints(GestureRail& rail,
                             int motifId,
                             int sourceKeyCount,
                             int targetKeyCount,
-                            bool& primaryLeft) {
+                            FullFieldHandBalance& balance) {
     notes = sortedPhraseNotes(std::move(notes));
     if (notes.empty()) {
         return;
     }
 
+    const bool primaryLeft = chooseFullFieldPrimaryLeft(balance);
     const int motifHitCount = static_cast<int>(notes.size());
     const int motifDurationMs = motifHitCount >= 2 ? notes.back().time - notes.front().time : 0;
     const auto [phraseSourceMin, phraseSourceMax] = sourceRangeForNotes(notes);
@@ -496,6 +524,7 @@ void addFullFieldTokenHints(GestureRail& rail,
                              phraseSourceMin,
                              phraseSourceMax);
         }
+        recordFullFieldHand(balance, primaryLeft, motifHitCount);
         return;
     }
 
@@ -514,8 +543,8 @@ void addFullFieldTokenHints(GestureRail& rail,
                              motifDurationMs,
                              phraseSourceMin,
                              phraseSourceMax);
+            recordFullFieldHand(balance, leftHand);
         }
-        primaryLeft = !primaryLeft;
         return;
     }
 
@@ -542,8 +571,28 @@ void addFullFieldTokenHints(GestureRail& rail,
                              motifDurationMs,
                              leftHand ? leftSourceMin : rightSourceMin,
                              leftHand ? leftSourceMax : rightSourceMax);
+            recordFullFieldHand(balance, leftHand);
         }
-        primaryLeft = !primaryLeft;
+        return;
+    }
+
+    if (fullFieldTokenShouldAlternateHands(token.kind, notes.size())) {
+        for (std::size_t index = 0; index < notes.size(); ++index) {
+            const bool leftHand = (index % 2 == 0) ? primaryLeft : !primaryLeft;
+            addFullFieldHint(rail,
+                             notes[index],
+                             token.kind,
+                             motifId,
+                             leftHand,
+                             sourceKeyCount,
+                             targetKeyCount,
+                             token.direction,
+                             motifHitCount,
+                             motifDurationMs,
+                             phraseSourceMin,
+                             phraseSourceMax);
+            recordFullFieldHand(balance, leftHand);
+        }
         return;
     }
 
@@ -561,7 +610,7 @@ void addFullFieldTokenHints(GestureRail& rail,
                          phraseSourceMin,
                          phraseSourceMax);
     }
-    primaryLeft = !primaryLeft;
+    recordFullFieldHand(balance, primaryLeft, motifHitCount);
 }
 
 void addFullFieldSourceJackGroupHints(GestureRail& rail,
@@ -570,7 +619,7 @@ void addFullFieldSourceJackGroupHints(GestureRail& rail,
                                       int targetKeyCount,
                                       int jackWindowMs,
                                       int& motifId,
-                                      bool primaryLeft) {
+                                      FullFieldHandBalance& balance) {
     const auto groups = detectJackGroups(chart.notes, RepeatLaneMode::SourceLane, jackWindowMs);
     for (const auto& group : groups) {
         bool anyAlreadyHinted = false;
@@ -588,6 +637,7 @@ void addFullFieldSourceJackGroupHints(GestureRail& rail,
         if (notes.size() < 3) {
             continue;
         }
+        const bool primaryLeft = chooseFullFieldPrimaryLeft(balance);
         const int motifHitCount = static_cast<int>(notes.size());
         const int motifDurationMs = notes.back().time - notes.front().time;
         for (const auto& note : notes) {
@@ -602,6 +652,7 @@ void addFullFieldSourceJackGroupHints(GestureRail& rail,
                              motifHitCount,
                              motifDurationMs);
         }
+        recordFullFieldHand(balance, primaryLeft, motifHitCount);
         ++motifId;
     }
 }
@@ -611,7 +662,7 @@ void addFullFieldFallbackHints(GestureRail& rail,
                                int sourceKeyCount,
                                int targetKeyCount,
                                int& motifId,
-                               bool& primaryLeft) {
+                               FullFieldHandBalance& balance) {
     std::vector<PhraseNote> notes;
     notes.reserve(chart.notes.size());
     for (std::size_t index = 0; index < chart.notes.size(); ++index) {
@@ -628,6 +679,7 @@ void addFullFieldFallbackHints(GestureRail& rail,
     }
 
     for (const auto& note : sortedPhraseNotes(std::move(notes))) {
+        const bool primaryLeft = chooseFullFieldPrimaryLeft(balance);
         addFullFieldHint(rail,
                          note,
                          PatternKind::Single,
@@ -638,7 +690,7 @@ void addFullFieldFallbackHints(GestureRail& rail,
                          0,
                          1,
                          0);
-        primaryLeft = !primaryLeft;
+        recordFullFieldHand(balance, primaryLeft);
     }
 }
 
@@ -840,17 +892,20 @@ GestureRail buildFullFieldRail(const Chart& chart,
     const auto slices = buildTimeSlices(chart, sourceKeyCount, sameTimeEpsilonMs);
     const auto tokens = detectPatternTokens(slices, jackWindowMs);
     int motifId = 0;
-    bool primaryLeft = true;
+    FullFieldHandBalance balance;
     for (const auto& token : tokens) {
+        if (token.kind == PatternKind::Single) {
+            continue;
+        }
         const auto notes = phraseNotesForToken(chart, slices, token);
         if (notes.empty()) {
             continue;
         }
-        addFullFieldTokenHints(rail, notes, token, motifId++, sourceKeyCount, targetKeyCount, primaryLeft);
+        addFullFieldTokenHints(rail, notes, token, motifId++, sourceKeyCount, targetKeyCount, balance);
     }
 
-    addFullFieldSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId, primaryLeft);
-    addFullFieldFallbackHints(rail, chart, sourceKeyCount, targetKeyCount, motifId, primaryLeft);
+    addFullFieldSourceJackGroupHints(rail, chart, sourceKeyCount, targetKeyCount, jackWindowMs, motifId, balance);
+    addFullFieldFallbackHints(rail, chart, sourceKeyCount, targetKeyCount, motifId, balance);
     return rail;
 }
 

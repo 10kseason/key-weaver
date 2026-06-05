@@ -2,6 +2,7 @@
 
 #include "core/collision.hpp"
 #include "core/mapping.hpp"
+#include "core/repeat.hpp"
 
 #include <algorithm>
 #include <array>
@@ -138,6 +139,47 @@ bool createsSourceDifferentRepeat(const std::vector<Note>& placed,
         }
     }
     return false;
+}
+
+bool createsCreatedJackOnLane(const AssignmentContext& context,
+                              const Note& note,
+                              int targetLane,
+                              int window) {
+    if (context.originalSourceIndex != nullptr) {
+        const int clampedWindow = std::max(0, window);
+        if (clampedWindow <= 0) {
+            return false;
+        }
+
+        Note moved = note;
+        moved.lane = targetLane;
+        for (auto it = context.placed.rbegin(); it != context.placed.rend(); ++it) {
+            const int dt = moved.time - it->time;
+            if (dt > clampedWindow) {
+                break;
+            }
+            if (dt > 0 && it->lane == targetLane &&
+                !isSourceJackIntent(*context.originalSourceIndex, *it, moved, clampedWindow)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (context.originalChart != nullptr &&
+        wouldCreateCreatedJackOnLane(*context.originalChart,
+                                     context.placed,
+                                     note,
+                                     targetLane,
+                                     window,
+                                     -1)) {
+        return true;
+    }
+    return createsSourceDifferentRepeat(context.placed,
+                                        note.sourceLane.value_or(note.lane),
+                                        note.time,
+                                        targetLane,
+                                        window);
 }
 
 bool hasNearbySourceLaneNeighbor(const std::vector<Note>& sourceNotes,
@@ -850,7 +892,6 @@ double gestureScore(const Note& source,
 std::vector<int> noCreatedJackCandidates(const LaneCandidateSet& baseSet,
                                          const Note& note,
                                          const AssignmentContext& context) {
-    const int sourceLane = note.sourceLane.value_or(note.lane);
     const int window = std::max(0, context.jackWindowMs);
     if (window <= 0) {
         return baseSet.candidates;
@@ -858,7 +899,7 @@ std::vector<int> noCreatedJackCandidates(const LaneCandidateSet& baseSet,
 
     std::vector<int> safe;
     for (const int lane : baseSet.candidates) {
-        if (!createsSourceDifferentRepeat(context.placed, sourceLane, note.time, lane, window)) {
+        if (!createsCreatedJackOnLane(context, note, lane, window)) {
             addUnique(safe, lane);
         } else if (context.preventedJacksByAssignment != nullptr) {
             ++*context.preventedJacksByAssignment;
@@ -873,12 +914,12 @@ std::vector<int> noCreatedJackCandidates(const LaneCandidateSet& baseSet,
         const int right = baseSet.baseLane + distance;
         if (left >= 0 && left < context.targetKeyCount &&
             candidateInPreferredZone(baseSet, left) &&
-            !createsSourceDifferentRepeat(context.placed, sourceLane, note.time, left, window)) {
+            !createsCreatedJackOnLane(context, note, left, window)) {
             addUnique(safe, left);
         }
         if (right >= 0 && right < context.targetKeyCount && right != left &&
             candidateInPreferredZone(baseSet, right) &&
-            !createsSourceDifferentRepeat(context.placed, sourceLane, note.time, right, window)) {
+            !createsCreatedJackOnLane(context, note, right, window)) {
             addUnique(safe, right);
         }
         if (!safe.empty()) {
@@ -890,11 +931,11 @@ std::vector<int> noCreatedJackCandidates(const LaneCandidateSet& baseSet,
         const int left = baseSet.baseLane - distance;
         const int right = baseSet.baseLane + distance;
         if (left >= 0 && left < context.targetKeyCount &&
-            !createsSourceDifferentRepeat(context.placed, sourceLane, note.time, left, window)) {
+            !createsCreatedJackOnLane(context, note, left, window)) {
             addUnique(safe, left);
         }
         if (right >= 0 && right < context.targetKeyCount && right != left &&
-            !createsSourceDifferentRepeat(context.placed, sourceLane, note.time, right, window)) {
+            !createsCreatedJackOnLane(context, note, right, window)) {
             addUnique(safe, right);
         }
         if (!safe.empty()) {
@@ -1213,7 +1254,9 @@ double scoreAssignment(const TimeSlice& slice,
         if (!sourceJackLike) {
             jackPenalty += recentJackPenalty(context.placed, source.time, targetLane, jackWindowMs);
         }
-        score -= unwantedCreatedJackPenalty(context.placed, sourceLane, source.time, targetLane, jackWindowMs) * 80.0;
+        const double createdJackPenaltyScale = context.tenKFullFieldRemix ? 180.0 : 80.0;
+        score -= unwantedCreatedJackPenalty(context.placed, sourceLane, source.time, targetLane, jackWindowMs) *
+                 createdJackPenaltyScale;
         if (const auto sourceRepeat = recentSameSourceLane(context.placed, sourceLane, source.time, jackWindowMs);
             sourceRepeat.has_value()) {
             if (context.style == ConversionStyle::Faithful) {
@@ -1221,6 +1264,15 @@ double scoreAssignment(const TimeSlice& slice,
             } else if (context.style == ConversionStyle::Playable || context.style == ConversionStyle::Training) {
                 if (sourceJackLike && hint != nullptr && hint->motifHitCount >= 5) {
                     score += context.weights.shape * (targetLane == sourceRepeat->lane ? 4.5 : -4.5);
+                } else if (context.tenKFullFieldRemix) {
+                    const int laneDelta = std::abs(targetLane - sourceRepeat->lane);
+                    if (laneDelta == 0) {
+                        score -= context.weights.shape * 4.0;
+                    } else if (laneDelta == 1) {
+                        score += context.weights.shape * 0.85;
+                    } else {
+                        score -= context.weights.shape * 0.35;
+                    }
                 } else {
                     const auto recentRepeatLanes =
                         recentSameSourceTargetLanes(context.placed, sourceLane, source.time, jackWindowMs * 2);

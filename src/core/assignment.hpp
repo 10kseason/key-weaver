@@ -8,6 +8,8 @@
 
 namespace keyconv {
 
+struct SourceNoteIndex;
+
 struct PpgWeights {
     double position = 1.0;
     double order = 2.0;
@@ -37,6 +39,8 @@ struct SliceAssignment {
 };
 
 struct AssignmentContext {
+    const Chart* originalChart = nullptr;
+    const SourceNoteIndex* originalSourceIndex = nullptr;
     std::vector<Note> placed;
     std::vector<int> laneUse;
     int sourceKeyCount = 0;

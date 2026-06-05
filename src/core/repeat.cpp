@@ -50,35 +50,25 @@ bool idLooksGenerated(const std::string& id) {
     return id.rfind("gen:", 0) == 0;
 }
 
-std::map<std::string, const Note*> notesById(const Chart& chart) {
-    std::map<std::string, const Note*> byId;
-    for (const auto& note : chart.notes) {
-        if (!note.id.empty()) {
-            byId[note.id] = &note;
-        }
-    }
-    return byId;
-}
-
-const Note* sourceNoteFor(const std::map<std::string, const Note*>& sourceById, const Note& note) {
+const Note* sourceNoteFor(const SourceNoteIndex& sourceIndex, const Note& note) {
     if (note.id.empty() || idLooksGenerated(note.id)) {
         return nullptr;
     }
-    const auto found = sourceById.find(note.id);
-    return found == sourceById.end() ? nullptr : found->second;
+    const auto found = sourceIndex.byId.find(note.id);
+    return found == sourceIndex.byId.end() ? nullptr : found->second;
 }
 
-bool sourceJackIntentFromMap(const std::map<std::string, const Note*>& sourceById,
-                             const Note& first,
-                             const Note& second,
-                             int jackWindowMs) {
+bool sourceJackIntentFromIndex(const SourceNoteIndex& sourceIndex,
+                               const Note& first,
+                               const Note& second,
+                               int jackWindowMs) {
     const int window = std::max(0, jackWindowMs);
     if (window <= 0 || idLooksGenerated(first.id) || idLooksGenerated(second.id)) {
         return false;
     }
 
-    const Note* sourceFirst = sourceNoteFor(sourceById, first);
-    const Note* sourceSecond = sourceNoteFor(sourceById, second);
+    const Note* sourceFirst = sourceNoteFor(sourceIndex, first);
+    const Note* sourceSecond = sourceNoteFor(sourceIndex, second);
     const int firstLane = sourceFirst != nullptr ? sourceFirst->sourceLane.value_or(sourceFirst->lane)
                                                  : first.sourceLane.value_or(first.lane);
     const int secondLane = sourceSecond != nullptr ? sourceSecond->sourceLane.value_or(sourceSecond->lane)
@@ -93,6 +83,16 @@ bool sourceJackIntentFromMap(const std::map<std::string, const Note*>& sourceByI
 
 bool isGeneratedNoteId(const std::string& id) {
     return idLooksGenerated(id);
+}
+
+SourceNoteIndex buildSourceNoteIndex(const Chart& chart) {
+    SourceNoteIndex index;
+    for (const auto& note : chart.notes) {
+        if (!note.id.empty()) {
+            index.byId[note.id] = &note;
+        }
+    }
+    return index;
 }
 
 std::vector<JackGroup> detectJackGroups(const std::vector<Note>& notes,
@@ -186,10 +186,23 @@ bool isSourceJackIntent(const Chart& original,
                         const Note& first,
                         const Note& second,
                         int jackWindowMs) {
-    return sourceJackIntentFromMap(notesById(original), first, second, jackWindowMs);
+    return isSourceJackIntent(buildSourceNoteIndex(original), first, second, jackWindowMs);
+}
+
+bool isSourceJackIntent(const SourceNoteIndex& sourceIndex,
+                        const Note& first,
+                        const Note& second,
+                        int jackWindowMs) {
+    return sourceJackIntentFromIndex(sourceIndex, first, second, jackWindowMs);
 }
 
 std::vector<CreatedJackPair> detectCreatedJackPairs(const Chart& original,
+                                                    const std::vector<Note>& converted,
+                                                    int jackWindowMs) {
+    return detectCreatedJackPairs(buildSourceNoteIndex(original), converted, jackWindowMs);
+}
+
+std::vector<CreatedJackPair> detectCreatedJackPairs(const SourceNoteIndex& sourceIndex,
                                                     const std::vector<Note>& converted,
                                                     int jackWindowMs) {
     const int window = std::max(0, jackWindowMs);
@@ -197,7 +210,6 @@ std::vector<CreatedJackPair> detectCreatedJackPairs(const Chart& original,
         return {};
     }
 
-    const auto sourceById = notesById(original);
     std::map<int, std::vector<int>> byLane;
     for (std::size_t i = 0; i < converted.size(); ++i) {
         byLane[converted[i].lane].push_back(static_cast<int>(i));
@@ -222,7 +234,7 @@ std::vector<CreatedJackPair> detectCreatedJackPairs(const Chart& original,
             if (dt <= 0 || dt > window) {
                 continue;
             }
-            if (sourceJackIntentFromMap(sourceById, first, second, window)) {
+            if (sourceJackIntentFromIndex(sourceIndex, first, second, window)) {
                 continue;
             }
 
@@ -247,12 +259,25 @@ bool wouldCreateCreatedJackOnLane(const Chart& original,
                                   int candidateLane,
                                   int jackWindowMs,
                                   int ignoredIndex) {
+    return wouldCreateCreatedJackOnLane(buildSourceNoteIndex(original),
+                                        converted,
+                                        candidate,
+                                        candidateLane,
+                                        jackWindowMs,
+                                        ignoredIndex);
+}
+
+bool wouldCreateCreatedJackOnLane(const SourceNoteIndex& sourceIndex,
+                                  const std::vector<Note>& converted,
+                                  const Note& candidate,
+                                  int candidateLane,
+                                  int jackWindowMs,
+                                  int ignoredIndex) {
     const int window = std::max(0, jackWindowMs);
     if (window <= 0) {
         return false;
     }
 
-    const auto sourceById = notesById(original);
     Note moved = candidate;
     moved.lane = candidateLane;
     for (std::size_t i = 0; i < converted.size(); ++i) {
@@ -264,7 +289,7 @@ bool wouldCreateCreatedJackOnLane(const Chart& original,
             continue;
         }
         const int dt = std::abs(note.time - moved.time);
-        if (dt > 0 && dt <= window && !sourceJackIntentFromMap(sourceById, note, moved, window)) {
+        if (dt > 0 && dt <= window && !sourceJackIntentFromIndex(sourceIndex, note, moved, window)) {
             return true;
         }
     }

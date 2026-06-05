@@ -178,6 +178,13 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --report <path>         write conversion report json
   --target-profile <json> use a Target-K reference profile JSON for K-likeness scoring
                           target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled
+  --engine <engine>       classic | nk2, default classic; nk2 prototype converts 7K->10K
+  --nk2-mode <mode>       native | faithful | harder | transform | report, report is analysis-only
+  --nk2-native-weight <n> native authorship weight, default 0.5
+  --nk2-remix-weight <n>  remix expansion weight, default 0.5
+  --nk2-layout-weight-panel <n> 10K panel-model weight, default 3
+  --nk2-layout-weight-bridge <n> 10K bridge-model weight, default 2
+  --nk2-layout-weight-fullfield <n> 10K full-field weight, default 6
   --compare-policies <list> compare comma-separated policies without writing chart output
   --emit-feel-report      include feel metrics in comparison console output
   --emit-diff-report      include before/after diff metrics in comparison console output
@@ -199,6 +206,9 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 10 --compare-polic
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 4 --report dist/report_7k_4k.json
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --ten-key-planner staged-7-9-10 --dry-run
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --ten-key-planner staged-7-14-10 --dry-run --report dist/report_7k_14_10.json
+build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode report --report dist/nk2_7k10k_intent.json
+build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode native --out dist/simple_7k_10k_nk2.osu --report dist/nk2_7k10k.json
+build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode faithful --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --expansion-policy auto-low --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --preserve-convert --dry-run
@@ -231,7 +241,7 @@ The broad profile scanner accepts osu!mania `CircleSize:10` charts whose `Creato
 
 Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians, including 10K center/split metrics `desiredCenterBridgeRate`, `desiredCenterSplitBalance`, and `desiredSplitChordRate`. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables an adaptive-growth-budget pass: the global added-note cap stays in place, but Composer pressure is based on the 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` features rather than chart-level summaries.
 
-The frozen v0.6.0 normal-mode algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. The 10K staged planner contract is in `docs/algorithm-lock-v0.6.1.md`, and the v1.0.0 GUI 10K default follows `docs/design-10k-fullfield-remix.md`. Treat these as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, 7K-to-10K planner behavior, jack/LN handling, stream transforms, or safety guard behavior should update the matching document and tests.
+The code-level architecture walkthrough is in `docs/code-architecture.md`. The proposed second-generation NK2 engine design is in `docs/nk2-design.md`, and the current NK2 algorithm walkthrough is in `docs/nk2-algorithm.md`. The frozen v0.6.0 normal-mode algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. The 10K staged planner contract is in `docs/algorithm-lock-v0.6.1.md`, and the v1.0.0 GUI 10K default follows `docs/design-10k-fullfield-remix.md`. Treat these as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, 7K-to-10K planner behavior, jack/LN handling, stream transforms, or safety guard behavior should update the matching document and tests.
 
 GUI scope:
 
@@ -241,11 +251,13 @@ GUI scope:
 - drag a chart file onto an already-open GUI window to convert with the current Target field
 - drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads the first chart so Target can be set before conversion
 - optional source-key override and a 4K-10K target selector
+- choose Algorithm `NK1 (Classic)` or `NK2 (Experimental)` in the GUI; NK2 exposes `faithful`, `native`, `harder`, and `transform` modes for single-chart conversion
 - GUI target-10 conversions use `--ten-key-planner staged-7-14-10 --ten-k-fullfield-remix` by default
 - choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
 - run one conversion and parse report JSON
 - run GUI Batch from dropped charts or a selected songs/root folder, with status text showing percent done and remaining files
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
+- NK2 is still experimental and single-input only in this milestone; GUI Batch and Matrix stay NK1-only
 - open output/report and copy the generated CLI command
 ```
 

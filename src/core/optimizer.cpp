@@ -4,6 +4,7 @@
 #include "core/collision.hpp"
 #include "core/gesture.hpp"
 #include "core/mapping.hpp"
+#include "core/repeat.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -132,6 +133,9 @@ OptimizationResult greedyOptimizeSlices(const Chart& chart, const ConvertOptions
                                                              TenKeyPlannerPolicy::StagedMirrorCompress);
 
     AssignmentContext context;
+    const auto sourceIndex = buildSourceNoteIndex(chart);
+    context.originalChart = &chart;
+    context.originalSourceIndex = &sourceIndex;
     context.sourceKeyCount = options.sourceKeyCount;
     context.targetKeyCount = options.targetKeyCount;
     context.jackWindowMs = options.jackWindowMs;

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fixed 10K Full-Field Mirror-Remix stream/burst/stair rail hints so long tokens alternate primary hands instead of collapsing into one side of the field.
+- Fixed GUI drag-and-drop so drops on child controls are accepted, dropped folders expand to contained chart files, and multi-chart drops keep per-chart output folders by leaving Output blank.
+- Optimized large GUI batches by routing non-debug runs through one quiet CLI batch process with `--input-list`, avoiding one spawned `KeyWeaver.exe` process per chart.
+- Added millisecond timing output for single-chart CLI/GUI conversions, including read, parse, profile, convert, export, write, and report phases.
+- Tied GUI-launched converter child processes to the GUI lifetime so closing the GUI also terminates any running batch/convert process.
+
 ## 1.0.0 - Stable
 
 - Added a dedicated 7K-to-10K staged-native planner (`--ten-key-planner auto|legacy|staged-7-9-10`) that routes through a 9K scaffold before opening the 10K center split; reports now expose the effective `tenKeyPlanner`.

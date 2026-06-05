@@ -6,9 +6,13 @@
 #include <keyconv/quality_report.hpp>
 #include <keyconv/reconvert_guard.hpp>
 
+#include "nk2/nk2_convert.hpp"
+#include "nk2/nk2_report.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -38,6 +42,7 @@ namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
 constexpr const char* kToolVersion = "v1.0.0";
+using SteadyClock = std::chrono::steady_clock;
 
 class ConvertedInputError : public std::runtime_error {
 public:
@@ -168,6 +173,10 @@ std::string displayPath(const std::filesystem::path& path) {
 #endif
 }
 
+long long elapsedMs(SteadyClock::time_point start, SteadyClock::time_point end) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+}
+
 std::vector<std::string> commandLineArgs(int argc, char** argv) {
 #if defined(_WIN32)
     int wideArgc = 0;
@@ -197,6 +206,8 @@ struct CliOptions {
     std::optional<int> source;
     std::optional<int> target;
     std::optional<std::filesystem::path> out;
+    std::optional<std::filesystem::path> outDir;
+    std::optional<std::filesystem::path> inputList;
     keyconv::ConversionStyle style = keyconv::ConversionStyle::Playable;
     keyconv::CollisionPolicy collision = keyconv::CollisionPolicy::ShiftNearest;
     keyconv::OptimizerKind optimizer = keyconv::OptimizerKind::Greedy;
@@ -256,8 +267,16 @@ struct CliOptions {
     bool emitDiffReport = false;
     std::optional<std::filesystem::path> reportCsv;
     bool batchMode = false;
+    bool batchQuiet = false;
     std::optional<int> jobs;
     bool preserveConvert = false;
+    keyconv::nk2::Engine engine = keyconv::nk2::Engine::Classic;
+    keyconv::nk2::Mode nk2Mode = keyconv::nk2::Mode::Native;
+    double nk2NativeWeight = 0.5;
+    double nk2RemixWeight = 0.5;
+    int nk2LayoutWeightPanel = 3;
+    int nk2LayoutWeightBridge = 2;
+    int nk2LayoutWeightFullField = 6;
     bool verbose = false;
     bool help = false;
 };
@@ -270,6 +289,7 @@ void printHelp(std::ostream& out) {
     out << "  --source <number>       Source key count. Overrides CircleSize/BMS key-count inference.\n";
     out << "  --target <number>       Target key count. Required.\n";
     out << "  --out <path>            Output path. Defaults beside input with the KeyWeaver mode marker.\n";
+    out << "  --out-dir <path>        Batch output directory. Defaults beside each input chart.\n";
     out << "  --style <style>         direct | expand | compress | playable | faithful | training | dp.\n";
     out << "  --collision <policy>    keep | shift-nearest | merge | drop. Default: shift-nearest.\n";
     out << "  --compress-policy <p>   auto | preserve-strict | no-overlap-drop | no-overlap-roll | no-overlap-hybrid | training-simplify.\n";
@@ -325,10 +345,19 @@ void printHelp(std::ostream& out) {
     out << "  --dp                    Reserve DP mode; this version reports fallback to SP PPG.\n";
     out << "  --dry-run               Convert in memory and report only; do not write output.\n";
     out << "  --batch                 Treat positional chart inputs as a batch. Outputs default beside each input.\n";
+    out << "  --input-list <path>     Read batch input chart paths from a UTF-8 newline-delimited list.\n";
+    out << "  --batch-quiet           Reduce batch stdout to progress, failures, and summary.\n";
     out << "  --jobs <number>         Batch worker count override. Default: detected CPU thread count.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
+    out << "  --engine <engine>       classic | nk2. Default: classic. NK2 prototype converts 7K->10K.\n";
+    out << "  --nk2-mode <mode>       native | faithful | harder | transform | report. Report is analysis-only.\n";
+    out << "  --nk2-native-weight <n> Native authorship weight. Default: 0.5.\n";
+    out << "  --nk2-remix-weight <n>  Remix expansion weight. Default: 0.5.\n";
+    out << "  --nk2-layout-weight-panel <n> 10K panel-model weight. Default: 3.\n";
+    out << "  --nk2-layout-weight-bridge <n> 10K bridge-model weight. Default: 2.\n";
+    out << "  --nk2-layout-weight-fullfield <n> 10K full-field weight. Default: 6.\n";
     out << "  --compare-policies <list> Compare comma-separated policies without writing chart output.\n";
     out << "  --emit-feel-report      Include feel metrics in policy comparison console output.\n";
     out << "  --emit-diff-report      Include before/after diff metrics in policy comparison console output.\n";
@@ -481,8 +510,11 @@ std::filesystem::path defaultChartExtension(const std::filesystem::path& input, 
 }
 
 std::filesystem::path defaultOutputPath(const std::filesystem::path& input,
-                                       const keyconv::ConvertOptions& options) {
-    const auto parent = input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
+                                        const keyconv::ConvertOptions& options,
+                                        const std::optional<std::filesystem::path>& outputDir = std::nullopt) {
+    const auto parent = outputDir.has_value()
+                            ? *outputDir
+                            : input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
     const auto extension = defaultChartExtension(input, options.targetKeyCount);
     const auto marker = keyWeaverConversionMarker(options);
 
@@ -502,6 +534,70 @@ std::filesystem::path defaultOutputPath(const std::filesystem::path& input,
     }
 }
 
+std::filesystem::path defaultNk2OutputPath(const std::filesystem::path& input,
+                                           int targetKeys,
+                                           const std::optional<std::filesystem::path>& outputDir = std::nullopt) {
+    const auto parent = outputDir.has_value()
+                            ? *outputDir
+                            : input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
+    const auto extension = defaultChartExtension(input, targetKeys);
+    const auto marker = "KeyWeaverNK2-" + std::to_string(targetKeys) + "K";
+
+    for (int suffix = 1;; ++suffix) {
+        std::filesystem::path filename = input.stem();
+        filename += " ";
+        filename += marker;
+        if (suffix > 1) {
+            filename += " ";
+            filename += std::to_string(suffix);
+        }
+        filename += extension;
+        const auto candidate = parent / filename;
+        if (!std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+}
+
+std::string trimInputListLine(const std::string& value) {
+    std::size_t begin = 0;
+    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin]))) {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+        --end;
+    }
+    return value.substr(begin, end - begin);
+}
+
+std::vector<std::filesystem::path> readInputListFile(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Input list not found: " + displayPath(path));
+    }
+
+    std::vector<std::filesystem::path> paths;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (paths.empty() && line.size() >= 3 &&
+            static_cast<unsigned char>(line[0]) == 0xEF &&
+            static_cast<unsigned char>(line[1]) == 0xBB &&
+            static_cast<unsigned char>(line[2]) == 0xBF) {
+            line.erase(0, 3);
+        }
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const auto trimmed = trimInputListLine(line);
+        if (trimmed.empty() || trimmed.front() == '#') {
+            continue;
+        }
+        paths.push_back(pathFromArgument(trimmed));
+    }
+    return paths;
+}
+
 CliOptions parseArgs(const std::vector<std::string>& args) {
     CliOptions options;
 
@@ -517,6 +613,8 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.target = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--out") {
             options.out = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--out-dir") {
+            options.outDir = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--style") {
             const auto value = requireValue(i, args, arg);
             const auto style = keyconv::parseConversionStyle(value);
@@ -713,12 +811,30 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.dryRun = true;
         } else if (arg == "--batch") {
             options.batchMode = true;
+        } else if (arg == "--input-list") {
+            options.inputList = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--batch-quiet") {
+            options.batchQuiet = true;
         } else if (arg == "--jobs") {
             options.jobs = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--report") {
             options.report = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--target-profile") {
             options.targetProfile = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--engine") {
+            options.engine = keyconv::nk2::parseEngineOrThrow(requireValue(i, args, arg));
+        } else if (arg == "--nk2-mode") {
+            options.nk2Mode = keyconv::nk2::parseModeOrThrow(requireValue(i, args, arg));
+        } else if (arg == "--nk2-native-weight") {
+            options.nk2NativeWeight = parseDouble(requireValue(i, args, arg), arg);
+        } else if (arg == "--nk2-remix-weight") {
+            options.nk2RemixWeight = parseDouble(requireValue(i, args, arg), arg);
+        } else if (arg == "--nk2-layout-weight-panel") {
+            options.nk2LayoutWeightPanel = parseInt(requireValue(i, args, arg), arg);
+        } else if (arg == "--nk2-layout-weight-bridge") {
+            options.nk2LayoutWeightBridge = parseInt(requireValue(i, args, arg), arg);
+        } else if (arg == "--nk2-layout-weight-fullfield") {
+            options.nk2LayoutWeightFullField = parseInt(requireValue(i, args, arg), arg);
         } else if (arg == "--compare-policies") {
             options.comparePolicies = requireValue(i, args, arg);
         } else if (arg == "--emit-feel-report") {
@@ -739,6 +855,11 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
         }
     }
 
+    if (options.inputList.has_value()) {
+        auto listedInputs = readInputListFile(*options.inputList);
+        options.inputs.insert(options.inputs.end(), listedInputs.begin(), listedInputs.end());
+        options.batchMode = true;
+    }
     if (options.input.empty() && !options.inputs.empty()) {
         options.input = options.inputs.front();
     }
@@ -1152,6 +1273,23 @@ void validateOptions(const CliOptions& options) {
         throw std::runtime_error("--compare-policies must not be empty");
     }
     const bool batch = options.batchMode || options.inputs.size() > 1;
+    if (options.engine == keyconv::nk2::Engine::NK2 && batch) {
+        throw std::runtime_error("--engine nk2 is single-input only in this milestone");
+    }
+    if (options.engine == keyconv::nk2::Engine::NK2 && options.comparePolicies.has_value()) {
+        throw std::runtime_error("--compare-policies is only supported by the classic engine");
+    }
+    if (options.engine == keyconv::nk2::Engine::NK2 && options.reportCsv.has_value()) {
+        throw std::runtime_error("--report-csv is only supported by classic policy comparison");
+    }
+    if (options.engine == keyconv::nk2::Engine::NK2 &&
+        options.nk2Mode == keyconv::nk2::Mode::Report &&
+        (options.out.has_value() || options.outDir.has_value())) {
+        throw std::runtime_error("--nk2-mode report is analysis-only and does not write chart output");
+    }
+    if (options.out.has_value() && options.outDir.has_value()) {
+        throw std::runtime_error("--out and --out-dir cannot be used together");
+    }
     if (batch && options.out.has_value()) {
         throw std::runtime_error("--out is only valid for one input; batch outputs default beside each input");
     }
@@ -1169,6 +1307,9 @@ void validateOptions(const CliOptions& options) {
     }
     if (!batch && options.jobs.has_value()) {
         throw std::runtime_error("--jobs is only valid for batch mode");
+    }
+    if (!batch && options.batchQuiet) {
+        throw std::runtime_error("--batch-quiet is only valid for batch mode");
     }
     if (!batch && isBmsPath(options.input) && options.out.has_value() && !isBmsPath(*options.out)) {
         throw std::runtime_error("BMS input can only write BMS-family output (.bms, .bme, .bml, .pms)");
@@ -1205,6 +1346,13 @@ void validateOptions(const CliOptions& options) {
     }
     if (options.tenKFullFieldRemixPhaseStep != 2 && options.tenKFullFieldRemixPhaseStep != 3) {
         throw std::runtime_error("--ten-k-remix-phase-step must be 2 or 3");
+    }
+    if (options.nk2NativeWeight < 0.0 || options.nk2RemixWeight < 0.0) {
+        throw std::runtime_error("--nk2-native-weight and --nk2-remix-weight must be non-negative");
+    }
+    if (options.nk2LayoutWeightPanel < 0 || options.nk2LayoutWeightBridge < 0 ||
+        options.nk2LayoutWeightFullField < 0) {
+        throw std::runtime_error("--nk2-layout weights must be non-negative");
     }
     if (options.maxAddedNoteRatio < 0.0) {
         throw std::runtime_error("--max-added-ratio must be non-negative");
@@ -1711,16 +1859,29 @@ int runSingleConversion(const CliOptions& cli,
                         const std::filesystem::path& input,
                         std::ostream& out = std::cout,
                         std::mutex* outputMutex = nullptr) {
+    const auto totalStart = SteadyClock::now();
+    long long readTimeMs = 0;
+    long long parseTimeMs = 0;
+    long long profileTimeMs = 0;
+    long long convertTimeMs = 0;
+    long long exportTimeMs = 0;
+    long long writeTimeMs = 0;
+    long long reportWriteTimeMs = 0;
+
     throwIfConvertedInput(input);
+    const auto readStart = SteadyClock::now();
     const auto inputText = readFile(input);
+    readTimeMs = elapsedMs(readStart, SteadyClock::now());
     const bool bmsInput = isBmsPath(input);
     if (bmsInput && cli.out.has_value() && !isBmsPath(*cli.out)) {
         throw std::runtime_error("BMS input can only write BMS-family output (.bms, .bme, .bml, .pms)");
     }
 
     const keyconv::ParseOptions parseOptions{cli.source};
+    const auto parseStart = SteadyClock::now();
     auto chart = bmsInput ? keyconv::parseBms(inputText, parseOptions)
                           : keyconv::parseOsu(inputText, parseOptions);
+    parseTimeMs = elapsedMs(parseStart, SteadyClock::now());
     throwIfConvertedInput(input, chart);
 
     keyconv::ConvertOptions convertOptions;
@@ -1779,16 +1940,93 @@ int runSingleConversion(const CliOptions& cli,
     convertOptions.echoAvoidHighDensity = cli.echoAvoidHighDensity;
     convertOptions.echoHighDensityWindowMs = cli.echoHighDensityWindowMs;
     convertOptions.echoMaxLocalNps = cli.echoMaxLocalNps;
-    auto profilePath = cli.targetProfile;
-    if (!profilePath.has_value()) {
-        profilePath = bundledTargetProfilePath(convertOptions.targetKeyCount);
-    }
-    if (profilePath.has_value()) {
-        auto profile = loadTargetKProfile(*profilePath);
-        if (profile.targetKeys != convertOptions.targetKeyCount) {
-            throw std::runtime_error("Target profile key count does not match --target");
+
+    if (cli.engine == keyconv::nk2::Engine::NK2) {
+        keyconv::nk2::NK2Options nk2Options;
+        nk2Options.sourceKeyCount = convertOptions.sourceKeyCount;
+        nk2Options.targetKeyCount = convertOptions.targetKeyCount;
+        nk2Options.mode = cli.nk2Mode;
+        nk2Options.nativeWeight = cli.nk2NativeWeight;
+        nk2Options.remixWeight = cli.nk2RemixWeight;
+        nk2Options.layoutWeights.panel = cli.nk2LayoutWeightPanel;
+        nk2Options.layoutWeights.bridge = cli.nk2LayoutWeightBridge;
+        nk2Options.layoutWeights.fullField = cli.nk2LayoutWeightFullField;
+        nk2Options.sameTimeEpsilonMs = convertOptions.sameTimeEpsilonMs;
+
+        const auto nk2Start = SteadyClock::now();
+        const auto nk2Result = keyconv::nk2::convertChart(chart, nk2Options);
+        convertTimeMs = elapsedMs(nk2Start, SteadyClock::now());
+        auto outputPath = cli.out;
+        if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value()) {
+            outputPath = defaultNk2OutputPath(input, convertOptions.targetKeyCount, cli.outDir);
         }
-        convertOptions.targetKProfile = std::move(profile);
+
+        if (!cli.batchQuiet) {
+            out << kToolName << " " << kToolVersion << "\n";
+            out << "Input: " << displayPath(input) << "\n";
+            out << "Mode: "
+                << (bmsInput ? "BMS NK2 " : "osu!mania NK2 ")
+                << (nk2Result.report.chartMutated ? "prototype" : "report-only") << "\n";
+            out << keyconv::nk2::reportToText(nk2Result.report) << "\n";
+        }
+
+        if (!cli.dryRun && nk2Result.report.chartMutated) {
+            const auto exportStart = SteadyClock::now();
+            const auto outputText = bmsInput ? keyconv::exportBms(nk2Result.chart, convertOptions.targetKeyCount)
+                                             : keyconv::exportOsu(nk2Result.chart, convertOptions.targetKeyCount);
+            exportTimeMs = elapsedMs(exportStart, SteadyClock::now());
+            const auto writeStart = SteadyClock::now();
+            writeFile(*outputPath, outputText);
+            writeTimeMs = elapsedMs(writeStart, SteadyClock::now());
+            if (!cli.batchQuiet) {
+                out << "Output written: " << displayPath(*outputPath) << "\n";
+            }
+        } else if (!cli.batchQuiet && nk2Result.report.chartMutated) {
+            out << "Dry run: output file not written\n";
+        } else if (!cli.batchQuiet) {
+            out << "No chart output written\n";
+        }
+
+        if (cli.report.has_value()) {
+            const auto reportWriteStart = SteadyClock::now();
+            writeFile(*cli.report, keyconv::nk2::reportToJson(nk2Result.report));
+            reportWriteTimeMs = elapsedMs(reportWriteStart, SteadyClock::now());
+            if (!cli.batchQuiet) {
+                out << "NK2 report written: " << displayPath(*cli.report) << "\n";
+            }
+        }
+        if (!cli.batchQuiet) {
+            const auto totalMs = elapsedMs(totalStart, SteadyClock::now());
+            out << "Timing: read=" << readTimeMs
+                << " ms parse=" << parseTimeMs
+                << " ms nk2=" << convertTimeMs
+                << " ms";
+            if (cli.report.has_value()) {
+                out << " report=" << reportWriteTimeMs << " ms";
+            }
+            if (!cli.dryRun && nk2Result.report.chartMutated) {
+                out << " export=" << exportTimeMs << " ms"
+                    << " write=" << writeTimeMs << " ms";
+            }
+            out << " total=" << totalMs << " ms\n";
+        }
+        return 0;
+    }
+
+    {
+        const auto profileStart = SteadyClock::now();
+        auto profilePath = cli.targetProfile;
+        if (!profilePath.has_value()) {
+            profilePath = bundledTargetProfilePath(convertOptions.targetKeyCount);
+        }
+        if (profilePath.has_value()) {
+            auto profile = loadTargetKProfile(*profilePath);
+            if (profile.targetKeys != convertOptions.targetKeyCount) {
+                throw std::runtime_error("Target profile key count does not match --target");
+            }
+            convertOptions.targetKProfile = std::move(profile);
+        }
+        profileTimeMs = elapsedMs(profileStart, SteadyClock::now());
     }
 
     if (cli.comparePolicies.has_value()) {
@@ -1831,102 +2069,135 @@ int runSingleConversion(const CliOptions& cli,
     }
 
     const keyconv::Converter converter;
+    const auto convertStart = SteadyClock::now();
     const auto result = converter.convert(chart, convertOptions);
+    convertTimeMs = elapsedMs(convertStart, SteadyClock::now());
     auto outputPath = cli.out;
     if (!cli.dryRun && !outputPath.has_value() && outputMutex == nullptr) {
-        outputPath = defaultOutputPath(input, convertOptions);
+        outputPath = defaultOutputPath(input, convertOptions, cli.outDir);
     }
 
-    out << kToolName << " " << kToolVersion << "\n";
-    out << "Input: " << displayPath(input) << "\n";
-    out << "Mode: " << (bmsInput ? "BMS" : "osu!mania") << "\n";
-    out << "Source keys: " << convertOptions.sourceKeyCount << "\n";
-    out << "Target keys: " << convertOptions.targetKeyCount << "\n";
-    out << "Style: " << keyconv::toString(convertOptions.style) << "\n";
-    out << "Collision policy: " << keyconv::toString(convertOptions.collisionPolicy) << "\n";
-    out << "Compress policy: " << keyconv::toString(convertOptions.compressPolicy) << "\n";
-    out << "Distance policy: " << keyconv::toString(convertOptions.distancePolicy) << "\n";
-    out << "Expansion policy: " << keyconv::toString(convertOptions.expansionPolicy) << "\n";
-    out << "Echo policy: " << keyconv::toString(convertOptions.echoPolicy) << "\n";
-    out << "Stream echo profile: " << keyconv::toString(convertOptions.streamEchoProfile) << "\n";
-    out << "Stream transform: " << keyconv::toString(convertOptions.streamTransformPolicy) << "\n";
-    out << "Seed: " << convertOptions.seed << "\n";
-    out << "Echo diagnostics: " << (convertOptions.echoDiagnostics ? "yes" : "no") << "\n";
-    out << "Optimizer: " << keyconv::toString(convertOptions.optimizer) << "\n";
-    out << "Same-time epsilon: " << convertOptions.sameTimeEpsilonMs << " ms\n";
-    out << "Min object gap: " << convertOptions.minObjectGapMs << " ms\n";
-    out << "Same-lane min gap: " << convertOptions.sameLaneMinGapMs << " ms\n";
-    out << "Jack preserve policy: " << keyconv::toString(convertOptions.jackPreservePolicy) << "\n";
-    out << "10K planner: " << keyconv::toString(convertOptions.tenKeyPlannerPolicy) << "\n";
-    out << "10K full-field remix: " << (convertOptions.tenKFullFieldRemix ? "on" : "off") << "\n";
-    if (convertOptions.tenKFullFieldRemix) {
-        out << "10K remix density ceiling: " << convertOptions.tenKFullFieldRemixDensityCeiling << "\n";
-        out << "10K remix phase step: " << convertOptions.tenKFullFieldRemixPhaseStep << "\n";
-    }
-    out << "Gesture rail: " << (convertOptions.gestureRailEnabled ? "on" : "off") << "\n";
-    out << "Jack window: " << convertOptions.jackWindowMs << " ms\n";
-    out << "Strict jack window: " << convertOptions.strictJackWindowMs << " ms\n";
-    out << "Playable jack split: " << (convertOptions.allowPlayableJackSplit ? "yes" : "no") << "\n";
-    out << "Max jack split lanes: " << convertOptions.maxJackSplitLanes << "\n";
-    out << "Snap rolled notes: " << (convertOptions.snapRolledNotes ? "yes" : "no") << "\n";
-    out << "Snap tolerance: " << convertOptions.snapToleranceMs << " ms\n";
-    out << "Max roll: " << convertOptions.maxRollMs << " ms\n";
-    out << "Max added ratio: " << convertOptions.maxAddedNoteRatio << "\n";
-    out << "Max added per slice: " << convertOptions.maxAddedPerSlice << "\n";
-    out << "Max added per measure: " << convertOptions.maxAddedPerMeasure << "\n";
-    out << "Expansion min gap: " << convertOptions.expansionMinGapMs << " ms\n";
-    out << "Expansion same-lane min gap: " << convertOptions.expansionSameLaneMinGapMs << " ms\n";
-    out << "Snap added notes: " << (convertOptions.snapAddedNotes ? "yes" : "no") << "\n";
-    out << "Expansion snap tolerance: " << convertOptions.expansionSnapToleranceMs << " ms\n";
-    out << "Max echo ratio: " << convertOptions.maxEchoAddedRatio << "\n";
-    out << "Max echo per pattern: " << convertOptions.maxEchoPerPattern << "\n";
-    out << "Max echo per measure: " << convertOptions.maxEchoPerMeasure << "\n";
-    out << "Max echo per slice: " << convertOptions.maxEchoPerSlice << "\n";
-    out << "Echo min gap: " << convertOptions.echoMinGapMs << " ms\n";
-    out << "Echo same-lane min gap: " << convertOptions.echoSameLaneMinGapMs << " ms\n";
-    out << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
-    out << "Preserve convert: " << (cli.preserveConvert ? "yes" : "no") << "\n";
-    out << "Preserve lane drift: " << (convertOptions.preserveLaneDrift ? "yes" : "no") << "\n";
-    if (convertOptions.targetKProfile.has_value()) {
-        out << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
-            << convertOptions.targetKProfile->sourceName << " ("
-            << convertOptions.targetKProfile->sampleCount << " charts";
-        if (!convertOptions.targetKProfile->authorToken.empty()) {
-            out << ", author " << convertOptions.targetKProfile->authorToken;
+    if (!cli.batchQuiet) {
+        out << kToolName << " " << kToolVersion << "\n";
+        out << "Input: " << displayPath(input) << "\n";
+        out << "Mode: " << (bmsInput ? "BMS" : "osu!mania") << "\n";
+        out << "Source keys: " << convertOptions.sourceKeyCount << "\n";
+        out << "Target keys: " << convertOptions.targetKeyCount << "\n";
+        out << "Style: " << keyconv::toString(convertOptions.style) << "\n";
+        out << "Collision policy: " << keyconv::toString(convertOptions.collisionPolicy) << "\n";
+        out << "Compress policy: " << keyconv::toString(convertOptions.compressPolicy) << "\n";
+        out << "Distance policy: " << keyconv::toString(convertOptions.distancePolicy) << "\n";
+        out << "Expansion policy: " << keyconv::toString(convertOptions.expansionPolicy) << "\n";
+        out << "Echo policy: " << keyconv::toString(convertOptions.echoPolicy) << "\n";
+        out << "Stream echo profile: " << keyconv::toString(convertOptions.streamEchoProfile) << "\n";
+        out << "Stream transform: " << keyconv::toString(convertOptions.streamTransformPolicy) << "\n";
+        out << "Seed: " << convertOptions.seed << "\n";
+        out << "Echo diagnostics: " << (convertOptions.echoDiagnostics ? "yes" : "no") << "\n";
+        out << "Optimizer: " << keyconv::toString(convertOptions.optimizer) << "\n";
+        out << "Same-time epsilon: " << convertOptions.sameTimeEpsilonMs << " ms\n";
+        out << "Min object gap: " << convertOptions.minObjectGapMs << " ms\n";
+        out << "Same-lane min gap: " << convertOptions.sameLaneMinGapMs << " ms\n";
+        out << "Jack preserve policy: " << keyconv::toString(convertOptions.jackPreservePolicy) << "\n";
+        out << "10K planner: " << keyconv::toString(convertOptions.tenKeyPlannerPolicy) << "\n";
+        out << "10K full-field remix: " << (convertOptions.tenKFullFieldRemix ? "on" : "off") << "\n";
+        if (convertOptions.tenKFullFieldRemix) {
+            out << "10K remix density ceiling: " << convertOptions.tenKFullFieldRemixDensityCeiling << "\n";
+            out << "10K remix phase step: " << convertOptions.tenKFullFieldRemixPhaseStep << "\n";
         }
-        out << ")\n";
+        out << "Gesture rail: " << (convertOptions.gestureRailEnabled ? "on" : "off") << "\n";
+        out << "Jack window: " << convertOptions.jackWindowMs << " ms\n";
+        out << "Strict jack window: " << convertOptions.strictJackWindowMs << " ms\n";
+        out << "Playable jack split: " << (convertOptions.allowPlayableJackSplit ? "yes" : "no") << "\n";
+        out << "Max jack split lanes: " << convertOptions.maxJackSplitLanes << "\n";
+        out << "Snap rolled notes: " << (convertOptions.snapRolledNotes ? "yes" : "no") << "\n";
+        out << "Snap tolerance: " << convertOptions.snapToleranceMs << " ms\n";
+        out << "Max roll: " << convertOptions.maxRollMs << " ms\n";
+        out << "Max added ratio: " << convertOptions.maxAddedNoteRatio << "\n";
+        out << "Max added per slice: " << convertOptions.maxAddedPerSlice << "\n";
+        out << "Max added per measure: " << convertOptions.maxAddedPerMeasure << "\n";
+        out << "Expansion min gap: " << convertOptions.expansionMinGapMs << " ms\n";
+        out << "Expansion same-lane min gap: " << convertOptions.expansionSameLaneMinGapMs << " ms\n";
+        out << "Snap added notes: " << (convertOptions.snapAddedNotes ? "yes" : "no") << "\n";
+        out << "Expansion snap tolerance: " << convertOptions.expansionSnapToleranceMs << " ms\n";
+        out << "Max echo ratio: " << convertOptions.maxEchoAddedRatio << "\n";
+        out << "Max echo per pattern: " << convertOptions.maxEchoPerPattern << "\n";
+        out << "Max echo per measure: " << convertOptions.maxEchoPerMeasure << "\n";
+        out << "Max echo per slice: " << convertOptions.maxEchoPerSlice << "\n";
+        out << "Echo min gap: " << convertOptions.echoMinGapMs << " ms\n";
+        out << "Echo same-lane min gap: " << convertOptions.echoSameLaneMinGapMs << " ms\n";
+        out << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
+        out << "Preserve convert: " << (cli.preserveConvert ? "yes" : "no") << "\n";
+        out << "Preserve lane drift: " << (convertOptions.preserveLaneDrift ? "yes" : "no") << "\n";
+        if (convertOptions.targetKProfile.has_value()) {
+            out << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
+                << convertOptions.targetKProfile->sourceName << " ("
+                << convertOptions.targetKProfile->sampleCount << " charts";
+            if (!convertOptions.targetKProfile->authorToken.empty()) {
+                out << ", author " << convertOptions.targetKProfile->authorToken;
+            }
+            out << ")\n";
+        }
+        if (convertOptions.dpMode) {
+            out << "DP mode: requested\n";
+        }
+        out << "\n";
+        out << keyconv::reportToText(result.report) << "\n";
     }
-    if (convertOptions.dpMode) {
-        out << "DP mode: requested\n";
-    }
-    out << "\n";
-    out << keyconv::reportToText(result.report) << "\n";
-    if (cli.echoDiagnostics) {
+    if (!cli.batchQuiet && cli.echoDiagnostics) {
         printEchoDiagnostics(result.report, out);
         out << "\n";
     }
 
     if (!cli.dryRun) {
+        const auto exportStart = SteadyClock::now();
         const auto outputText = bmsInput ? keyconv::exportBms(result.chart, convertOptions.targetKeyCount)
                                          : keyconv::exportOsu(result.chart, convertOptions.targetKeyCount);
+        exportTimeMs = elapsedMs(exportStart, SteadyClock::now());
+        const auto writeStart = SteadyClock::now();
         if (!outputPath.has_value() && outputMutex != nullptr) {
             std::lock_guard<std::mutex> lock(*outputMutex);
-            outputPath = defaultOutputPath(input, convertOptions);
+            outputPath = defaultOutputPath(input, convertOptions, cli.outDir);
             writeFile(*outputPath, outputText);
         } else {
             writeFile(*outputPath, outputText);
         }
-        out << "Output written: " << displayPath(*outputPath) << "\n";
-    } else {
+        writeTimeMs = elapsedMs(writeStart, SteadyClock::now());
+        if (!cli.batchQuiet) {
+            out << "Output written: " << displayPath(*outputPath) << "\n";
+        }
+    } else if (!cli.batchQuiet) {
         out << "Dry run: output file not written\n";
     }
 
     if (cli.report.has_value()) {
+        const auto reportWriteStart = SteadyClock::now();
         writeFile(*cli.report, keyconv::reportToJson(result.report));
-        out << "Report written: " << displayPath(*cli.report) << "\n";
+        reportWriteTimeMs = elapsedMs(reportWriteStart, SteadyClock::now());
+        if (!cli.batchQuiet) {
+            out << "Report written: " << displayPath(*cli.report) << "\n";
+        }
     }
 
-    if (cli.verbose && !result.report.warnings.empty()) {
+    if (!cli.batchQuiet) {
+        const auto totalTimeMs = elapsedMs(totalStart, SteadyClock::now());
+        out << "Timing: total=" << totalTimeMs << " ms"
+            << " read=" << readTimeMs << " ms"
+            << " parse=" << parseTimeMs << " ms";
+        if (profileTimeMs > 0) {
+            out << " profile=" << profileTimeMs << " ms";
+        }
+        out << " convert=" << convertTimeMs << " ms";
+        if (!cli.dryRun) {
+            out << " export=" << exportTimeMs << " ms"
+                << " write=" << writeTimeMs << " ms";
+        }
+        if (cli.report.has_value()) {
+            out << " report=" << reportWriteTimeMs << " ms";
+        }
+        out << "\n";
+    }
+
+    if (!cli.batchQuiet && cli.verbose && !result.report.warnings.empty()) {
         out << "\nVerbose warnings:\n";
         for (const auto& warning : result.report.warnings) {
             out << "- " << warning << "\n";
@@ -2000,8 +2271,12 @@ int runBatchConversion(const CliOptions& cli) {
     std::cout << kToolName << " " << kToolVersion << "\n";
     std::cout << "Batch mode: " << cli.inputs.size() << " input(s)\n";
     std::cout << "Target keys: " << *cli.target << "\n";
-    std::cout << "Output: beside each input chart\n";
+    std::cout << "Output: "
+              << (cli.outDir.has_value() ? displayPath(*cli.outDir) : "beside each input chart") << "\n";
     std::cout << "Workers: " << workerCount << (cli.jobs.has_value() ? "" : " (auto)") << "\n";
+    if (cli.batchQuiet) {
+        std::cout << "Batch quiet: on\n";
+    }
     if (workerCount > 1) {
         std::cout << "Log order: completion order\n";
     }
@@ -2009,8 +2284,10 @@ int runBatchConversion(const CliOptions& cli) {
     if (workerCount <= 1) {
         for (std::size_t index = 0; index < cli.inputs.size(); ++index) {
             const auto& input = cli.inputs[index];
-            std::cout << "\n[" << (index + 1) << "/" << cli.inputs.size() << "] "
-                      << displayPath(input) << "\n";
+            if (!cli.batchQuiet) {
+                std::cout << "\n[" << (index + 1) << "/" << cli.inputs.size() << "] "
+                          << displayPath(input) << "\n";
+            }
             try {
                 CliOptions item = cli;
                 item.input = input;
@@ -2024,8 +2301,10 @@ int runBatchConversion(const CliOptions& cli) {
                 ++succeeded;
             } catch (const ConvertedInputError& error) {
                 ++skipped;
-                std::cout << "Skipped already-converted chart: " << displayPath(input)
-                          << " (" << error.what() << ")\n";
+                if (!cli.batchQuiet) {
+                    std::cout << "Skipped already-converted chart: " << displayPath(input)
+                              << " (" << error.what() << ")\n";
+                }
             } catch (const std::exception& error) {
                 ++failed;
                 std::cerr << "Batch item failed: " << displayPath(input) << ": "
@@ -2033,8 +2312,12 @@ int runBatchConversion(const CliOptions& cli) {
             }
             const std::size_t done = index + 1;
             const std::size_t percent = (done * 100) / cli.inputs.size();
-            std::cout << "Progress: " << percent << "% done, "
-                      << (cli.inputs.size() - done) << " left\n";
+            const bool showProgress = !cli.batchQuiet || done == cli.inputs.size() ||
+                                      (done % std::max<std::size_t>(1, cli.inputs.size() / 100)) == 0;
+            if (showProgress) {
+                std::cout << "Progress: " << percent << "% done, "
+                          << (cli.inputs.size() - done) << " left\n";
+            }
         }
 
         std::cout << "\nBatch summary: succeeded=" << succeeded << " failed=" << failed
@@ -2068,21 +2351,28 @@ int runBatchConversion(const CliOptions& cli) {
                 }
                 const std::size_t done = parallelCompleted.fetch_add(1) + 1;
                 const std::size_t percent = (done * 100) / cli.inputs.size();
+                const bool showItem = !cli.batchQuiet || result.exitCode != 0;
+                const bool showProgress = !cli.batchQuiet || done == cli.inputs.size() ||
+                                          (done % std::max<std::size_t>(1, cli.inputs.size() / 100)) == 0;
 
                 std::lock_guard<std::mutex> lock(logMutex);
-                std::cout << "\n[" << (result.index + 1) << "/" << cli.inputs.size() << "] "
-                          << displayPath(result.input) << "\n";
-                if (!result.output.empty()) {
-                    std::cout << result.output;
-                    if (result.output.back() != '\n') {
-                        std::cout << "\n";
+                if (showItem) {
+                    std::cout << "\n[" << (result.index + 1) << "/" << cli.inputs.size() << "] "
+                              << displayPath(result.input) << "\n";
+                    if (!result.output.empty()) {
+                        std::cout << result.output;
+                        if (result.output.back() != '\n') {
+                            std::cout << "\n";
+                        }
                     }
                 }
                 if (result.exitCode != 0 && !result.error.empty()) {
                     std::cerr << result.error << "\n";
                 }
-                std::cout << "Progress: " << percent << "% done, "
-                          << (cli.inputs.size() - done) << " left\n";
+                if (showProgress) {
+                    std::cout << "Progress: " << percent << "% done, "
+                              << (cli.inputs.size() - done) << " left\n";
+                }
             }
         });
     }

@@ -33,6 +33,7 @@ Current scope:
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
 - v0.6.0 algorithm lock is documented at `docs/algorithm-lock-v0.6.0.md`, freezing the current generated-note, jack, LN, stream-transform, and safety contracts
+- experimental NK2 adds same-time local solver diagnostics, lower-key tap overflow roll rescue, generalized high-key mirror/strong-beat support, and LN head/tail adjacent tap support
 - v1.0.0 promotes the GUI target range to 4K-10K and makes GUI 10K conversions use Full-Field Mirror-Remix by default
 - 10K staged-native planner is documented at `docs/algorithm-lock-v0.6.1.md`, adding the default 7K -> 9K -> 10K playable/training routing path
 - v0.6.0 10K tap-plus generation adds a stronger quarter/eighth-beat density bias than the 8K+ baseline while preserving source jack phrases
@@ -156,7 +157,7 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --expansion-snap-tolerance <ms> snap validation tolerance for added notes, default 2
   --echo-policy <p>       off | stair | trill | stream | stair-trill | stair-trill-stream | auto
   --stream-echo-profile <p> conservative | balanced | training | experimental, default conservative
-  --stream-transform <p>  off | superrandom | full-jitter
+  --stream-transform <p>  off | superrandom | full-jitter | super-symmetry
   --seed <n>              deterministic random seed for stream transforms, default 0
   --echo-diagnostics      print StreamEcho reject breakdown without changing conversion output
   --max-echo-ratio <n>    max echo notes as source-note ratio, default 0.08
@@ -295,7 +296,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - The GUI playtest tool is a Windows harness around `KeyWeaver.exe`; it is not a realtime renderer, editor, audio player, BMS frontend, DP splitter, or beam-search UI.
 - Feel metrics include `densityDelta`, `chordRateBefore`, `chordRateAfter`, `laneCoverageBefore`, `laneCoverageAfter`, `laneEntropyBefore`, `laneEntropyAfter`, `lnAnchorPressureBefore`, `lnAnchorPressureAfter`, `handSpreadAfter`, and `feelTags`.
 - `--expansion-policy echo` implements same-slice stair/trill reinforcement and density-gated stream echo; check `streamEchoProfile`, `streamEchoCandidates`, `streamRawPatternCandidates`, `streamEligiblePatternCandidates`, `streamRawLaneCandidates`, `streamSafeLaneCandidates`, `streamAcceptedCandidates`, primary reject counters such as `rejectedStreamPrimaryByLocalNps`, any-reason counters such as `rejectedStreamEchoByLocalNps`, `streamEchoAddedRatio`, and `maxObservedLocalNpsAfterEcho`.
-- `--stream-transform superrandom` deterministically randomizes every note to a safe target lane without adding notes; same-time chords are assigned distinct lanes when possible, `--seed` changes the generated lane order, and osu difficulty/file markers include `-sRan`. `--stream-transform full-jitter` offsets every note by a deterministic 1-15 ms amount for full-chart zure-style timing spread and marks output with `-jitter`; reports expose `streamTransformPolicy`, `streamTransformedNotes`, and `streamJitteredNotes`.
+- `--stream-transform superrandom` deterministically randomizes every note to a safe target lane without adding notes; same-time chords are assigned distinct lanes when possible, `--seed` changes the generated lane order, and osu difficulty/file markers include `-sRan`. `--stream-transform full-jitter` offsets every note by a deterministic 1-15 ms amount for full-chart zure-style timing spread and marks output with `-jitter`; reports expose `streamTransformPolicy`, `streamTransformedNotes`, and `streamJitteredNotes`. `--stream-transform super-symmetry` is NK2-only: it preserves same-time source mirror pairs as target mirror pairs and strongly prefers gapless target stairs when the source stair moves by adjacent lanes.
 - `streamEchoCandidates` is kept for compatibility and equals `streamRawPatternCandidates`. Primary reject counts are mutually exclusive first-fail counters for accounting; any-reason counters are diagnostic counters and are not guaranteed to sum to the candidate count.
 - `--expansion-policy seeded-random` is accepted as a reserved policy but does not synthesize random notes.
 - The exporter regenerates `HitObjects` and preserves other sections where practical.

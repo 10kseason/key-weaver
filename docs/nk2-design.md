@@ -267,6 +267,8 @@ Stairs:
 - For 7K -> 10K, stairs may widen and use the whole field.
 - Wider stairs should still read as one continuous authored gesture.
 - Do not flatten stairs into static lane anchors only for balance.
+- In Super Symmetry mode, adjacent-lane source stairs should remain
+  adjacent-lane target stairs when safety gates allow it.
 
 Streams:
 
@@ -275,6 +277,16 @@ Streams:
 - Maintain phrase continuity and source-lane identity.
 - Use expansion to make the pattern feel target-native without hiding the
   original stream.
+
+Super Symmetry mode:
+
+- Lives in the same Stream selector as SuperRandom and Full Jitter.
+- Is NK2-only.
+- Preserves same-time mirrored source lanes as mirrored target lanes.
+- Keeps gapless adjacent-lane stairs gapless instead of widening them for
+  target-field coverage.
+- Disables unpaired support-note generation so added taps do not break the
+  requested symmetry.
 
 ## LN Policy
 
@@ -419,9 +431,15 @@ collision/LN/jack safety counters.
 Other non-same-K pairs from 1K through 10K now use a generic
 `nk2-generic-nk-relane-compress` prototype. This path covers early checks such
 as 4K->5K, 7K->8K, and 7K->4K. It preserves timing and surviving LN durations,
-tries all legal target lanes before giving up, and records `droppedNotes` only
-when a note cannot be placed without same-time collision, active-LN conflict, or
-unrelated target-jack damage.
+tries same-time local beam placement before the note-by-note fallback, tries all
+legal target lanes before giving up, and records `droppedNotes` only when a note
+cannot be placed or safely rolled without same-time collision, active-LN
+conflict, or unrelated target-jack damage. Reports expose
+`localSolverWindows`, `localSolverCandidates`, `localSolverFallbacks`, and
+`lowerKeyRolledNotes` for this early solver path. The NK2 Stream selector also
+supports `super-symmetry`, which reports `superSymmetryMirrorAnchors` and
+`superSymmetryGaplessStairs` when it preserves mirrored same-time pairs or
+adjacent-lane stair links.
 The 4K->5K branch is the first generic fill-note exception: it can add tap-only
 strong-beat and mirror support notes even in faithful mode, using phrase-local
 budgets plus strict collision and LN gates. Its support-repeat guard is tuned
@@ -437,12 +455,13 @@ Milestone 3: NK2 native/remix scoring
 - implement strong-beat support notes
 - validate source recognizability before density gains
 
-Current Milestone 3 status: partially implemented for `source=7,target=10` and
-the generic `source=4,target=5` fill branch. 7K->10K `native` and `harder`
-modes can add limited tap-only LN-end and strong-beat support notes, while
-faithful 7K->10K keeps source note count. Generic 4K->5K can add tap-only
-strong-beat and mirror support notes in faithful mode to make the added fifth
-lane feel occupied. Every support candidate is trialed against the converted
+Current Milestone 3 status: partially implemented for higher-key 1K..10K NK2
+pairs plus the generic `source=4,target=5` fill branch. Higher-key `native` and
+`harder` modes can add limited tap-only LN-head, LN-tail, strong-beat, and
+mirror support notes, while faithful mode keeps source note count except for
+4K->5K. Generic 4K->5K can add tap-only strong-beat and mirror support notes in
+faithful mode to make the added fifth lane feel occupied. Every support
+candidate is trialed against the converted
 chart and accepted only if it does not increase same-time collisions, LN
 conflicts, created target jacks, or unsafe target repeats. The 4K->5K faithful
 fill target is about 12% added notes globally, with 2000 ms phrase windows capped
@@ -504,7 +523,7 @@ that window, and rejects overflow as phrase-budget pressure. Reports expose
 `phraseWindows` and `rejectedByPhraseBudget` so clustered support can be tuned
 without confusing it with collision or LN safety rejection.
 
-Mirror support accepts/rejects are reported separately from LN-end and
+Mirror support accepts/rejects are reported separately from LN head/tail and
 strong-beat support. Generated mirror notes use IDs like `nk2-mirror-chord-*`,
 again preserving the generator plus anchor motif for debugging.
 

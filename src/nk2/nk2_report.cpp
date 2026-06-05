@@ -96,6 +96,7 @@ std::string reportToJson(const NK2Report& report) {
     out << "{\n";
     out << "  \"engine\": \"nk2\",\n";
     out << "  \"mode\": \"" << toString(report.options.mode) << "\",\n";
+    out << "  \"superSymmetry\": " << (report.options.superSymmetry ? "true" : "false") << ",\n";
     out << "  \"chartMutated\": " << (report.chartMutated ? "true" : "false") << ",\n";
     out << "  \"noOp\": " << (report.noOp ? "true" : "false") << ",\n";
     out << "  \"noOpReason\": \"" << jsonEscape(report.noOpReason) << "\",\n";
@@ -138,6 +139,12 @@ std::string reportToJson(const NK2Report& report) {
     out << "    \"outputNotes\": " << report.outputNotes << ",\n";
     out << "    \"addedNotes\": " << report.addedNotes << ",\n";
     out << "    \"droppedNotes\": " << report.droppedNotes << ",\n";
+    out << "    \"localSolverWindows\": " << report.localSolverWindows << ",\n";
+    out << "    \"localSolverCandidates\": " << report.localSolverCandidates << ",\n";
+    out << "    \"localSolverFallbacks\": " << report.localSolverFallbacks << ",\n";
+    out << "    \"lowerKeyRolledNotes\": " << report.lowerKeyRolledNotes << ",\n";
+    out << "    \"superSymmetryMirrorAnchors\": " << report.superSymmetryMirrorAnchors << ",\n";
+    out << "    \"superSymmetryGaplessStairs\": " << report.superSymmetryGaplessStairs << ",\n";
     out << "    \"sameTimeCollisions\": " << report.sameTimeCollisions << ",\n";
     out << "    \"longNoteConflicts\": " << report.longNoteConflicts << ",\n";
     out << "    \"createdJacks\": " << report.createdJacks << ",\n";
@@ -218,6 +225,7 @@ std::string reportToText(const NK2Report& report) {
     out << "Mode: " << toString(report.options.mode) << "\n";
     out << "Source keys: " << report.options.sourceKeyCount << "\n";
     out << "Target keys: " << report.options.targetKeyCount << "\n";
+    out << "Super symmetry: " << (report.options.superSymmetry ? "on" : "off") << "\n";
     out << "Chart mutated: " << (report.chartMutated ? "yes" : "no") << "\n";
     if (!report.prototypeName.empty()) {
         out << "Prototype: " << report.prototypeName << "\n";
@@ -246,6 +254,12 @@ std::string reportToText(const NK2Report& report) {
     out << "Placement: outputNotes=" << report.outputNotes
         << " addedNotes=" << report.addedNotes
         << " droppedNotes=" << report.droppedNotes
+        << " localSolverWindows=" << report.localSolverWindows
+        << " localSolverCandidates=" << report.localSolverCandidates
+        << " localSolverFallbacks=" << report.localSolverFallbacks
+        << " lowerKeyRolledNotes=" << report.lowerKeyRolledNotes
+        << " superSymmetryMirrorAnchors=" << report.superSymmetryMirrorAnchors
+        << " superSymmetryGaplessStairs=" << report.superSymmetryGaplessStairs
         << " collisions=" << report.sameTimeCollisions
         << " lnConflicts=" << report.longNoteConflicts
         << " createdJacks=" << report.createdJacks

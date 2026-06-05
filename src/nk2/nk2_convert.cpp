@@ -11,6 +11,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace keyconv::nk2 {
@@ -53,6 +54,11 @@ enum class MotifKind {
     Stream,
     Chord,
     LnAnchor,
+};
+
+struct SolvedPlacement {
+    Note note;
+    MotifKind motif = MotifKind::Neutral;
 };
 
 struct RecentSingleNote {
@@ -120,8 +126,13 @@ bool isNk2GeneratedNote(const Note& note) {
     return note.id.rfind("nk2-", 0) == 0;
 }
 
-std::string convertedDifficultyName(const std::optional<std::string>& existing, int targetKeyCount) {
-    const std::string marker = "KeyWeaverNK2-" + std::to_string(targetKeyCount) + "K";
+std::string convertedDifficultyName(const std::optional<std::string>& existing,
+                                    int targetKeyCount,
+                                    bool superSymmetry) {
+    std::string marker = "KeyWeaverNK2-" + std::to_string(targetKeyCount) + "K";
+    if (superSymmetry) {
+        marker += "-sSym";
+    }
     if (!existing.has_value() || existing->empty()) {
         return marker;
     }
@@ -395,6 +406,81 @@ double adjacentCopyPreferenceScore(int lane, const std::vector<int>& adjacentCop
     return score;
 }
 
+int mirroredLane(int lane, int keyCount) {
+    return keyCount - 1 - lane;
+}
+
+std::optional<int> sameTimeMirrorAnchorTargetLane(const Note& note,
+                                                  const std::vector<PlacedNote>& placed,
+                                                  const NK2Options& options) {
+    if (!options.superSymmetry || options.sourceKeyCount <= 1 || options.targetKeyCount <= 1) {
+        return std::nullopt;
+    }
+
+    const int sourceLane = sourceLaneOf(note);
+    const int mirrorSourceLane = mirroredLane(sourceLane, options.sourceKeyCount);
+    if (mirrorSourceLane == sourceLane) {
+        return std::nullopt;
+    }
+
+    for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
+        if (std::abs(note.time - it->time) > options.sameTimeEpsilonMs) {
+            if (note.time > it->time) {
+                break;
+            }
+            continue;
+        }
+        if (it->sourceLane == mirrorSourceLane) {
+            return mirroredLane(it->lane, options.targetKeyCount);
+        }
+    }
+    return std::nullopt;
+}
+
+bool preservesGaplessStair(int sourceLane,
+                           int targetLane,
+                           const std::optional<int>& previousSingleSourceLane,
+                           const std::optional<int>& previousSingleTargetLane) {
+    if (!previousSingleSourceLane.has_value() || !previousSingleTargetLane.has_value()) {
+        return false;
+    }
+    const int sourceDelta = sourceLane - *previousSingleSourceLane;
+    const int targetDelta = targetLane - *previousSingleTargetLane;
+    return std::abs(sourceDelta) == 1 && std::abs(targetDelta) == 1 &&
+           sameDirection(sourceDelta, targetDelta);
+}
+
+double superSymmetryScoreAdjustment(const Note& note,
+                                    int lane,
+                                    const NK2Options& options,
+                                    const std::vector<PlacedNote>& placed,
+                                    const std::optional<int>& previousSingleSourceLane,
+                                    const std::optional<int>& previousSingleTargetLane) {
+    if (!options.superSymmetry) {
+        return 0.0;
+    }
+
+    double score = 0.0;
+    const int sourceLane = sourceLaneOf(note);
+    const auto mirrorAnchor = sameTimeMirrorAnchorTargetLane(note, placed, options);
+    if (mirrorAnchor.has_value()) {
+        score += lane == *mirrorAnchor ? 4.0 : -1.25;
+    }
+
+    if (previousSingleSourceLane.has_value() && previousSingleTargetLane.has_value()) {
+        const int sourceDelta = sourceLane - *previousSingleSourceLane;
+        const int targetDelta = lane - *previousSingleTargetLane;
+        if (std::abs(sourceDelta) == 1) {
+            if (targetDelta != 0 && sameDirection(sourceDelta, targetDelta)) {
+                score += std::abs(targetDelta) == 1 ? 2.35 : -0.80;
+            } else {
+                score -= 1.80;
+            }
+        }
+    }
+    return score;
+}
+
 double wholeFieldNeedScore(int lane, const std::vector<int>& laneUse, int targetKeyCount) {
     if (targetKeyCount <= 0 || lane < 0 || lane >= targetKeyCount ||
         lane >= static_cast<int>(laneUse.size())) {
@@ -488,6 +574,15 @@ bool isStrongBeat(int time, const std::vector<TimingPoint>& timingPoints) {
 
 bool hasSameTimeCollision(const std::set<int>& occupiedLanes, int lane) {
     return occupiedLanes.count(lane) > 0;
+}
+
+bool hasPlacedSameTimeCollision(const std::vector<PlacedNote>& placed, int time, int lane) {
+    for (const auto& existing : placed) {
+        if (existing.time == time && existing.lane == lane) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool hasLongNoteConflict(const std::vector<PlacedNote>& placed, const Note& note, int lane) {
@@ -729,7 +824,9 @@ double motifScoreAdjustment(MotifKind motif,
             if (hasPrevious && sourceDelta != 0) {
                 if (targetDelta != 0 && sameDirection(sourceDelta, targetDelta)) {
                     score += 0.75;
-                    if (std::abs(targetDelta) >= std::abs(sourceDelta)) {
+                    if (options.superSymmetry && std::abs(sourceDelta) == 1) {
+                        score += std::abs(targetDelta) == 1 ? 0.95 : -0.55;
+                    } else if (std::abs(targetDelta) >= std::abs(sourceDelta)) {
                         score += 0.30;
                     }
                 } else {
@@ -751,6 +848,9 @@ double motifScoreAdjustment(MotifKind motif,
                 }
                 if (sourceDelta != 0 && targetDelta != 0 && sameDirection(sourceDelta, targetDelta)) {
                     score += 0.20;
+                    if (options.superSymmetry && std::abs(sourceDelta) == 1) {
+                        score += std::abs(targetDelta) == 1 ? 0.75 : -0.35;
+                    }
                 }
             }
             score += 0.35 * laneCoverageNeedScore(lane, laneUse, options.targetKeyCount, options.layoutWeights);
@@ -896,6 +996,12 @@ std::vector<Candidate> rankedCandidates(const Note& note,
                                       laneUse,
                                       previousSingleSourceLane,
                                       previousSingleTargetLane);
+        score += superSymmetryScoreAdjustment(note,
+                                              lane,
+                                              options,
+                                              placed,
+                                              previousSingleSourceLane,
+                                              previousSingleTargetLane);
         ranked.push_back({lane, score});
     }
 
@@ -987,6 +1093,182 @@ std::optional<int> chooseLaneStrict(const Note& note,
             continue;
         }
         return candidate.lane;
+    }
+    return std::nullopt;
+}
+
+struct SliceBeamState {
+    std::vector<SolvedPlacement> solved;
+    std::set<int> occupiedLanes;
+    std::vector<int> laneUse;
+    std::vector<PlacedNote> placed;
+    std::map<int, PlacedNote> lastBySource;
+    double score = 0.0;
+};
+
+bool candidatePassesHardGates(const std::vector<PlacedNote>& placed,
+                              const std::set<int>& occupiedLanes,
+                              const Note& note,
+                              int lane,
+                              int sourceLane,
+                              bool sourceJackContinuation,
+                              int jackWindowMs) {
+    if (hasSameTimeCollision(occupiedLanes, lane)) {
+        return false;
+    }
+    if (hasPlacedSameTimeCollision(placed, note.time, lane)) {
+        return false;
+    }
+    if (hasLongNoteConflict(placed, note, lane)) {
+        return false;
+    }
+    if (!sourceJackContinuation && wouldCreateNewJack(placed, sourceLane, note.time, lane, jackWindowMs)) {
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart& chart,
+                                                                    const SliceInfo& slice,
+                                                                    const NK2Options& options,
+                                                                    const std::vector<int>& laneUse,
+                                                                    const std::map<int, PlacedNote>& lastBySource,
+                                                                    const std::vector<PlacedNote>& placed,
+                                                                    NK2Report& report) {
+    if (slice.noteIndices.size() <= 1 || slice.noteIndices.size() > 12) {
+        return std::nullopt;
+    }
+
+    ++report.localSolverWindows;
+    std::vector<SliceBeamState> beam;
+    SliceBeamState initial;
+    initial.laneUse = laneUse;
+    initial.placed = placed;
+    initial.lastBySource = lastBySource;
+    beam.push_back(std::move(initial));
+
+    constexpr int kCandidateLimitPerState = 8;
+    constexpr std::size_t kBeamWidth = 16;
+
+    for (const auto noteIndex : slice.noteIndices) {
+        const auto& sourceNote = chart.notes[noteIndex];
+        std::vector<SliceBeamState> nextBeam;
+
+        for (const auto& state : beam) {
+            Note note = sourceNote;
+            const int sourceLane = sourceLaneOf(note);
+            const bool sourceJackContinuation =
+                isImmediateSourceJackContinuation(state.placed, sourceLane, note.time, 500);
+            const auto motif = classifyMotif(note, false, false, sourceJackContinuation, {});
+            const auto ranked = rankedCandidates(note,
+                                                 options,
+                                                 state.laneUse,
+                                                 state.lastBySource,
+                                                 state.placed,
+                                                 std::nullopt,
+                                                 std::nullopt,
+                                                 sourceJackContinuation,
+                                                 sourceJackContinuation ? MotifKind::Jack : motif);
+
+            int acceptedCandidates = 0;
+            for (const auto& candidate : ranked) {
+                if (!candidatePassesHardGates(state.placed,
+                                              state.occupiedLanes,
+                                              note,
+                                              candidate.lane,
+                                              sourceLane,
+                                              sourceJackContinuation,
+                                              500)) {
+                    continue;
+                }
+
+                SliceBeamState next = state;
+                note.sourceLane = sourceLane;
+                note.lane = candidate.lane;
+                next.solved.push_back({note, sourceJackContinuation ? MotifKind::Jack : motif});
+                next.occupiedLanes.insert(candidate.lane);
+                if (candidate.lane >= 0 && candidate.lane < options.targetKeyCount) {
+                    ++next.laneUse[static_cast<std::size_t>(candidate.lane)];
+                }
+
+                PlacedNote placedNote{note.time, note.lane, sourceLane, note.type, note.endTime};
+                next.placed.push_back(placedNote);
+                next.lastBySource[sourceLane] = placedNote;
+                next.score += candidate.score;
+                nextBeam.push_back(std::move(next));
+                ++report.localSolverCandidates;
+
+                if (++acceptedCandidates >= kCandidateLimitPerState) {
+                    break;
+                }
+            }
+        }
+
+        if (nextBeam.empty()) {
+            ++report.localSolverFallbacks;
+            return std::nullopt;
+        }
+
+        std::stable_sort(nextBeam.begin(), nextBeam.end(), [](const SliceBeamState& lhs, const SliceBeamState& rhs) {
+            if (lhs.score != rhs.score) {
+                return lhs.score > rhs.score;
+            }
+            return lhs.solved.size() > rhs.solved.size();
+        });
+        if (nextBeam.size() > kBeamWidth) {
+            nextBeam.resize(kBeamWidth);
+        }
+        beam = std::move(nextBeam);
+    }
+
+    if (beam.empty()) {
+        ++report.localSolverFallbacks;
+        return std::nullopt;
+    }
+    return beam.front().solved;
+}
+
+std::optional<SolvedPlacement> tryRollLowerKeyOverflowTap(const Note& original,
+                                                          const NK2Options& options,
+                                                          const std::vector<int>& laneUse,
+                                                          const std::map<int, PlacedNote>& lastBySource,
+                                                          const std::vector<PlacedNote>& placed,
+                                                          MotifKind motif) {
+    if (options.targetKeyCount >= options.sourceKeyCount || original.type != NoteType::Tap) {
+        return std::nullopt;
+    }
+
+    constexpr int kRollOffsets[] = {16, -16, 32, -32, 48, -48, 64, -64, 96, -96};
+    const int sourceLane = sourceLaneOf(original);
+    for (const int offset : kRollOffsets) {
+        Note rolled = original;
+        rolled.time = std::max(0, original.time + offset);
+        const bool sourceJackContinuation =
+            isImmediateSourceJackContinuation(placed, sourceLane, rolled.time, 500);
+        const auto ranked = rankedCandidates(rolled,
+                                             options,
+                                             laneUse,
+                                             lastBySource,
+                                             placed,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             sourceJackContinuation,
+                                             sourceJackContinuation ? MotifKind::Jack : motif);
+        std::set<int> emptyOccupied;
+        for (const auto& candidate : ranked) {
+            if (!candidatePassesHardGates(placed,
+                                          emptyOccupied,
+                                          rolled,
+                                          candidate.lane,
+                                          sourceLane,
+                                          sourceJackContinuation,
+                                          500)) {
+                continue;
+            }
+            rolled.sourceLane = sourceLane;
+            rolled.lane = candidate.lane;
+            return SolvedPlacement{rolled, sourceJackContinuation ? MotifKind::Jack : motif};
+        }
     }
     return std::nullopt;
 }
@@ -1251,7 +1533,8 @@ void fillDistributionAndSafety(NK2Report& report, const Chart& converted) {
 
 int supportBudgetFor(const NK2Options& options, int sourceNoteCount) {
     const bool fourToFiveFill = isFourToFiveFillOptions(options);
-    if ((!fourToFiveFill && options.mode == Mode::Faithful) || options.mode == Mode::Report) {
+    if (options.targetKeyCount <= options.sourceKeyCount ||
+        (!fourToFiveFill && options.mode == Mode::Faithful) || options.mode == Mode::Report) {
         return 0;
     }
     if (sourceNoteCount <= 0) {
@@ -1280,7 +1563,8 @@ int supportPhraseWindowForTime(int time) {
 
 int phraseSupportBudgetFor(const NK2Options& options, int sourceNoteCount) {
     const bool fourToFiveFill = isFourToFiveFillOptions(options);
-    if ((!fourToFiveFill && options.mode == Mode::Faithful) || options.mode == Mode::Report) {
+    if (options.targetKeyCount <= options.sourceKeyCount ||
+        (!fourToFiveFill && options.mode == Mode::Faithful) || options.mode == Mode::Report) {
         return 0;
     }
     const int safeSourceNoteCount = std::max(1, sourceNoteCount);
@@ -1435,15 +1719,18 @@ std::vector<SupportEvent> buildSupportEvents(const Chart& placed, const NK2Optio
     for (const auto& note : placed.notes) {
         const int sourceLane = sourceLaneOf(note);
         if (note.type == NoteType::Hold && note.endTime.has_value() && *note.endTime > note.time + 120) {
-            SupportEvent event;
-            event.kind = SupportKind::Ln;
-            event.anchorMotif = MotifKind::LnAnchor;
-            event.time = *note.endTime;
-            event.sourceLane = sourceLane;
-            event.anchorLane = note.lane;
-            event.anchorId = note.id;
-            if (emitted.insert({event.time, "ln:" + event.anchorId}).second) {
-                events.push_back(std::move(event));
+            for (const auto& endpoint : {std::make_pair(note.time, std::string("head")),
+                                         std::make_pair(*note.endTime, std::string("tail"))}) {
+                SupportEvent event;
+                event.kind = SupportKind::Ln;
+                event.anchorMotif = MotifKind::LnAnchor;
+                event.time = endpoint.first;
+                event.sourceLane = sourceLane;
+                event.anchorLane = note.lane;
+                event.anchorId = note.id + "-" + endpoint.second;
+                if (emitted.insert({event.time, "ln:" + event.anchorId}).second) {
+                    events.push_back(std::move(event));
+                }
             }
         }
     }
@@ -1683,6 +1970,22 @@ bool supportsFourToFiveFill(const NK2Options& options) {
     return isFourToFiveFillOptions(options);
 }
 
+bool supportsSupportNotes(const NK2Options& options) {
+    if (options.mode == Mode::Report || options.sourceKeyCount <= 0 || options.targetKeyCount <= 0) {
+        return false;
+    }
+    if (options.superSymmetry) {
+        return false;
+    }
+    if (options.targetKeyCount <= options.sourceKeyCount) {
+        return false;
+    }
+    if (options.sourceKeyCount > 10 || options.targetKeyCount > 10) {
+        return false;
+    }
+    return options.mode != Mode::Faithful || isFourToFiveFillOptions(options);
+}
+
 }  // namespace
 
 NK2Report analyzeReportOnly(const Chart& chart, const NK2Options& options) {
@@ -1720,7 +2023,8 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     }
 
     result.chart.meta.targetKeyCount = options.targetKeyCount;
-    result.chart.meta.version = convertedDifficultyName(chart.meta.version, options.targetKeyCount);
+    result.chart.meta.version =
+        convertedDifficultyName(chart.meta.version, options.targetKeyCount, options.superSymmetry);
     result.chart.notes.clear();
     result.chart.notes.reserve(chart.notes.size());
 
@@ -1739,6 +2043,41 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
         std::set<int> occupiedLanes;
         const bool singleNoteSlice = slice.noteIndices.size() == 1;
 
+        if (!singleNoteSlice) {
+            const auto solvedSlice = solveSliceWithLocalBeam(chart,
+                                                             slice,
+                                                             options,
+                                                             laneUse,
+                                                             lastBySource,
+                                                             placed,
+                                                             result.report);
+            if (solvedSlice.has_value()) {
+                for (const auto& solved : *solvedSlice) {
+                    result.chart.notes.push_back(solved.note);
+                    if (solved.note.lane >= 0 && solved.note.lane < options.targetKeyCount) {
+                        ++laneUse[static_cast<std::size_t>(solved.note.lane)];
+                    }
+
+                    const int sourceLane = sourceLaneOf(solved.note);
+                    PlacedNote placedNote{
+                        solved.note.time, solved.note.lane, sourceLane, solved.note.type, solved.note.endTime};
+                    placed.push_back(placedNote);
+                    lastBySource[sourceLane] = placedNote;
+                    const auto mirrorAnchor = sameTimeMirrorAnchorTargetLane(solved.note, placed, options);
+                    if (mirrorAnchor.has_value() && *mirrorAnchor == solved.note.lane) {
+                        ++result.report.superSymmetryMirrorAnchors;
+                    }
+                    countMotifPlacement(result.report, solved.motif);
+                }
+
+                previousSingleSourceLane.reset();
+                previousSingleTargetLane.reset();
+                previousSingleTime.reset();
+                recentSingles.clear();
+                continue;
+            }
+        }
+
         for (const auto noteIndex : slice.noteIndices) {
             auto note = chart.notes[noteIndex];
             const int sourceLane = sourceLaneOf(note);
@@ -1755,6 +2094,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
                                              fastSingleContinuation,
                                              sourceJackContinuation,
                                              recentSingles);
+            auto placedMotif = motif;
 
             std::optional<int> chosenLane;
             if (sevenToTenPrototype) {
@@ -1779,20 +2119,45 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
                                               motif);
             }
             if (!chosenLane.has_value()) {
-                ++result.report.droppedNotes;
-                continue;
+                const auto rolled = tryRollLowerKeyOverflowTap(note,
+                                                               options,
+                                                               laneUse,
+                                                               lastBySource,
+                                                               placed,
+                                                               motif);
+                if (!rolled.has_value()) {
+                    ++result.report.droppedNotes;
+                    continue;
+                }
+                note = rolled->note;
+                chosenLane = note.lane;
+                placedMotif = rolled->motif;
+                ++result.report.lowerKeyRolledNotes;
             }
             note.sourceLane = sourceLane;
             note.lane = *chosenLane;
-            occupiedLanes.insert(*chosenLane);
+            if (std::abs(note.time - slice.time) <= options.sameTimeEpsilonMs) {
+                occupiedLanes.insert(*chosenLane);
+            }
             if (*chosenLane >= 0 && *chosenLane < options.targetKeyCount) {
                 ++laneUse[static_cast<std::size_t>(*chosenLane)];
             }
 
             PlacedNote placedNote{note.time, note.lane, sourceLane, note.type, note.endTime};
+            const auto mirrorAnchor = sameTimeMirrorAnchorTargetLane(note, placed, options);
+            if (mirrorAnchor.has_value() && *mirrorAnchor == note.lane) {
+                ++result.report.superSymmetryMirrorAnchors;
+            }
+            if (options.superSymmetry &&
+                preservesGaplessStair(sourceLane,
+                                      note.lane,
+                                      fastSingleContinuation ? previousSingleSourceLane : std::nullopt,
+                                      fastSingleContinuation ? previousSingleTargetLane : std::nullopt)) {
+                ++result.report.superSymmetryGaplessStairs;
+            }
             placed.push_back(placedNote);
             lastBySource[sourceLane] = placedNote;
-            countMotifPlacement(result.report, motif);
+            countMotifPlacement(result.report, placedMotif);
             result.chart.notes.push_back(note);
 
             if (singleNoteSlice) {
@@ -1827,18 +2192,22 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     result.report.chartMutated = true;
     result.report.prototypeName = sevenToTenPrototype ? "nk2-7k10k-panel-bridge-fullfield"
                                                       : "nk2-generic-nk-relane-compress";
-    const bool fourToFiveFill = supportsFourToFiveFill(options);
-    if (sevenToTenPrototype || fourToFiveFill) {
+    const bool supportNotesEnabled = supportsSupportNotes(options);
+    if (supportNotesEnabled) {
         applySupportNotes(result.chart, result.report, options);
+    } else if (options.superSymmetry && options.mode != Mode::Faithful &&
+               options.targetKeyCount > options.sourceKeyCount) {
+        result.report.warnings.push_back(
+            "NK2 support-note generation is disabled by super-symmetry mode.");
     } else if (options.mode != Mode::Faithful && options.targetKeyCount > options.sourceKeyCount) {
         result.report.warnings.push_back(
-            "NK2 generic prototype currently relanes only; support-note generation is limited to 4K to 5K and 7K to 10K.");
+            "NK2 support-note generation is disabled for this key-count pair or mode.");
     }
     fillDistributionAndSafety(result.report, result.chart);
     if (result.report.addedNotes == 0) {
-        if (options.mode == Mode::Faithful && !fourToFiveFill) {
+        if (options.mode == Mode::Faithful && !supportsFourToFiveFill(options)) {
             result.report.warnings.push_back("NK2 faithful mode keeps source note count; support notes are disabled.");
-        } else if (sevenToTenPrototype) {
+        } else if (supportNotesEnabled) {
             result.report.warnings.push_back(
                 "NK2 support-note generation found no accepted safe candidates.");
         }

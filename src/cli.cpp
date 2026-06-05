@@ -327,7 +327,8 @@ void printHelp(std::ostream& out) {
     out << "  --expansion-snap-tolerance <ms> Snap validation tolerance for added notes. Default: 2.\n";
     out << "  --echo-policy <p>       off | stair | trill | stream | stair-trill | stair-trill-stream | auto.\n";
     out << "  --stream-echo-profile <p> conservative | balanced | training | experimental. Default: conservative.\n";
-    out << "  --stream-transform <p>  off | superrandom | full-jitter. Superrandom relanes each note; full-jitter offsets every note by 1-15 ms.\n";
+    out << "  --stream-transform <p>  off | superrandom | full-jitter | super-symmetry.\n";
+    out << "                          Superrandom/full-jitter are classic-engine stream transforms; super-symmetry is NK2-only.\n";
     out << "  --seed <n>              Deterministic random seed for stream transforms. Default: 0.\n";
     out << "  --echo-diagnostics      Print StreamEcho reject breakdown; does not alter conversion output.\n";
     out << "  --max-echo-ratio <n>    Max echo notes as source-note ratio. Default: 0.08.\n";
@@ -426,6 +427,8 @@ std::string difficultyStreamTag(keyconv::StreamTransformPolicy policy) {
             return "sRan";
         case keyconv::StreamTransformPolicy::FullJitter:
             return "jitter";
+        case keyconv::StreamTransformPolicy::SuperSymmetry:
+            return "sSym";
         case keyconv::StreamTransformPolicy::Off:
             return {};
     }
@@ -536,12 +539,18 @@ std::filesystem::path defaultOutputPath(const std::filesystem::path& input,
 
 std::filesystem::path defaultNk2OutputPath(const std::filesystem::path& input,
                                            int targetKeys,
+                                           keyconv::StreamTransformPolicy streamTransformPolicy,
                                            const std::optional<std::filesystem::path>& outputDir = std::nullopt) {
     const auto parent = outputDir.has_value()
                             ? *outputDir
                             : input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
     const auto extension = defaultChartExtension(input, targetKeys);
-    const auto marker = "KeyWeaverNK2-" + std::to_string(targetKeys) + "K";
+    std::string marker = "KeyWeaverNK2-" + std::to_string(targetKeys) + "K";
+    const auto streamTag = difficultyStreamTag(streamTransformPolicy);
+    if (!streamTag.empty()) {
+        marker += "-";
+        marker += streamTag;
+    }
 
     for (int suffix = 1;; ++suffix) {
         std::filesystem::path filename = input.stem();
@@ -1283,6 +1292,15 @@ void validateOptions(const CliOptions& options) {
         throw std::runtime_error("--report-csv is only supported by classic policy comparison");
     }
     if (options.engine == keyconv::nk2::Engine::NK2 &&
+        (options.streamTransformPolicy == keyconv::StreamTransformPolicy::SuperRandom ||
+         options.streamTransformPolicy == keyconv::StreamTransformPolicy::FullJitter)) {
+        throw std::runtime_error("--stream-transform superrandom/full-jitter are only supported by the classic engine");
+    }
+    if (options.engine != keyconv::nk2::Engine::NK2 &&
+        options.streamTransformPolicy == keyconv::StreamTransformPolicy::SuperSymmetry) {
+        throw std::runtime_error("--stream-transform super-symmetry requires --engine nk2");
+    }
+    if (options.engine == keyconv::nk2::Engine::NK2 &&
         options.nk2Mode == keyconv::nk2::Mode::Report &&
         (options.out.has_value() || options.outDir.has_value())) {
         throw std::runtime_error("--nk2-mode report is analysis-only and does not write chart output");
@@ -1952,13 +1970,18 @@ int runSingleConversion(const CliOptions& cli,
         nk2Options.layoutWeights.bridge = cli.nk2LayoutWeightBridge;
         nk2Options.layoutWeights.fullField = cli.nk2LayoutWeightFullField;
         nk2Options.sameTimeEpsilonMs = convertOptions.sameTimeEpsilonMs;
+        nk2Options.superSymmetry =
+            cli.streamTransformPolicy == keyconv::StreamTransformPolicy::SuperSymmetry;
 
         const auto nk2Start = SteadyClock::now();
         const auto nk2Result = keyconv::nk2::convertChart(chart, nk2Options);
         convertTimeMs = elapsedMs(nk2Start, SteadyClock::now());
         auto outputPath = cli.out;
         if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value()) {
-            outputPath = defaultNk2OutputPath(input, convertOptions.targetKeyCount, cli.outDir);
+            outputPath = defaultNk2OutputPath(input,
+                                              convertOptions.targetKeyCount,
+                                              cli.streamTransformPolicy,
+                                              cli.outDir);
         }
 
         if (!cli.batchQuiet) {

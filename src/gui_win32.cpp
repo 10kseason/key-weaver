@@ -805,12 +805,18 @@ std::wstring streamDifficultyTag(const ToolOptions& options) {
     if (options.streamTransform == L"full-jitter") {
         return L"jitter";
     }
+    if (options.streamTransform == L"super-symmetry") {
+        return L"sSym";
+    }
     return {};
 }
 
 std::wstring keyWeaverConversionMarker(const ToolOptions& options) {
     std::wstring marker = L"KeyWeaver" + options.targetKeys + L"K";
-    const auto streamTag = nk2EngineActive(options) ? std::wstring{} : streamDifficultyTag(options);
+    const auto streamTag =
+        (!nk2EngineActive(options) || options.streamTransform == L"super-symmetry")
+            ? streamDifficultyTag(options)
+            : std::wstring{};
     if (!streamTag.empty()) {
         marker += L"-";
         marker += streamTag;
@@ -907,6 +913,10 @@ std::wstring buildSingleCommand(ToolOptions options,
         appendArg(command, L"nk2");
         appendArg(command, L"--nk2-mode");
         appendArg(command, nk2ModeCliValue(options.nk2Mode));
+        if (options.streamTransform != L"off") {
+            appendArg(command, L"--stream-transform");
+            appendArg(command, options.streamTransform);
+        }
         appendArg(command, L"--out");
         appendArg(command, quoteArg(paths.outputChart));
         if (options.debugReports) {
@@ -990,6 +1000,10 @@ std::wstring buildBatchCommand(const ToolOptions& options,
         appendArg(command, L"nk2");
         appendArg(command, L"--nk2-mode");
         appendArg(command, nk2ModeCliValue(options.nk2Mode));
+        if (options.streamTransform != L"off") {
+            appendArg(command, L"--stream-transform");
+            appendArg(command, options.streamTransform);
+        }
         if (forcedOutputDir.has_value()) {
             appendArg(command, L"--out-dir");
             appendArg(command, quoteArg(*forcedOutputDir));
@@ -1688,6 +1702,22 @@ bool validateToolOptions(const ToolOptions& options, HWND owner) {
     }
     if (nk2EngineActive(options) && nk2ModeCliValue(options.nk2Mode).empty()) {
         MessageBoxW(owner, L"NK2 mode is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
+        return false;
+    }
+    if (nk2EngineActive(options) &&
+        options.streamTransform != L"off" &&
+        options.streamTransform != L"super-symmetry") {
+        MessageBoxW(owner,
+                    L"NK2 Stream supports only off or super-symmetry.",
+                    L"KeyWeaver GUI",
+                    MB_ICONERROR);
+        return false;
+    }
+    if (!nk2EngineActive(options) && options.streamTransform == L"super-symmetry") {
+        MessageBoxW(owner,
+                    L"super-symmetry Stream requires NK2 (Experimental).",
+                    L"KeyWeaver GUI",
+                    MB_ICONERROR);
         return false;
     }
     return true;
@@ -2408,8 +2438,8 @@ void createUi(AppState& state) {
 
     makeControl(state, L"STATIC", L"Stream", 0, kMainLeft + 320, y + 6, 64, 22, -1);
     state.streamProfileCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                           kMainLeft + 384, y, 172, 150, kComboStreamProfile);
-    for (const auto* item : {L"off", L"superrandom", L"full-jitter"}) {
+                                           kMainLeft + 384, y, 172, 180, kComboStreamProfile);
+    for (const auto* item : {L"off", L"superrandom", L"full-jitter", L"super-symmetry"}) {
         addComboItem(state.streamProfileCombo, item);
     }
     setComboSelection(state.streamProfileCombo, L"off");

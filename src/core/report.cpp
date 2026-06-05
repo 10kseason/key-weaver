@@ -177,6 +177,8 @@ std::string toString(StreamTransformPolicy policy) {
             return "superrandom";
         case StreamTransformPolicy::FullJitter:
             return "full-jitter";
+        case StreamTransformPolicy::SuperSymmetry:
+            return "super-symmetry";
     }
     return "off";
 }
@@ -397,6 +399,10 @@ std::optional<StreamTransformPolicy> parseStreamTransformPolicy(const std::strin
     }
     if (value == "full-jitter" || value == "all-jitter" || value == "zure" || value == "jitter") {
         return StreamTransformPolicy::FullJitter;
+    }
+    if (value == "super-symmetry" || value == "supersymmetry" || value == "super-sym" ||
+        value == "symmetry") {
+        return StreamTransformPolicy::SuperSymmetry;
     }
     return std::nullopt;
 }

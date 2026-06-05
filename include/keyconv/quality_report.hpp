@@ -77,6 +77,7 @@ enum class StreamTransformPolicy {
     Off,
     SuperRandom,
     FullJitter,
+    SuperSymmetry,
 };
 
 enum class JackPreservePolicy {

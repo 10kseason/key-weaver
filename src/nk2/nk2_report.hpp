@@ -29,6 +29,7 @@ struct NK2Options {
     double remixWeight = 0.5;
     LayoutWeights layoutWeights;
     int sameTimeEpsilonMs = 2;
+    bool superSymmetry = false;
 };
 
 struct NK2Report {
@@ -42,6 +43,12 @@ struct NK2Report {
     int outputNotes = 0;
     int addedNotes = 0;
     int droppedNotes = 0;
+    int localSolverWindows = 0;
+    int localSolverCandidates = 0;
+    int localSolverFallbacks = 0;
+    int lowerKeyRolledNotes = 0;
+    int superSymmetryMirrorAnchors = 0;
+    int superSymmetryGaplessStairs = 0;
     int sameTimeCollisions = 0;
     int longNoteConflicts = 0;
     int createdJacks = 0;

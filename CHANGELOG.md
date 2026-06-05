@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Extended experimental NK2 with same-time local solver diagnostics, lower-key tap overflow roll rescue, generalized high-key support notes, and LN head/tail adjacent tap support.
+- Added NK2-only `--stream-transform super-symmetry` and a matching GUI Stream option to preserve source mirror pairs and gapless adjacent-lane stairs.
 - Fixed 10K Full-Field Mirror-Remix stream/burst/stair rail hints so long tokens alternate primary hands instead of collapsing into one side of the field.
 - Fixed GUI drag-and-drop so drops on child controls are accepted, dropped folders expand to contained chart files, and multi-chart drops keep per-chart output folders by leaving Output blank.
 - Optimized large GUI batches by routing non-debug runs through one quiet CLI batch process with `--input-list`, avoiding one spawned `KeyWeaver.exe` process per chart.

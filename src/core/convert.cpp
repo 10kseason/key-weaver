@@ -1329,6 +1329,8 @@ std::string difficultyStreamTag(StreamTransformPolicy policy) {
             return "sRan";
         case StreamTransformPolicy::FullJitter:
             return "jitter";
+        case StreamTransformPolicy::SuperSymmetry:
+            return "sSym";
         case StreamTransformPolicy::Off:
             return {};
     }

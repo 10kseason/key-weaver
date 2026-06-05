@@ -58,16 +58,21 @@ Current supported behavior:
 - Non-report NK2 conversion supports experimental 1K..10K source/target pairs.
 - 7K -> 10K uses the dedicated `nk2-7k10k-panel-bridge-fullfield` prototype.
 - Other non-same 1K..10K pairs use `nk2-generic-nk-relane-compress`.
+- Same-time chord slices use a small local beam solver before falling back to
+  the older note-by-note placement path.
+- Lower-key tap overflow can be rescued by short safe rolls before a source tap
+  is counted as dropped.
 - 4K -> 5K is a special generic branch that can add fill/support notes even in
   faithful mode.
-- Support-note generation currently runs for 7K -> 10K and 4K -> 5K.
+- Support-note generation runs for higher-key 1K..10K NK2 pairs in native and
+  harder modes; 4K -> 5K also enables it in faithful mode.
 - Support notes are tap-only in the current milestone.
 
 Current non-goals:
 
 - NK2 is not the default engine.
 - NK2 does not replace Classic policy locks.
-- NK2 does not perform full beam search.
+- NK2 does not perform full-song beam search.
 - NK2 does not retime source notes as a normal repair.
 - NK2 does not synthesize generated LNs in the current milestone.
 - NK2 does not yet use profile scoring to search multiple candidate charts.
@@ -87,7 +92,7 @@ Hard or near-hard contracts:
 - Avoid created target jacks when a safe alternative exists.
 - Preserve source jacks as source jacks instead of counting them as created
   target jacks.
-- Drop only when the strict generic path cannot place a note safely.
+- Drop source taps only after strict placement and lower-key roll rescue fail.
 - Keep generated support notes tap-only.
 - Keep generated support notes traceable by ID and report provenance.
 
@@ -113,6 +118,7 @@ struct NK2Options {
     double remixWeight = 0.5;
     LayoutWeights layoutWeights;
     int sameTimeEpsilonMs = 2;
+    bool superSymmetry = false;
 };
 ```
 
@@ -126,6 +132,11 @@ Modes:
 - `harder`: allows a higher support-note budget.
 - `transform`: reserved for same-key transform behavior.
 - `report`: analysis-only; no chart mutation.
+
+`superSymmetry` is an optional NK2 stream-transform mode exposed through
+`--stream-transform super-symmetry` and the GUI Stream selector. It is disabled
+by default. When enabled, NK2 gives symmetric source pairs and gapless adjacent
+stairs stronger placement priority than normal target-native spreading.
 
 Default blend:
 
@@ -161,9 +172,10 @@ input Chart + NK2Options
   -> build deterministic source time slices
   -> for each slice:
        track occupied target lanes inside this slice
+       solve same-time chords with a small local beam when possible
        classify each note motif
        rank target lane candidates
-       accept a safe lane or drop/fallback depending on prototype
+       accept a safe lane, roll lower-key tap overflow, or drop/fallback
        update lane usage, placed notes, source-lane memory, motif counters
   -> sort converted notes
   -> set prototype name
@@ -547,6 +559,40 @@ direction break or flat target: -0.90
 
 For high-key output this lets stairs widen, but not invert or collapse.
 
+When `superSymmetry` is enabled, an adjacent source stair step has a stronger
+constraint:
+
+```text
+source movement is exactly one lane
+same target direction and target movement is exactly one lane: strong bonus
+same direction but target movement is wider than one lane: penalty
+flat or inverted target movement: stronger penalty
+```
+
+This preserves no-hole source stairs as no-hole target stairs when the safety
+gates can accept the adjacent target lane.
+
+### Super Symmetry
+
+Super Symmetry is a placement scorer layered on top of NK2 candidate ranking,
+not a separate engine.
+
+Rules:
+
+- If the source slice contains mirrored lanes, such as `0/6` in 7K, the second
+  placed note in the pair strongly prefers the mirror of the first target lane.
+- The same-time local beam sees already placed notes inside the current slice,
+  so it can solve symmetric chords as mirrored target pairs instead of letting
+  each note drift independently.
+- If a fast single-note source stair moves by exactly one lane, the target
+  candidate that moves by exactly one lane in the same direction receives the
+  strongest stair bonus.
+- Generated support notes are disabled in this mode because unpaired support
+  taps can break the requested symmetry.
+
+The mode does not override safety gates. Same-time collision, LN conflict, and
+created-jack rejection still decide whether a high-scoring lane can be used.
+
 ### Stream
 
 Streams avoid repeated-lane flattening and reward continuous motion:
@@ -656,10 +702,34 @@ reported later through warnings and counters.
 The generic path uses `chooseLaneStrict()`.
 
 It accepts only candidates that pass all gates. If no candidate passes, it
-returns no lane and the source note is dropped.
+returns no lane. For lower-key tap overflow, NK2 then tries short safe roll
+offsets before the source tap is dropped.
 
 This is the current lower-key and generic compression behavior: preserve what
-can be represented safely, and count impossible overflow in `droppedNotes`.
+can be represented safely, rescue safe tap overflow with small rolls, and count
+only remaining impossible overflow in `droppedNotes`. Rolled lower-key taps are
+reported through `lowerKeyRolledNotes`.
+
+### Same-Time Local Solver
+
+Before the note-by-note placement path runs on a same-time chord slice, NK2
+tries a small local beam solver. The solver keeps several partial lane
+assignments for the current slice, expands each note through its ranked target
+lane candidates, applies the same collision, LN, and no-created-jack gates, and
+keeps the best-scoring complete slice assignment.
+
+Current bounds:
+
+```text
+maximum solved slice size: 12 notes
+candidate limit per state: 8 lanes
+beam width: 16 states
+```
+
+If the slice cannot be solved as a complete same-time assignment, for example
+an oversized lower-key chord, NK2 increments `localSolverFallbacks` and returns
+to the older per-note path where lower-key tap roll rescue can still preserve
+some overflow notes.
 
 ## 7K -> 10K Prototype
 
@@ -705,17 +775,14 @@ nk2-generic-nk-relane-compress
 This path covers non-same source/target pairs from 1K through 10K. It uses the
 same candidate ranking model but strict lane acceptance.
 
-For higher-key generic conversions, the prototype generally relanes only. If
-the user selects native or harder and the branch does not support support-note
-generation, the report warns:
-
-```text
-NK2 generic prototype currently relanes only; support-note generation is limited
-to 4K to 5K and 7K to 10K.
-```
+For higher-key generic conversions, native and harder modes can add the same
+tap-only LN, strong-beat, and mirror support events used by the 7K -> 10K path.
+Faithful mode remains source-count-preserving except for the 4K -> 5K fill
+exception.
 
 For lower-key generic conversions, dropped notes represent objects that could
-not be placed without collision, LN conflict, or created-jack damage.
+not be placed or safely rolled without collision, LN conflict, or created-jack
+damage.
 
 ## 4K -> 5K Fill Exception
 
@@ -746,13 +813,11 @@ tap-only, source-related, budgeted, safety-gated, and provenance-tagged.
 Support generation currently runs when:
 
 ```text
-7K -> 10K
-or
-4K -> 5K
+higher-key 1K..10K native/harder NK2 conversion
+or 4K -> 5K faithful/native/harder NK2 conversion
 ```
 
-For other generic high-key paths, the converter may warn that support generation
-is not enabled for that pair.
+Lower-key and same-key NK2 conversions do not add support notes.
 
 ### Support Event Types
 
@@ -766,7 +831,7 @@ LN support event:
 
 - emitted for a hold with an end time
 - hold duration must be greater than `120 ms`
-- event time is the LN end time
+- event times are the LN head and LN tail
 - anchor motif is `LnAnchor`
 
 Strong-beat support event:
@@ -1024,6 +1089,12 @@ Important placement fields:
 - `outputNotes`
 - `addedNotes`
 - `droppedNotes`
+- `localSolverWindows`
+- `localSolverCandidates`
+- `localSolverFallbacks`
+- `lowerKeyRolledNotes`
+- `superSymmetryMirrorAnchors`
+- `superSymmetryGaplessStairs`
 - `sameTimeCollisions`
 - `longNoteConflicts`
 - `createdJacks`
@@ -1088,6 +1159,7 @@ Relevant CLI options:
 --nk2-layout-weight-panel <n>
 --nk2-layout-weight-bridge <n>
 --nk2-layout-weight-fullfield <n>
+--stream-transform super-symmetry
 ```
 
 Examples:
@@ -1097,12 +1169,14 @@ build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode faithful --dry-run
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode native --out dist/simple_7k_10k_nk2.osu --report dist/nk2_7k10k.json
 build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 5 --engine nk2 --nk2-mode faithful --report dist/nk2_4k5k.json
+build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode faithful --stream-transform super-symmetry
 ```
 
 The output difficulty marker for NK2 is:
 
 ```text
 KeyWeaverNK2-<target>K
+KeyWeaverNK2-<target>K-sSym when Super Symmetry is enabled
 ```
 
 If the existing version name already contains `KeyWeaver`, NK2 does not append a
@@ -1118,6 +1192,7 @@ Expected GUI model:
 ```text
 Algorithm: NK1 (Classic) / NK2 (Experimental)
 NK2 modes: faithful / native / harder / transform
+Stream modes: off / super-symmetry for NK2
 ```
 
 The GUI shells out to the CLI and reads the report, so NK2 GUI behavior should
@@ -1134,7 +1209,10 @@ Current NK2 test coverage includes:
 - generic 7K -> 8K conversion
 - generic 7K -> 8K whole-field spread
 - generic 7K -> 8K long-LN adjacent-copy placement
+- same-time local solver diagnostics
 - generic 7K -> 4K compression
+- generalized generic high-key support notes
+- LN head/tail adjacent support taps
 - 7K -> 10K prototype conversion
 - 7K -> 10K source jack preservation
 - 7K -> 10K support note gating
@@ -1156,6 +1234,8 @@ output lanes are inside target field
 source LN durations are preserved exactly
 same-key native/faithful/harder are no-op
 report mode does not mutate charts
+same-time local solver reports windows/candidates/fallbacks
+lower-key tap overflow reports rolled-note rescue
 support accepted counters match added notes
 support notes are tap-only
 ```
@@ -1252,15 +1332,13 @@ The current NK2 implementation is not the final architecture promised by the
 design document. Known gaps:
 
 - Intent graph is still a summary, not a full object graph.
-- There is no multi-candidate solver or beam search.
+- There is no full-song multi-candidate solver or beam search.
 - Profile-guided phrase scoring is report-only.
 - Same-key transform mode is recognized but not fully implemented as a mutation
   path.
-- Support-note generation is enabled only for 7K -> 10K and 4K -> 5K.
 - Support notes are tap-only.
-- Generic higher-key pairs other than 4K -> 5K are mostly relane-only.
 - Lower-key conversion drops impossible overflow instead of doing phrase-aware
-  merge ranking.
+  merge ranking across full phrases.
 - 7K -> 10K has a permissive fallback that can still produce reported damage if
   all safer candidates fail.
 - Strong-beat detection is intentionally simple.
@@ -1280,4 +1358,3 @@ Natural next steps:
 - Implement same-key transform mutation for `nk2-mode transform`.
 - Add real-chart sample gates for NK2 support and layout regressions.
 - Promote NK2 only after it beats Classic on representative real charts.
-

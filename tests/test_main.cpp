@@ -3955,6 +3955,14 @@ void testFullJitterOffsetsSameTimeChords() {
             "full-jitter should split a same-time chord into close ms offsets");
 }
 
+void testStreamSuperSymmetryPolicyParses() {
+    const auto parsed = keyconv::parseStreamTransformPolicy("super-symmetry");
+    require(parsed.has_value() && *parsed == keyconv::StreamTransformPolicy::SuperSymmetry,
+            "super-symmetry should parse as a stream transform policy");
+    require(keyconv::toString(keyconv::StreamTransformPolicy::SuperSymmetry) == "super-symmetry",
+            "super-symmetry stream transform should stringify stably");
+}
+
 void testDifficultyNameMarksExpansionAndStreamTransform() {
     auto chart = makeChart(4,
                            {
@@ -4278,6 +4286,44 @@ void testNk2SevenToEightLongLnCopiesAdjacentPlacement() {
             "NK2 adjacent-copy long LN should avoid created jacks");
 }
 
+void testNk2LocalSolverHandlesSameTimeChord() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 4, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 6, keyconv::NoteType::Tap, std::nullopt},
+                                  {1500, 3, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 8;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.localSolverWindows > 0,
+            "NK2 local solver should run on same-time chord windows");
+    require(result.report.localSolverCandidates > 0,
+            "NK2 local solver should evaluate chord candidate combinations");
+    require(result.report.localSolverFallbacks == 0,
+            "NK2 local solver should solve a fitting same-time chord without fallback");
+    require(result.chart.notes.size() == chart.notes.size(),
+            "NK2 local solver should preserve a fitting same-time chord");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 local solver should avoid same-time chord collisions");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 local solver should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 local solver should keep created-jack gate intact");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"localSolverWindows\"") != std::string::npos,
+            "NK2 JSON should include local solver diagnostics");
+    require(json.find("\"localSolverCandidates\"") != std::string::npos,
+            "NK2 JSON should include local solver candidate count");
+}
+
 void testNk2SevenToFourGenericPrototypeCompression() {
     auto chart = makeChart(7, {
                                   {1000, 0, keyconv::NoteType::Tap, std::nullopt},
@@ -4303,10 +4349,10 @@ void testNk2SevenToFourGenericPrototypeCompression() {
     require(result.report.prototypeName == "nk2-generic-nk-relane-compress",
             "NK2 generic 7K to 4K should use the generic prototype");
     require(result.chart.meta.targetKeyCount == 4, "NK2 generic down output should set target key count");
-    require(result.chart.notes.size() < chart.notes.size(),
-            "NK2 generic 7K to 4K should drop only impossible overflow notes");
-    require(result.report.droppedNotes > 0,
-            "NK2 generic 7K to 4K should report dropped overflow notes");
+    require(result.report.lowerKeyRolledNotes > 0,
+            "NK2 generic 7K to 4K should roll safe overflow taps before dropping");
+    require(result.chart.notes.size() >= chart.notes.size() - 1,
+            "NK2 generic 7K to 4K should preserve most overflow notes through safe rolls");
     require(result.report.sameTimeCollisions == 0,
             "NK2 generic 7K to 4K should avoid collisions");
     require(result.report.longNoteConflicts == 0,
@@ -4318,6 +4364,10 @@ void testNk2SevenToFourGenericPrototypeCompression() {
             "NK2 generic 7K to 4K should avoid created jacks");
     require(result.report.laneDistribution.size() == 4,
             "NK2 generic 7K to 4K should report 4 target lanes");
+    require(result.report.localSolverWindows > 0,
+            "NK2 generic 7K to 4K should try local solver on oversized chord windows");
+    require(result.report.localSolverFallbacks > 0,
+            "NK2 generic 7K to 4K should fall back when a chord exceeds target lanes");
     for (const auto& note : result.chart.notes) {
         require(note.lane >= 0 && note.lane < 4,
                 "NK2 generic 7K to 4K lane should stay inside target field");
@@ -4327,6 +4377,155 @@ void testNk2SevenToFourGenericPrototypeCompression() {
     });
     require(hold != result.chart.notes.end() && hold->endTime == 2200,
             "NK2 generic 7K to 4K should preserve surviving LN duration");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"lowerKeyRolledNotes\"") != std::string::npos,
+            "NK2 JSON should include lower-key roll diagnostics");
+}
+
+void testNk2SevenToEightNativeSupportNotesAreGeneralized() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 8;
+    options.mode = keyconv::nk2::Mode::Native;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.addedNotes > 0,
+            "NK2 generic 7K to 8K native should add generalized support notes");
+    require(result.report.mirrorSupportCandidates > 0,
+            "NK2 generic high-key support should emit mirror candidates");
+    require(result.report.mirrorSupportAccepted > 0,
+            "NK2 generic high-key support should accept safe mirror notes");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 generic high-key support should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 generic high-key support should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 generic high-key support should keep created-jack gate intact");
+}
+
+void testNk2LnAdjacentSupportAddsHeadAndTailTaps() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Hold, 2000},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 8;
+    options.mode = keyconv::nk2::Mode::Harder;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.lnSupportCandidates >= 2,
+            "NK2 LN-adjacent support should emit both head and tail candidates");
+    require(result.report.lnSupportAccepted >= 2,
+            "NK2 LN-adjacent support should accept safe head and tail taps");
+
+    bool hasHeadTap = false;
+    bool hasTailTap = false;
+    for (const auto& note : result.chart.notes) {
+        if (note.id.find("nk2-ln-ln-") != 0) {
+            continue;
+        }
+        hasHeadTap = hasHeadTap || note.time == 1000;
+        hasTailTap = hasTailTap || note.time == 2000;
+        require(note.type == keyconv::NoteType::Tap,
+                "NK2 LN-adjacent support should stay tap-only");
+        require(!note.endTime.has_value(),
+                "NK2 LN-adjacent support should not synthesize generated LNs");
+    }
+    require(hasHeadTap, "NK2 LN-adjacent support should add a head-side tap");
+    require(hasTailTap, "NK2 LN-adjacent support should add a tail-side tap");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 LN-adjacent support should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 LN-adjacent support should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 LN-adjacent support should keep created-jack gate intact");
+}
+
+void testNk2SuperSymmetryPreservesSameTimeMirrors() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1000, 6, keyconv::NoteType::Tap, std::nullopt},
+                                  {1250, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1250, 5, keyconv::NoteType::Tap, std::nullopt},
+                                  {1500, 3, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+    options.superSymmetry = true;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    std::map<std::pair<int, int>, int> laneByTimeAndSource;
+    for (const auto& note : result.chart.notes) {
+        laneByTimeAndSource[{note.time, note.sourceLane.value_or(note.lane)}] = note.lane;
+    }
+
+    require(result.report.options.superSymmetry,
+            "NK2 report should keep the super-symmetry option");
+    require(result.report.superSymmetryMirrorAnchors >= 2,
+            "NK2 super-symmetry should count same-time mirror anchors");
+    require(laneByTimeAndSource[{1000, 0}] + laneByTimeAndSource[{1000, 6}] == 9,
+            "NK2 super-symmetry should mirror source 0/6 into target 10K");
+    require(laneByTimeAndSource[{1250, 1}] + laneByTimeAndSource[{1250, 5}] == 9,
+            "NK2 super-symmetry should mirror source 1/5 into target 10K");
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 super-symmetry mirrored chords should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 super-symmetry mirrored chords should keep LN gate intact");
+
+    const auto json = keyconv::nk2::reportToJson(result.report);
+    require(json.find("\"superSymmetry\": true") != std::string::npos,
+            "NK2 JSON should report super-symmetry mode");
+    require(json.find("\"superSymmetryMirrorAnchors\"") != std::string::npos,
+            "NK2 JSON should include super-symmetry mirror anchors");
+}
+
+void testNk2SuperSymmetryPreservesGaplessStair() {
+    auto chart = makeChart(7, {
+                                  {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                  {1120, 1, keyconv::NoteType::Tap, std::nullopt},
+                                  {1240, 2, keyconv::NoteType::Tap, std::nullopt},
+                                  {1360, 3, keyconv::NoteType::Tap, std::nullopt},
+                                  {1480, 4, keyconv::NoteType::Tap, std::nullopt},
+                              });
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+    options.superSymmetry = true;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.chart.notes.size() == chart.notes.size(),
+            "NK2 super-symmetry stair fixture should preserve note count");
+    require(result.report.superSymmetryGaplessStairs >= 4,
+            "NK2 super-symmetry should count preserved gapless stair links");
+
+    const auto sourceLane = [](const keyconv::Note& note) {
+        return note.sourceLane.value_or(note.lane);
+    };
+    for (std::size_t i = 1; i < result.chart.notes.size(); ++i) {
+        const int sourceDelta = sourceLane(result.chart.notes[i]) - sourceLane(result.chart.notes[i - 1]);
+        const int targetDelta = result.chart.notes[i].lane - result.chart.notes[i - 1].lane;
+        require(sourceDelta == 1 && targetDelta == 1,
+                "NK2 super-symmetry should keep a gapless ascending stair gapless");
+    }
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 super-symmetry stair should keep collision gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 super-symmetry stair should not create target jacks");
 }
 
 void testNk2SevenToTenPrototypeConversion() {
@@ -4898,6 +5097,7 @@ int main() {
         {"stream superrandom relanes every note", testStreamSuperRandomRelanesEveryNote},
         {"stream superrandom keeps chord distinct", testStreamSuperRandomKeepsChordDistinct},
         {"full jitter offsets same-time chords", testFullJitterOffsetsSameTimeChords},
+        {"stream super-symmetry policy parses", testStreamSuperSymmetryPolicyParses},
         {"difficulty name marks expansion and stream transform",
          testDifficultyNameMarksExpansionAndStreamTransform},
         {"converted chart marker guard", testConvertedChartMarkerGuard},
@@ -4913,8 +5113,17 @@ int main() {
          testNk2SevenToEightGenericUsesWholeFieldSpread},
         {"NK2 7K to 8K long LN copies adjacent placement",
          testNk2SevenToEightLongLnCopiesAdjacentPlacement},
+        {"NK2 local solver handles same-time chord", testNk2LocalSolverHandlesSameTimeChord},
         {"NK2 7K to 4K generic prototype compression",
          testNk2SevenToFourGenericPrototypeCompression},
+        {"NK2 7K to 8K native support notes are generalized",
+         testNk2SevenToEightNativeSupportNotesAreGeneralized},
+        {"NK2 LN-adjacent support adds head and tail taps",
+         testNk2LnAdjacentSupportAddsHeadAndTailTaps},
+        {"NK2 super-symmetry preserves same-time mirrors",
+         testNk2SuperSymmetryPreservesSameTimeMirrors},
+        {"NK2 super-symmetry preserves gapless stair",
+         testNk2SuperSymmetryPreservesGaplessStair},
         {"NK2 7K to 10K prototype conversion", testNk2SevenToTenPrototypeConversion},
         {"NK2 7K to 10K preserves source jack", testNk2SevenToTenPreservesSourceJack},
         {"NK2 7K to 10K support notes are gated", testNk2SevenToTenSupportNotesAreGated},

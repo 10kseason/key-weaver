@@ -1,0 +1,182 @@
+{
+  "modelName": "Transformer model (u_e X CircusGalop Chart dataset model)",
+  "format": "ONNX",
+  "runtimeContract": {
+    "input": "float32[notes, 12]",
+    "output": "float32[notes, targetKeys] lane logits",
+    "policy": "advisory; KeyWeaver safety checks may reject predicted relanes"
+  },
+  "onnxPath": "models\\u_e_circusgalop_chart_dataset_lane_policy.onnx",
+  "opset": 18,
+  "exporter": "dynamo",
+  "externalData": false,
+  "sourceCheckpoint": {
+    "checkpointPath": "dist\\transformer-large-u_e-circusgalop-632\\large_transformer_lane_policy.pt",
+    "sourceKeys": 7,
+    "targetKeys": 10,
+    "authors": [
+      "u_e",
+      "CircusGalop"
+    ],
+    "seed": 20260609,
+    "architecture": {
+      "targetKeys": 10,
+      "featureCount": 12,
+      "dModel": 128,
+      "nhead": 8,
+      "dimFeedforward": 512,
+      "numLayers": 4,
+      "dropout": 0.05
+    },
+    "trainingValidation": {
+      "loss": 0.5051895297559756,
+      "accuracy": 0.7015369401984446,
+      "top3Accuracy": 0.9997485921158488,
+      "meanAbsLaneError": 0.29922566371681414,
+      "hybridAccuracy": 0.6767146017699115,
+      "hybridTop3Accuracy": 0.9998072539554841,
+      "hybridMeanAbsLaneError": 0.3235284258514347,
+      "directAccuracy": 0.6960311075355323,
+      "directMeanAbsLaneError": 0.3039688924644677,
+      "nonDirectLabelRate": 0.3039688924644677,
+      "rawNonDirectRecall": 0.9998070136744597,
+      "hybridNonDirectRecall": 0.29016872518747244,
+      "insertedLaneLabelRate": 0.3039688924644677,
+      "rawInsertedLaneUseRate": 0.6023732904263878,
+      "rawInsertedLanePrecision": 0.5046188091263216,
+      "rawInsertedLaneRecall": 0.9998070136744597,
+      "hybridInsertedLaneUseRate": 0.1957461786001609,
+      "hybridInsertedLanePrecision": 0.45072352084938777,
+      "hybridInsertedLaneRecall": 0.29016872518747244,
+      "notes": 119328.0
+    }
+  },
+  "sourceTrainReport": "dist\\transformer-large-u_e-circusgalop-632\\train_report.json",
+  "trainingSummary": {
+    "referenceCharts": 629,
+    "trainReferenceCharts": 503,
+    "validationReferenceCharts": 126,
+    "sourceKeys": 7,
+    "targetKeys": 10,
+    "maxNotesPerChart": 1200,
+    "maxSeq": 384,
+    "epochs": 12,
+    "validation": {
+      "loss": 0.5051895297559756,
+      "accuracy": 0.7015369401984446,
+      "top3Accuracy": 0.9997485921158488,
+      "meanAbsLaneError": 0.29922566371681414,
+      "hybridAccuracy": 0.6767146017699115,
+      "hybridTop3Accuracy": 0.9998072539554841,
+      "hybridMeanAbsLaneError": 0.3235284258514347,
+      "directAccuracy": 0.6960311075355323,
+      "directMeanAbsLaneError": 0.3039688924644677,
+      "nonDirectLabelRate": 0.3039688924644677,
+      "rawNonDirectRecall": 0.9998070136744597,
+      "hybridNonDirectRecall": 0.29016872518747244,
+      "insertedLaneLabelRate": 0.3039688924644677,
+      "rawInsertedLaneUseRate": 0.6023732904263878,
+      "rawInsertedLanePrecision": 0.5046188091263216,
+      "rawInsertedLaneRecall": 0.9998070136744597,
+      "hybridInsertedLaneUseRate": 0.1957461786001609,
+      "hybridInsertedLanePrecision": 0.45072352084938777,
+      "hybridInsertedLaneRecall": 0.29016872518747244,
+      "notes": 119328.0
+    },
+    "ray": {
+      "input": "<local osu! Songs root>\\ray-smoke-reference.osu",
+      "output": "dist\\transformer-large-u_e-circusgalop-632\\ray_trained_transformer_10k.osu",
+      "sourceKeys": 7,
+      "targetKeys": 10,
+      "notes": 1404,
+      "directLanes": [
+        0,
+        2,
+        3,
+        4,
+        6,
+        8,
+        9
+      ],
+      "insertedLanes": [
+        1,
+        5,
+        7
+      ],
+      "policy": {
+        "accepted": 1404,
+        "rejectedSameTime": 44,
+        "rejectedLn": 84,
+        "rejectedCreatedJack": 247,
+        "directFallbacks": 0,
+        "nonDirectPlacements": 561,
+        "insertedLanePlacements": 341,
+        "laneDistribution": [
+          156,
+          67,
+          84,
+          176,
+          177,
+          151,
+          164,
+          123,
+          126,
+          180
+        ]
+      },
+      "repair": {
+        "createdJackRelaneRepairs": 0,
+        "createdJackRollRepairs": 0,
+        "createdJackUnresolved": 0
+      },
+      "finalSafety": {
+        "sameTimeCollisions": 0,
+        "lnConflicts": 0,
+        "createdJacks": 0
+      }
+    }
+  },
+  "verification": {
+    "onnxChecker": "ok",
+    "onnxRuntimeProviders": [
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "inputName": "features",
+    "outputName": "lane_logits",
+    "cases": [
+      {
+        "notes": 4,
+        "outputShape": [
+          4,
+          10
+        ],
+        "maxAbsDiffVsPyTorch": 4.172325134277344e-07
+      },
+      {
+        "notes": 5,
+        "outputShape": [
+          5,
+          10
+        ],
+        "maxAbsDiffVsPyTorch": 4.470348358154297e-07
+      },
+      {
+        "notes": 16,
+        "outputShape": [
+          16,
+          10
+        ],
+        "maxAbsDiffVsPyTorch": 5.066394805908203e-07
+      },
+      {
+        "notes": 33,
+        "outputShape": [
+          33,
+          10
+        ],
+        "maxAbsDiffVsPyTorch": 6.258487701416016e-07
+      }
+    ]
+  }
+}

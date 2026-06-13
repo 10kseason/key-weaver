@@ -4869,10 +4869,24 @@ void testNk2SevenToTenCoveragePressureFillsBridgeGaps() {
             "NK2 coverage pressure should not pin every center source note to the direct lane");
     require(result.report.createdJacks == 0, "NK2 coverage pressure must not create target jacks");
     require(result.report.layoutCoverageScore > 0.0, "NK2 report should score layout coverage");
+    require(result.report.candidateScoredNotes == static_cast<int>(chart.notes.size()),
+            "NK2 single-slice candidate scoring should cover every source note");
+    require(result.report.candidateScoredLanes >= result.report.candidateScoredNotes,
+            "NK2 candidate scoring should count evaluated lane candidates");
+    require(result.report.candidateScoreSamples == result.report.candidateScoredNotes,
+            "NK2 accepted candidate score samples should match selected single-slice notes");
+    require(result.report.candidateAcceptedFirstChoice + result.report.candidateAcceptedAfterHardGate +
+                    result.report.candidateDirectFallbacks ==
+                result.report.candidateScoredNotes,
+            "NK2 candidate acceptance counters should account for scored notes");
 
     const auto json = keyconv::nk2::reportToJson(result.report);
     require(json.find("\"layoutScores\"") != std::string::npos, "NK2 JSON should include layout scores");
     require(json.find("\"coverage\"") != std::string::npos, "NK2 JSON should include coverage score");
+    require(json.find("\"candidateRanking\"") != std::string::npos,
+            "NK2 JSON should include candidate ranking diagnostics");
+    require(json.find("\"acceptedScoreAverages\"") != std::string::npos,
+            "NK2 JSON should include accepted score dimension averages");
 }
 
 void testNk2SevenToTenPanelCoverageFillsRightPanelGaps() {

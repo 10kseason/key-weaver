@@ -511,6 +511,28 @@ std::string reportToJson(const ConversionReport& report) {
         out << "    \"dpHandBalance\": null,\n";
     }
     out << "    \"playabilityScore\": " << report.quality.playabilityScore << ",\n";
+    out << "    \"onnxPolicyRequested\": " << (report.quality.onnxPolicyRequested ? "true" : "false") << ",\n";
+    out << "    \"onnxPolicyLoaded\": " << (report.quality.onnxPolicyLoaded ? "true" : "false") << ",\n";
+    out << "    \"onnxPolicyProviderRequested\": \"" << jsonEscape(report.quality.onnxPolicyProviderRequested) << "\",\n";
+    out << "    \"onnxPolicyProviderActive\": \"" << jsonEscape(report.quality.onnxPolicyProviderActive) << "\",\n";
+    out << "    \"onnxPolicyAvailableProviders\": [";
+    for (std::size_t i = 0; i < report.quality.onnxPolicyAvailableProviders.size(); ++i) {
+        if (i > 0) {
+            out << ", ";
+        }
+        out << "\"" << jsonEscape(report.quality.onnxPolicyAvailableProviders[i]) << "\"";
+    }
+    out << "],\n";
+    out << "    \"onnxPolicyAttemptedNotes\": " << report.quality.onnxPolicyAttemptedNotes << ",\n";
+    out << "    \"onnxPolicyEvaluatedCandidates\": " << report.quality.onnxPolicyEvaluatedCandidates << ",\n";
+    out << "    \"onnxPolicyAcceptedRelanes\": " << report.quality.onnxPolicyAcceptedRelanes << ",\n";
+    out << "    \"onnxPolicyFallbackRelanes\": " << report.quality.onnxPolicyFallbackRelanes << ",\n";
+    out << "    \"onnxPolicyRejectedRelanes\": " << report.quality.onnxPolicyRejectedRelanes << ",\n";
+    out << "    \"onnxPolicySameLaneNoops\": " << report.quality.onnxPolicySameLaneNoops << ",\n";
+    out << "    \"onnxPolicyRejectedByOutOfRange\": " << report.quality.onnxPolicyRejectedByOutOfRange << ",\n";
+    out << "    \"onnxPolicyRejectedByCollision\": " << report.quality.onnxPolicyRejectedByCollision << ",\n";
+    out << "    \"onnxPolicyRejectedByLnConflict\": " << report.quality.onnxPolicyRejectedByLnConflict << ",\n";
+    out << "    \"onnxPolicyRejectedByCreatedJack\": " << report.quality.onnxPolicyRejectedByCreatedJack << ",\n";
     out << "    \"impossibleSlices\": " << report.quality.impossibleSlices << ",\n";
     out << "    \"droppedByCompression\": " << report.quality.droppedByCompression << ",\n";
     out << "    \"rolledByCompression\": " << report.quality.rolledByCompression << ",\n";
@@ -723,6 +745,32 @@ std::string reportToText(const ConversionReport& report) {
     out << "- Span preserve: " << report.quality.spanPreserveScore << "\n";
     out << "- Pattern preserve: " << report.quality.patternPreserveScore << "\n";
     out << "- Playability score: " << report.quality.playabilityScore << "\n";
+    out << "- ONNX policy requested: " << (report.quality.onnxPolicyRequested ? "yes" : "no") << "\n";
+    out << "- ONNX policy loaded: " << (report.quality.onnxPolicyLoaded ? "yes" : "no") << "\n";
+    out << "- ONNX policy provider requested: " << report.quality.onnxPolicyProviderRequested << "\n";
+    out << "- ONNX policy provider active: " << report.quality.onnxPolicyProviderActive << "\n";
+    out << "- ONNX policy available providers: ";
+    if (report.quality.onnxPolicyAvailableProviders.empty()) {
+        out << "none";
+    } else {
+        for (std::size_t i = 0; i < report.quality.onnxPolicyAvailableProviders.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            out << report.quality.onnxPolicyAvailableProviders[i];
+        }
+    }
+    out << "\n";
+    out << "- ONNX policy attempted notes: " << report.quality.onnxPolicyAttemptedNotes << "\n";
+    out << "- ONNX policy evaluated candidates: " << report.quality.onnxPolicyEvaluatedCandidates << "\n";
+    out << "- ONNX policy accepted relanes: " << report.quality.onnxPolicyAcceptedRelanes << "\n";
+    out << "- ONNX policy fallback relanes: " << report.quality.onnxPolicyFallbackRelanes << "\n";
+    out << "- ONNX policy rejected relanes: " << report.quality.onnxPolicyRejectedRelanes << "\n";
+    out << "- ONNX policy same-lane no-ops: " << report.quality.onnxPolicySameLaneNoops << "\n";
+    out << "- ONNX policy rejected by out-of-range: " << report.quality.onnxPolicyRejectedByOutOfRange << "\n";
+    out << "- ONNX policy rejected by collision: " << report.quality.onnxPolicyRejectedByCollision << "\n";
+    out << "- ONNX policy rejected by LN conflict: " << report.quality.onnxPolicyRejectedByLnConflict << "\n";
+    out << "- ONNX policy rejected by created jack: " << report.quality.onnxPolicyRejectedByCreatedJack << "\n";
     out << "- Impossible slices: " << report.quality.impossibleSlices << "\n";
     out << "- Dropped by compression: " << report.quality.droppedByCompression << "\n";
     out << "- Rolled by compression: " << report.quality.rolledByCompression << "\n";

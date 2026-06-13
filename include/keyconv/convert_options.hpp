@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 
 #include <keyconv/quality_report.hpp>
 
@@ -57,6 +58,9 @@ struct ConvertOptions {
     bool echoAvoidHighDensity = true;
     int echoHighDensityWindowMs = 1000;
     double echoMaxLocalNps = 12.0;
+    std::optional<std::string> onnxPolicyModelPath;
+    bool onnxPolicyStrict = false;
+    std::string onnxPolicyProvider = "auto";
     std::optional<TargetKProfile> targetKProfile;
     CollisionPolicy collisionPolicy = CollisionPolicy::ShiftNearest;
     unsigned int seed = 0;

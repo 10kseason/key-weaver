@@ -41,12 +41,17 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v1.0.0";
+constexpr const char* kToolVersion = "v1.1";
 using SteadyClock = std::chrono::steady_clock;
 
-class ConvertedInputError : public std::runtime_error {
+class SkippedInputError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
+};
+
+class ConvertedInputError : public SkippedInputError {
+public:
+    using SkippedInputError::SkippedInputError;
 };
 
 #if defined(_WIN32)
@@ -208,6 +213,7 @@ struct CliOptions {
     std::optional<std::filesystem::path> out;
     std::optional<std::filesystem::path> outDir;
     std::optional<std::filesystem::path> inputList;
+    std::vector<int> onlySourceKeys;
     keyconv::ConversionStyle style = keyconv::ConversionStyle::Playable;
     keyconv::CollisionPolicy collision = keyconv::CollisionPolicy::ShiftNearest;
     keyconv::OptimizerKind optimizer = keyconv::OptimizerKind::Greedy;
@@ -262,6 +268,10 @@ struct CliOptions {
     bool dryRun = false;
     std::optional<std::filesystem::path> report;
     std::optional<std::filesystem::path> targetProfile;
+    std::optional<std::filesystem::path> onnxPolicy;
+    bool onnxPolicyStrict = false;
+    std::string onnxPolicyProvider = "auto";
+    bool onnxPolicyProviderProvided = false;
     std::optional<std::string> comparePolicies;
     bool emitFeelReport = false;
     bool emitDiffReport = false;
@@ -347,12 +357,16 @@ void printHelp(std::ostream& out) {
     out << "  --dry-run               Convert in memory and report only; do not write output.\n";
     out << "  --batch                 Treat positional chart inputs as a batch. Outputs default beside each input.\n";
     out << "  --input-list <path>     Read batch input chart paths from a UTF-8 newline-delimited list.\n";
+    out << "  --only-source-keys <list> Convert only matching source key counts, e.g. 4 or 4,7.\n";
     out << "  --batch-quiet           Reduce batch stdout to progress, failures, and summary.\n";
     out << "  --jobs <number>         Batch worker count override. Default: detected CPU thread count.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
-    out << "  --engine <engine>       classic | nk2. Default: classic. NK2 prototype converts 7K->10K.\n";
+    out << "  --onnx-policy <model>   Batch-only experimental ONNX Runtime lane-policy model.\n";
+    out << "  --onnx-provider <p>     ONNX execution provider: auto | cpu | cuda | dml. Default: auto.\n";
+    out << "  --onnx-policy-strict    In batch, fail instead of falling back when the ONNX policy cannot run.\n";
+    out << "  --engine <engine>       classic | nk2. Default: classic. NK2 is experimental and works in batch chart-output mode.\n";
     out << "  --nk2-mode <mode>       native | faithful | harder | transform | report. Report is analysis-only.\n";
     out << "  --nk2-native-weight <n> Native authorship weight. Default: 0.5.\n";
     out << "  --nk2-remix-weight <n>  Remix expansion weight. Default: 0.5.\n";
@@ -380,6 +394,66 @@ int parseInt(const std::string& value, const std::string& optionName) {
     }
 }
 
+std::string trimAscii(std::string value) {
+    const auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
+        return std::isspace(ch);
+    });
+    const auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
+                         return std::isspace(ch);
+                     }).base();
+    if (begin >= end) {
+        return {};
+    }
+    return std::string(begin, end);
+}
+
+std::vector<int> parseKeyCountList(std::string value, const std::string& optionName) {
+    std::vector<int> keys;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const std::size_t comma = value.find(',', start);
+        auto token = trimAscii(value.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        if (!token.empty() && (token.back() == 'k' || token.back() == 'K')) {
+            token.pop_back();
+            token = trimAscii(std::move(token));
+        }
+        if (token.empty()) {
+            throw std::runtime_error("Invalid key-count list for " + optionName + ": " + value);
+        }
+        const int parsed = parseInt(token, optionName);
+        if (parsed < 1 || parsed > 32) {
+            throw std::runtime_error(optionName + " values must be between 1 and 32");
+        }
+        if (std::find(keys.begin(), keys.end(), parsed) == keys.end()) {
+            keys.push_back(parsed);
+        }
+        if (comma == std::string::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    if (keys.empty()) {
+        throw std::runtime_error("Invalid key-count list for " + optionName + ": " + value);
+    }
+    return keys;
+}
+
+std::string formatKeyCountList(const std::vector<int>& keys) {
+    std::ostringstream out;
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+        if (index > 0) {
+            out << ",";
+        }
+        out << keys[index] << "K";
+    }
+    return out.str();
+}
+
+bool keyCountAllowed(int sourceKeyCount, const std::vector<int>& allowedKeys) {
+    return allowedKeys.empty() ||
+           std::find(allowedKeys.begin(), allowedKeys.end(), sourceKeyCount) != allowedKeys.end();
+}
+
 double parseDouble(const std::string& value, const std::string& optionName) {
     try {
         std::size_t consumed = 0;
@@ -391,6 +465,22 @@ double parseDouble(const std::string& value, const std::string& optionName) {
     } catch (...) {
         throw std::runtime_error("Invalid number for " + optionName + ": " + value);
     }
+}
+
+std::string parseOnnxProviderOrThrow(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (value.empty() || value == "gpu") {
+        return "auto";
+    }
+    if (value == "directml") {
+        return "dml";
+    }
+    if (value == "auto" || value == "cpu" || value == "cuda" || value == "dml") {
+        return value;
+    }
+    throw std::runtime_error("Invalid ONNX provider: " + value + " (expected auto, cpu, cuda, or dml)");
 }
 
 std::string requireValue(int& index, const std::vector<std::string>& args, const std::string& optionName) {
@@ -822,6 +912,8 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.batchMode = true;
         } else if (arg == "--input-list") {
             options.inputList = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--only-source-keys" || arg == "--only-source-key") {
+            options.onlySourceKeys = parseKeyCountList(requireValue(i, args, arg), arg);
         } else if (arg == "--batch-quiet") {
             options.batchQuiet = true;
         } else if (arg == "--jobs") {
@@ -830,6 +922,13 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.report = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--target-profile") {
             options.targetProfile = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--onnx-policy") {
+            options.onnxPolicy = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--onnx-provider" || arg == "--onnx-policy-provider") {
+            options.onnxPolicyProvider = parseOnnxProviderOrThrow(requireValue(i, args, arg));
+            options.onnxPolicyProviderProvided = true;
+        } else if (arg == "--onnx-policy-strict") {
+            options.onnxPolicyStrict = true;
         } else if (arg == "--engine") {
             options.engine = keyconv::nk2::parseEngineOrThrow(requireValue(i, args, arg));
         } else if (arg == "--nk2-mode") {
@@ -1282,11 +1381,25 @@ void validateOptions(const CliOptions& options) {
         throw std::runtime_error("--compare-policies must not be empty");
     }
     const bool batch = options.batchMode || options.inputs.size() > 1;
-    if (options.engine == keyconv::nk2::Engine::NK2 && batch) {
-        throw std::runtime_error("--engine nk2 is single-input only in this milestone");
+    if (options.engine == keyconv::nk2::Engine::NK2 &&
+        batch &&
+        options.nk2Mode == keyconv::nk2::Mode::Report) {
+        throw std::runtime_error("--nk2-mode report is only valid for one input; batch mode writes chart outputs only");
     }
     if (options.engine == keyconv::nk2::Engine::NK2 && options.comparePolicies.has_value()) {
         throw std::runtime_error("--compare-policies is only supported by the classic engine");
+    }
+    if (options.engine == keyconv::nk2::Engine::NK2 && options.onnxPolicy.has_value()) {
+        throw std::runtime_error("--onnx-policy is only supported by the classic engine");
+    }
+    if (options.onnxPolicyProviderProvided && !options.onnxPolicy.has_value()) {
+        throw std::runtime_error("--onnx-provider requires --onnx-policy");
+    }
+    if (options.onnxPolicyStrict && !options.onnxPolicy.has_value()) {
+        throw std::runtime_error("--onnx-policy-strict requires --onnx-policy");
+    }
+    if (!batch && options.onnxPolicy.has_value()) {
+        throw std::runtime_error("--onnx-policy is only valid for batch mode; single conversions stay rule-based");
     }
     if (options.engine == keyconv::nk2::Engine::NK2 && options.reportCsv.has_value()) {
         throw std::runtime_error("--report-csv is only supported by classic policy comparison");
@@ -1876,7 +1989,8 @@ void printPolicyComparison(const std::vector<PolicyComparisonRow>& rows,
 int runSingleConversion(const CliOptions& cli,
                         const std::filesystem::path& input,
                         std::ostream& out = std::cout,
-                        std::mutex* outputMutex = nullptr) {
+                        std::mutex* outputMutex = nullptr,
+                        bool enableOnnxPolicy = false) {
     const auto totalStart = SteadyClock::now();
     long long readTimeMs = 0;
     long long parseTimeMs = 0;
@@ -1905,6 +2019,11 @@ int runSingleConversion(const CliOptions& cli,
     keyconv::ConvertOptions convertOptions;
     convertOptions.sourceKeyCount = cli.source.value_or(chart.meta.sourceKeyCount);
     convertOptions.targetKeyCount = *cli.target;
+    if (!keyCountAllowed(convertOptions.sourceKeyCount, cli.onlySourceKeys)) {
+        throw SkippedInputError("source key count " + std::to_string(convertOptions.sourceKeyCount) +
+                                "K is not enabled by --only-source-keys " +
+                                formatKeyCountList(cli.onlySourceKeys));
+    }
     convertOptions.style = cli.style;
     convertOptions.collisionPolicy = cli.collision;
     convertOptions.optimizer = cli.optimizer;
@@ -1958,6 +2077,11 @@ int runSingleConversion(const CliOptions& cli,
     convertOptions.echoAvoidHighDensity = cli.echoAvoidHighDensity;
     convertOptions.echoHighDensityWindowMs = cli.echoHighDensityWindowMs;
     convertOptions.echoMaxLocalNps = cli.echoMaxLocalNps;
+    if (enableOnnxPolicy && cli.onnxPolicy.has_value()) {
+        convertOptions.onnxPolicyModelPath = displayPath(*cli.onnxPolicy);
+        convertOptions.onnxPolicyStrict = cli.onnxPolicyStrict;
+        convertOptions.onnxPolicyProvider = cli.onnxPolicyProvider;
+    }
 
     if (cli.engine == keyconv::nk2::Engine::NK2) {
         keyconv::nk2::NK2Options nk2Options;
@@ -1977,12 +2101,6 @@ int runSingleConversion(const CliOptions& cli,
         const auto nk2Result = keyconv::nk2::convertChart(chart, nk2Options);
         convertTimeMs = elapsedMs(nk2Start, SteadyClock::now());
         auto outputPath = cli.out;
-        if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value()) {
-            outputPath = defaultNk2OutputPath(input,
-                                              convertOptions.targetKeyCount,
-                                              cli.streamTransformPolicy,
-                                              cli.outDir);
-        }
 
         if (!cli.batchQuiet) {
             out << kToolName << " " << kToolVersion << "\n";
@@ -1999,7 +2117,22 @@ int runSingleConversion(const CliOptions& cli,
                                              : keyconv::exportOsu(nk2Result.chart, convertOptions.targetKeyCount);
             exportTimeMs = elapsedMs(exportStart, SteadyClock::now());
             const auto writeStart = SteadyClock::now();
-            writeFile(*outputPath, outputText);
+            if (!outputPath.has_value() && outputMutex != nullptr) {
+                std::lock_guard<std::mutex> lock(*outputMutex);
+                outputPath = defaultNk2OutputPath(input,
+                                                  convertOptions.targetKeyCount,
+                                                  cli.streamTransformPolicy,
+                                                  cli.outDir);
+                writeFile(*outputPath, outputText);
+            } else {
+                if (!outputPath.has_value()) {
+                    outputPath = defaultNk2OutputPath(input,
+                                                      convertOptions.targetKeyCount,
+                                                      cli.streamTransformPolicy,
+                                                      cli.outDir);
+                }
+                writeFile(*outputPath, outputText);
+            }
             writeTimeMs = elapsedMs(writeStart, SteadyClock::now());
             if (!cli.batchQuiet) {
                 out << "Output written: " << displayPath(*outputPath) << "\n";
@@ -2058,7 +2191,11 @@ int runSingleConversion(const CliOptions& cli,
         out << "Input: " << displayPath(input) << "\n";
         out << "Mode: " << (bmsInput ? "BMS policy comparison" : "osu!mania policy comparison") << "\n";
         out << "Source keys: " << convertOptions.sourceKeyCount << "\n";
-        out << "Target keys: " << convertOptions.targetKeyCount << "\n\n";
+        out << "Target keys: " << convertOptions.targetKeyCount << "\n";
+        if (!cli.onlySourceKeys.empty()) {
+            out << "Only source keys: " << formatKeyCountList(cli.onlySourceKeys) << "\n";
+        }
+        out << "\n";
         if (convertOptions.targetKProfile.has_value()) {
             out << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
                 << convertOptions.targetKProfile->sourceName << " ("
@@ -2106,6 +2243,9 @@ int runSingleConversion(const CliOptions& cli,
         out << "Mode: " << (bmsInput ? "BMS" : "osu!mania") << "\n";
         out << "Source keys: " << convertOptions.sourceKeyCount << "\n";
         out << "Target keys: " << convertOptions.targetKeyCount << "\n";
+        if (!cli.onlySourceKeys.empty()) {
+            out << "Only source keys: " << formatKeyCountList(cli.onlySourceKeys) << "\n";
+        }
         out << "Style: " << keyconv::toString(convertOptions.style) << "\n";
         out << "Collision policy: " << keyconv::toString(convertOptions.collisionPolicy) << "\n";
         out << "Compress policy: " << keyconv::toString(convertOptions.compressPolicy) << "\n";
@@ -2151,6 +2291,13 @@ int runSingleConversion(const CliOptions& cli,
         out << "Echo max local NPS: " << convertOptions.echoMaxLocalNps << "\n";
         out << "Preserve convert: " << (cli.preserveConvert ? "yes" : "no") << "\n";
         out << "Preserve lane drift: " << (convertOptions.preserveLaneDrift ? "yes" : "no") << "\n";
+        out << "ONNX policy: "
+            << (convertOptions.onnxPolicyModelPath.has_value() ? *convertOptions.onnxPolicyModelPath : "off")
+            << "\n";
+        if (convertOptions.onnxPolicyModelPath.has_value()) {
+            out << "ONNX policy strict: " << (convertOptions.onnxPolicyStrict ? "yes" : "no") << "\n";
+            out << "ONNX policy provider: " << convertOptions.onnxPolicyProvider << "\n";
+        }
         if (convertOptions.targetKProfile.has_value()) {
             out << "Target profile: " << convertOptions.targetKProfile->profileName << " / "
                 << convertOptions.targetKProfile->sourceName << " ("
@@ -2243,6 +2390,16 @@ std::size_t batchWorkerCount(std::size_t jobCount, const std::optional<int>& req
     return std::clamp<std::size_t>(workers, 1, jobCount);
 }
 
+void printBatchProgress(std::size_t done, std::size_t total) {
+    const std::size_t percentDone = total == 0 ? 100 : (done * 100) / total;
+    const std::size_t percentLeft = percentDone >= 100 ? 0 : 100 - percentDone;
+    const std::size_t itemsLeft = done >= total ? 0 : total - done;
+    std::cout << "Progress: " << percentDone << "% done, "
+              << percentLeft << "% left, "
+              << itemsLeft << " left\n";
+    std::cout.flush();
+}
+
 struct BatchItemResult {
     std::size_t index = 0;
     std::filesystem::path input;
@@ -2271,13 +2428,12 @@ BatchItemResult runBatchItem(const CliOptions& cli,
         item.comparePolicies.reset();
 
         std::ostringstream out;
-        result.exitCode = runSingleConversion(item, input, out, &outputMutex);
+        result.exitCode = runSingleConversion(item, input, out, &outputMutex, cli.onnxPolicy.has_value());
         result.output = out.str();
-    } catch (const ConvertedInputError& error) {
+    } catch (const SkippedInputError& error) {
         result.exitCode = 0;
         result.skipped = true;
-        result.output = "Skipped already-converted chart: " + displayPath(input) +
-                        " (" + error.what() + ")\n";
+        result.output = "Skipped chart: " + displayPath(input) + " (" + error.what() + ")\n";
     } catch (const std::exception& error) {
         result.exitCode = 1;
         result.error = "Batch item failed: " + displayPath(input) + ": " + error.what();
@@ -2294,6 +2450,18 @@ int runBatchConversion(const CliOptions& cli) {
     std::cout << kToolName << " " << kToolVersion << "\n";
     std::cout << "Batch mode: " << cli.inputs.size() << " input(s)\n";
     std::cout << "Target keys: " << *cli.target << "\n";
+    if (!cli.onlySourceKeys.empty()) {
+        std::cout << "Only source keys: " << formatKeyCountList(cli.onlySourceKeys) << "\n";
+    }
+    std::cout << "Engine: " << keyconv::nk2::toString(cli.engine) << "\n";
+    if (cli.engine == keyconv::nk2::Engine::NK2) {
+        std::cout << "NK2 mode: " << keyconv::nk2::toString(cli.nk2Mode) << "\n";
+    }
+    if (cli.onnxPolicy.has_value()) {
+        std::cout << "ONNX policy: " << displayPath(*cli.onnxPolicy)
+                  << (cli.onnxPolicyStrict ? " (strict)" : "") << "\n";
+        std::cout << "ONNX provider: " << cli.onnxPolicyProvider << "\n";
+    }
     std::cout << "Output: "
               << (cli.outDir.has_value() ? displayPath(*cli.outDir) : "beside each input chart") << "\n";
     std::cout << "Workers: " << workerCount << (cli.jobs.has_value() ? "" : " (auto)") << "\n";
@@ -2320,12 +2488,12 @@ int runBatchConversion(const CliOptions& cli) {
                 item.report.reset();
                 item.reportCsv.reset();
                 item.comparePolicies.reset();
-                runSingleConversion(item, input);
+                runSingleConversion(item, input, std::cout, nullptr, cli.onnxPolicy.has_value());
                 ++succeeded;
-            } catch (const ConvertedInputError& error) {
+            } catch (const SkippedInputError& error) {
                 ++skipped;
                 if (!cli.batchQuiet) {
-                    std::cout << "Skipped already-converted chart: " << displayPath(input)
+                    std::cout << "Skipped chart: " << displayPath(input)
                               << " (" << error.what() << ")\n";
                 }
             } catch (const std::exception& error) {
@@ -2334,12 +2502,10 @@ int runBatchConversion(const CliOptions& cli) {
                           << error.what() << "\n";
             }
             const std::size_t done = index + 1;
-            const std::size_t percent = (done * 100) / cli.inputs.size();
             const bool showProgress = !cli.batchQuiet || done == cli.inputs.size() ||
                                       (done % std::max<std::size_t>(1, cli.inputs.size() / 100)) == 0;
             if (showProgress) {
-                std::cout << "Progress: " << percent << "% done, "
-                          << (cli.inputs.size() - done) << " left\n";
+                printBatchProgress(done, cli.inputs.size());
             }
         }
 
@@ -2373,7 +2539,6 @@ int runBatchConversion(const CliOptions& cli) {
                     ++parallelFailed;
                 }
                 const std::size_t done = parallelCompleted.fetch_add(1) + 1;
-                const std::size_t percent = (done * 100) / cli.inputs.size();
                 const bool showItem = !cli.batchQuiet || result.exitCode != 0;
                 const bool showProgress = !cli.batchQuiet || done == cli.inputs.size() ||
                                           (done % std::max<std::size_t>(1, cli.inputs.size() / 100)) == 0;
@@ -2393,8 +2558,7 @@ int runBatchConversion(const CliOptions& cli) {
                     std::cerr << result.error << "\n";
                 }
                 if (showProgress) {
-                    std::cout << "Progress: " << percent << "% done, "
-                              << (cli.inputs.size() - done) << " left\n";
+                    printBatchProgress(done, cli.inputs.size());
                 }
             }
         });

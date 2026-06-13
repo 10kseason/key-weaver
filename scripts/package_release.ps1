@@ -1,7 +1,9 @@
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.1",
     [string]$BuildDir = "",
     [string]$OutDir = "",
+    [string]$OnnxRuntimeRoot = "",
+    [switch]$DisableOnnxRuntime,
     [switch]$SkipBuild
 )
 
@@ -46,6 +48,43 @@ function Sanitize-PackageTextFile {
     [System.IO.File]::WriteAllText($Path, $Safe, $Utf8NoBom)
 }
 
+function Find-OnnxRuntimeRoot {
+    param(
+        [string]$RequestedRoot
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedRoot)) {
+        return [System.IO.Path]::GetFullPath($RequestedRoot)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ONNXRUNTIME_ROOT)) {
+        return [System.IO.Path]::GetFullPath($env:ONNXRUNTIME_ROOT)
+    }
+
+    $NugetRoot = Join-Path $env:USERPROFILE ".nuget\packages\microsoft.ml.onnxruntime"
+    if (Test-Path $NugetRoot) {
+        $LatestPackage = Get-ChildItem -LiteralPath $NugetRoot -Directory |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1
+        if ($LatestPackage) {
+            return $LatestPackage.FullName
+        }
+    }
+    return ""
+}
+
+function Resolve-PreferredTool {
+    param(
+        [string]$ToolName
+    )
+
+    $MsysPath = "C:\msys64\mingw64\bin\$ToolName"
+    if (Test-Path $MsysPath) {
+        return $MsysPath
+    }
+    $Command = Get-Command $ToolName -ErrorAction Stop
+    return $Command.Source
+}
+
 try {
     if ([string]::IsNullOrWhiteSpace($BuildDir)) {
         $BuildDir = Join-Path $Root "build\release-v$Version"
@@ -59,10 +98,39 @@ try {
     New-Item -ItemType Directory -Force $BuildDir | Out-Null
     New-Item -ItemType Directory -Force $OutDir | Out-Null
 
+    $ModelsDir = Join-Path $Root "models"
+    $BundleModels = Test-Path $ModelsDir
+    $EnableOnnxRuntime = $BundleModels -and (-not $DisableOnnxRuntime)
+    $ResolvedOnnxRuntimeRoot = ""
+    if ($EnableOnnxRuntime) {
+        $ResolvedOnnxRuntimeRoot = Find-OnnxRuntimeRoot -RequestedRoot $OnnxRuntimeRoot
+        if ([string]::IsNullOrWhiteSpace($ResolvedOnnxRuntimeRoot)) {
+            throw "models folder is present, but ONNX Runtime root was not found. Pass -OnnxRuntimeRoot or set ONNXRUNTIME_ROOT, or use -DisableOnnxRuntime."
+        }
+    }
+
+    $CMakeExe = Resolve-PreferredTool "cmake.exe"
+    $NinjaExe = Resolve-PreferredTool "ninja.exe"
+    $ToolDir = Split-Path -Parent $NinjaExe
+    if ($env:PATH -notlike "*$ToolDir*") {
+        $env:PATH = "$ToolDir;$env:PATH"
+    }
+
     if (-not $SkipBuild) {
-        & cmake -S $Root -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release
+        $ConfigureArgs = @(
+            "-S", $Root,
+            "-B", $BuildDir,
+            "-G", "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_MAKE_PROGRAM=$NinjaExe"
+        )
+        if ($EnableOnnxRuntime) {
+            $ConfigureArgs += "-DKEYWEAVER_WITH_ONNXRUNTIME=ON"
+            $ConfigureArgs += "-DONNXRUNTIME_ROOT=$ResolvedOnnxRuntimeRoot"
+        }
+        & $CMakeExe @ConfigureArgs
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
-        & cmake --build $BuildDir --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv_public_header_smoke
+        & $CMakeExe --build $BuildDir --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv_public_header_smoke
         if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
     }
 
@@ -103,13 +171,25 @@ try {
     foreach ($dir in @("samples", "profiles", "docs")) {
         Copy-Item -LiteralPath (Join-Path $Root $dir) -Destination (Join-Path $PackageDir $dir) -Recurse
     }
+    $OnnxRuntimeDlls = @()
+    if ($EnableOnnxRuntime) {
+        $OnnxRuntimeDlls = @(Get-ChildItem -LiteralPath $BuildDir -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "onnxruntime*.dll" -or $_.Name -eq "DirectML.dll" })
+        foreach ($dll in $OnnxRuntimeDlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination $PackageDir
+        }
+    }
+
+    if ($BundleModels) {
+        Copy-Item -LiteralPath $ModelsDir -Destination (Join-Path $PackageDir "models") -Recurse
+    }
     Get-ChildItem -LiteralPath (Join-Path $PackageDir "samples") -Filter "* KeyWeaver*.osu" -File |
         Remove-Item -Force
     $PackageScriptsDir = Join-Path $PackageDir "scripts"
     New-Item -ItemType Directory -Force $PackageScriptsDir | Out-Null
-    foreach ($scriptFile in @("build_target_k_profile.py", "package_release.ps1", "u_e_10k_curated_patterns.txt")) {
-        Copy-Item -LiteralPath (Join-Path $Root "scripts\$scriptFile") -Destination $PackageScriptsDir
-    }
+    Get-ChildItem -LiteralPath (Join-Path $Root "scripts") -File |
+        Where-Object { $_.Extension -in @(".py", ".bat", ".ps1", ".txt") } |
+        Copy-Item -Destination $PackageScriptsDir
 
     @"
 KeyWeaver v$Version Windows x64 package
@@ -117,9 +197,10 @@ KeyWeaver v$Version Windows x64 package
 Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keyconv_gui.exe when both files are in this folder.
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
-Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
+Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch Folder.
 The GUI Target selector supports 4K through 10K; 10K GUI conversions use Full-Field Mirror-Remix by default.
-GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
+GUI Batch converts dropped folders, multiple dropped chart files, or a chosen folder, and shows percent-done/percent-left progress with remaining chart count.
+Experimental NK2 can be selected for single-chart and batch chart-output conversion; Matrix remains NK1-only.
 Source override is passed to GUI conversions.
 Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
 CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart and auto-detects CPU worker count.
@@ -142,12 +223,18 @@ Normal-mode algorithm contract: docs/algorithm-lock-v0.6.0.md
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Bundled ONNX Runtime:
+$(if ($EnableOnnxRuntime) { ($OnnxRuntimeDlls | ForEach-Object { $_.Name }) -join "`n" } else { "disabled" })
+
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke including NK2 batch, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, BMS-to-.osu guard smoke, and strict ONNX model batch smoke when a model is bundled.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
+
+Bundled ONNX Runtime DLLs:
+$(if ($EnableOnnxRuntime) { ($OnnxRuntimeDlls | ForEach-Object { $_.Name }) -join "`n" } else { "disabled" })
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "DLL_DEPENDENCIES.txt") -Encoding UTF8
 
     $SmokeDir = Join-Path $PackageDir "smoke"
@@ -164,8 +251,24 @@ $($RuntimeDlls -join "`n")
     if ($BatchSmokeText -notmatch "Batch summary: succeeded=2 failed=0 skipped=0") {
         throw "CLI batch dry-run smoke failed without the expected summary"
     }
-    if ($BatchSmokeText -notmatch "Progress: 100% done, 0 left") {
+    if ($BatchSmokeText -notmatch "Progress: 100% done, 0% left, 0 left") {
         throw "CLI batch dry-run smoke failed without the expected progress output"
+    }
+
+    if ($BundleModels) {
+        $PackagedModel = Join-Path $PackageDir "models\u_e_circusgalop_chart_dataset_lane_policy.onnx"
+        if (-not (Test-Path $PackagedModel)) {
+            throw "Bundled Transformer model is missing from package: $PackagedModel"
+        }
+        & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target 10 --batch --onnx-policy $PackagedModel --onnx-provider cpu --onnx-policy-strict --dry-run --verbose *> (Join-Path $SmokeDir "onnx_batch.console.txt")
+        if ($LASTEXITCODE -ne 0) { throw "strict ONNX batch dry-run smoke failed" }
+        $OnnxBatchSmokeText = Get-Content -LiteralPath (Join-Path $SmokeDir "onnx_batch.console.txt") -Raw
+        if ($OnnxBatchSmokeText -notmatch "Batch summary: succeeded=2 failed=0 skipped=0") {
+            throw "strict ONNX batch smoke failed without the expected summary"
+        }
+        if ($OnnxBatchSmokeText -notmatch "ONNX policy loaded: yes") {
+            throw "strict ONNX batch smoke did not load the model"
+        }
     }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target 10 --expansion-policy auto-low --dry-run *> (Join-Path $SmokeDir "auto_low.console.txt")

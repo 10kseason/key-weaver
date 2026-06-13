@@ -87,7 +87,7 @@ The frozen algorithm must keep these invariants:
 For the Ray 7K-to-10K smoke chart:
 
 ```text
-Input: D:\osu!\Songs\2558616 Kaguya(cvYuko Natsuyoshi) - ray (Cosmic Princess Kaguya! Version)\Kaguya(cv.Yuko Natsuyoshi) - ray (Cosmic Princess Kaguya! Version) (OsuJoa) [luna].osu
+Input: <local osu! Songs root>\ray-smoke-reference.osu
 Profile: keyweaver_10k_broad_style_v1
 Target added note ratio: 0.375
 Adaptive budget average ratio: 0.377974

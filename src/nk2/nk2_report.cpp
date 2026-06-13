@@ -34,6 +34,13 @@ std::string jsonEscape(const std::string& value) {
     return out.str();
 }
 
+double averageScore(double sum, int samples) {
+    if (samples <= 0) {
+        return 0.0;
+    }
+    return sum / static_cast<double>(samples);
+}
+
 }  // namespace
 
 std::string toString(Engine engine) {
@@ -161,6 +168,41 @@ std::string reportToJson(const NK2Report& report) {
     }
     out << "]\n";
     out << "  },\n";
+    out << "  \"candidateRanking\": {\n";
+    out << "    \"scoredNotes\": " << report.candidateScoredNotes << ",\n";
+    out << "    \"scoredLanes\": " << report.candidateScoredLanes << ",\n";
+    out << "    \"scoreSamples\": " << report.candidateScoreSamples << ",\n";
+    out << "    \"acceptedFirstChoice\": " << report.candidateAcceptedFirstChoice << ",\n";
+    out << "    \"acceptedAfterHardGate\": " << report.candidateAcceptedAfterHardGate << ",\n";
+    out << "    \"directFallbacks\": " << report.candidateDirectFallbacks << ",\n";
+    out << "    \"rejectedBySameTime\": " << report.candidateRejectedBySameTime << ",\n";
+    out << "    \"rejectedByLn\": " << report.candidateRejectedByLn << ",\n";
+    out << "    \"rejectedByCreatedJack\": " << report.candidateRejectedByCreatedJack << ",\n";
+    out << "    \"acceptedScoreAverages\": {\n";
+    out << "      \"native\": "
+        << averageScore(report.candidateNativeScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"remix\": "
+        << averageScore(report.candidateRemixScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"coverage\": "
+        << averageScore(report.candidateCoverageScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"anchor\": "
+        << averageScore(report.candidateAnchorScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"continuity\": "
+        << averageScore(report.candidateContinuityScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"sourceJack\": "
+        << averageScore(report.candidateSourceJackScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"jackSafety\": "
+        << averageScore(report.candidateJackSafetyScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"motif\": "
+        << averageScore(report.candidateMotifScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"symmetry\": "
+        << averageScore(report.candidateSymmetryScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"adjacentCopy\": "
+        << averageScore(report.candidateAdjacentCopyScoreSum, report.candidateScoreSamples) << ",\n";
+    out << "      \"total\": "
+        << averageScore(report.candidateTotalScoreSum, report.candidateScoreSamples) << "\n";
+    out << "    }\n";
+    out << "  },\n";
     out << "  \"support\": {\n";
     out << "    \"lnCandidates\": " << report.lnSupportCandidates << ",\n";
     out << "    \"lnAccepted\": " << report.lnSupportAccepted << ",\n";
@@ -266,6 +308,33 @@ std::string reportToText(const NK2Report& report) {
         << " preservedSourceJacks=" << report.preservedSourceJacks
         << " sourceAnchor=" << report.sourceAnchorMatches << "/"
         << report.sourceAnchorTotal << " score=" << report.sourceAnchorScore << "\n";
+    out << "Candidate ranking: scoredNotes=" << report.candidateScoredNotes
+        << " scoredLanes=" << report.candidateScoredLanes
+        << " scoreSamples=" << report.candidateScoreSamples
+        << " firstChoice=" << report.candidateAcceptedFirstChoice
+        << " afterHardGate=" << report.candidateAcceptedAfterHardGate
+        << " directFallbacks=" << report.candidateDirectFallbacks
+        << " rejectSameTime=" << report.candidateRejectedBySameTime
+        << " rejectLn=" << report.candidateRejectedByLn
+        << " rejectCreatedJack=" << report.candidateRejectedByCreatedJack << "\n";
+    out << "Candidate score avg: native="
+        << averageScore(report.candidateNativeScoreSum, report.candidateScoreSamples)
+        << " remix=" << averageScore(report.candidateRemixScoreSum, report.candidateScoreSamples)
+        << " coverage=" << averageScore(report.candidateCoverageScoreSum, report.candidateScoreSamples)
+        << " anchor=" << averageScore(report.candidateAnchorScoreSum, report.candidateScoreSamples)
+        << " continuity="
+        << averageScore(report.candidateContinuityScoreSum, report.candidateScoreSamples)
+        << " sourceJack="
+        << averageScore(report.candidateSourceJackScoreSum, report.candidateScoreSamples)
+        << " jackSafety="
+        << averageScore(report.candidateJackSafetyScoreSum, report.candidateScoreSamples)
+        << " motif=" << averageScore(report.candidateMotifScoreSum, report.candidateScoreSamples)
+        << " symmetry="
+        << averageScore(report.candidateSymmetryScoreSum, report.candidateScoreSamples)
+        << " adjacentCopy="
+        << averageScore(report.candidateAdjacentCopyScoreSum, report.candidateScoreSamples)
+        << " total=" << averageScore(report.candidateTotalScoreSum, report.candidateScoreSamples)
+        << "\n";
     out << "Support: LN=" << report.lnSupportAccepted << "/" << report.lnSupportCandidates
         << " rejected=" << report.lnSupportRejected
         << " strongBeat=" << report.strongBeatSupportAccepted << "/"

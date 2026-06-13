@@ -5,6 +5,7 @@ scripts/build/
 samples/* KeyWeaver*.osu
 key_converter_codex_dev_manual*.md
 key_converter_*.txt
+AGENTS.md
 *.exe
 *.obj
 *.o

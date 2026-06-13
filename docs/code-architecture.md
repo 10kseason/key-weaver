@@ -91,6 +91,51 @@ Batch mode uses the same single-conversion path per input. It adds input-list
 handling, optional recursive file collection, worker threads, synchronized
 console output, and skip/fail/ok summaries.
 
+## ONNX Runtime Lane Policy
+
+`src/core/model_policy.*` contains the optional ONNX Runtime lane-policy hook.
+It is compiled only when `KEYWEAVER_WITH_ONNXRUNTIME=ON` and is enabled at
+runtime only by batch `--onnx-policy`. Single-chart conversions stay
+rule-based.
+
+The ONNX model is advisory: it receives a `float32[notes, 12]` feature tensor
+and may return either per-lane logits or per-note lane IDs. For per-lane logits,
+the core ranks the top five candidate lanes and accepts the first candidate that
+passes deterministic safety; if the current deterministic lane ranks before the
+remaining candidates, the note stays in place. Per-note lane ID output remains a
+single-candidate contract. Candidate rejection counters distinguish
+out-of-range lanes, same-time collisions, LN overlap, and unsafe
+source-different repeats. Provider selection is controlled by `--onnx-provider
+auto|cpu|cuda|dml`; `auto` tries GPU providers exposed by the loaded ONNX
+Runtime package before falling back to CPU. CMake copies `onnxruntime.dll` plus
+provider DLLs beside Windows executables when they exist in the selected ORT
+package.
+
+Future Transformer training and bundled-model work must follow
+`docs/transformer-data-policy.md`: chart-only features, opt-in mapper
+permission, sanitized dataset manifests, no audio/visual beatmap-set assets, and
+no model path that bypasses deterministic safety gates.
+
+The local training/export scripts are intentionally outside the normal build
+gate. `scripts/train_transformer_lane_policy.py` trains the lane-logit model and
+stores architecture metadata in the checkpoint; `scripts/export_transformer_lane_policy_onnx.py`
+restores that exact architecture and exports the ONNX contract. The convenience
+wrapper `scripts/train_large_transformer_model.bat` runs the larger
+u_e/CircusGalop 7K->10K model recipe and writes the GUI preset file under
+`models/u_e_circusgalop_chart_dataset_lane_policy.onnx`.
+
+The Win32 GUI exposes the reserved preset `Transformer model (u_e X CircusGalop
+Chart dataset model)` as a Classic fast-batch model option. It maps to
+`--onnx-policy models/u_e_circusgalop_chart_dataset_lane_policy.onnx
+--onnx-provider auto --onnx-policy-strict` after resolving the model path beside
+`KeyWeaver.exe`, falling back to the current working folder for local
+development runs. When the model file is installed, the GUI selects this Batch
+model by default for Classic fast batch. Strict mode is intentional here so a
+GUI-selected model cannot silently fall back to rule-based placement when the
+selected `KeyWeaver.exe` lacks ONNX Runtime support. The preset is disabled for
+NK2 and ignored by single-chart Convert and Matrix because the current ONNX hook
+is batch-only.
+
 ## GUI Flow
 
 The Win32 GUI lives in `src/gui_win32.cpp`. It is a command builder and report
@@ -215,7 +260,7 @@ analysis-only. Non-report NK2 mode has a focused 7K-to-10K placement prototype:
 it remaps source lanes into the 10K panel/bridge/full-field layout, preserves LN
 durations, preserves source jacks as same-lane repeats, avoids new target jacks
 when a safe candidate exists, and writes normal osu/BMS output through the
-existing exporters. `native` and `harder` can add limited LN-end and strong-beat
+existing exporters, including the CLI/GUI batch chart-output path. `native` and `harder` can add limited LN-end and strong-beat
 support taps; each support candidate is accepted only if local safety checks
 find no same-time same-lane collision, same-lane active-LN conflict, or unsafe
 same-lane repeat. Placement and support ranking use layout-weighted coverage

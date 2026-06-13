@@ -1,4 +1,4 @@
-# KeyWeaver v1.0.0
+# KeyWeaver v1.1
 
 C++ CLI for converting osu!mania `.osu` and basic BMS-family charts between key counts.
 
@@ -29,7 +29,7 @@ Current scope:
 - v0.5.5 drag-and-drop GUI loading plus batch conversion: dropped files use the GUI Target field, and blank Output writes each chart beside its original file
 - v0.5.5 CLI batch mode accepts multiple positional chart inputs with `--target`, writing each result beside its source chart by default
 - CLI batch conversion runs charts in parallel by default, using the detected CPU thread count capped only by input count; `--jobs` can override the worker count
-- CLI and GUI batch runs show percent-done progress and remaining chart count while converting
+- CLI and GUI batch runs show percent-done, percent-left, and remaining chart count while converting
 - v0.5.6 `auto-low` expansion for conservative high-key conversion
 - v0.5.6 Preserve Convert mode for faithful mapping, strict source-jack preservation, and no generated notes
 - v0.6.0 algorithm lock is documented at `docs/algorithm-lock-v0.6.0.md`, freezing the current generated-note, jack, LN, stream-transform, and safety contracts
@@ -58,6 +58,8 @@ Current scope:
 - v0.5.5 profile-guided Adaptive Growth Budget for `preserve-tap-plus`, using 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` Target-K profile windows to open or throttle local fill while keeping a global added-note cap
 - v0.5.5 broad style-profile workflow validated on a 628-chart u_e + CircusGalop 10K reference set, with a sanitized reusable profile committed at `profiles/keyweaver_10k_broad_style_v1.json`
 - v0.5.5 automatically loads the bundled broad 10K style profile for target-10 conversions when `profiles/keyweaver_10k_broad_style_v1.json` is beside the executable or in the working folder; `--target-profile` overrides it
+- experimental batch-only ONNX Runtime lane-policy hook for classic conversion: `--onnx-policy` runs a per-note lane model before deterministic expansion, `--onnx-provider auto|cpu|cuda|dml` can prefer GPU providers when the ORT package exposes them, and only safe relanes are accepted
+- future Transformer/ONNX training work must use opt-in chart-only datasets with recorded mapper permission; see `docs/transformer-data-policy.md`
 - v0.5.5 algorithm lock remains historical context at `docs/algorithm-lock-v0.5.5.md`; the normal-mode frozen contract is `docs/algorithm-lock-v0.6.0.md`
 
 Not included: full chart editor, waveform/audio playback, DP conversion, difficulty balancing, seeded random remix, burst echo synthesis, or DP stream splitting.
@@ -69,6 +71,15 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
+Experimental ONNX Runtime support is off by default. To enable it, point CMake at an ONNX Runtime package that provides `include/onnxruntime_cxx_api.h` and `lib/onnxruntime`:
+
+```bash
+cmake -S . -B build-ort -G Ninja -DKEYWEAVER_WITH_ONNXRUNTIME=ON -DONNXRUNTIME_ROOT=/path/to/onnxruntime
+cmake --build build-ort
+```
+
+The NuGet `Microsoft.ML.OnnxRuntime` package layout is also supported by using the package root as `ONNXRUNTIME_ROOT`, for example `%USERPROFILE%\.nuget\packages\microsoft.ml.onnxruntime\<version>`. GPU execution requires an ONNX Runtime package that actually ships the selected provider, such as CUDA or DirectML provider DLLs. On Windows, CMake copies the matching `onnxruntime.dll`, `onnxruntime_providers*.dll`, and `DirectML.dll` when present beside built executables so an older system-wide DLL is not loaded first.
+
 On Windows this also builds the lightweight playtest GUI:
 
 ```bash
@@ -78,10 +89,10 @@ cmake --build build --target keyconv_gui
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.0.0
+.\scripts\package_release.ps1 -Version 1.1
 ```
 
-The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, and docs, then writes `dist/release/KeyWeaver-v1.0.0-win64-<timestamp>.zip` plus a `.sha256` file.
+The package script performs a Release CMake build, runs unit/header/GUI smokes, bundles `KeyWeaver.exe`, `keyconv.exe`, `keyconv_gui.exe`, MinGW runtime DLLs, samples, scripts, profiles, docs, and `models` when a local model folder exists, then writes `dist/release/KeyWeaver-v1.1-win64-<timestamp>.zip` plus a `.sha256` file.
 
 ## Test
 
@@ -94,6 +105,46 @@ You can also run the test executable directly:
 ```bash
 build/keyconv_tests.exe
 ```
+
+For Windows GUI build verification outside the OneDrive-backed `build` folder,
+use the MSYS2 Ninja-pinned helper scripts:
+
+```powershell
+.\scripts\verify_cmake_core_msys.bat
+.\scripts\verify_cmake_core_msys.bat onnx
+.\scripts\verify_gui_build_msys.bat
+.\scripts\verify_gui_smoke_msys.bat
+```
+
+These write temporary build and smoke outputs under `C:\tmp`. The `onnx` core
+mode requires `ONNXRUNTIME_ROOT` or an installed NuGet `Microsoft.ML.OnnxRuntime`
+package and runs a strict batch smoke against the local model preset.
+
+To compare the classic deterministic lane policy with the batch-only
+Transformer/ONNX policy, run the measurement helper:
+
+```powershell
+python .\scripts\measure_transformer_policy.py samples\simple_4k.osu samples\simple_7k_ln.osu --exe build\KeyWeaver.exe --model models\u_e_circusgalop_chart_dataset_lane_policy.onnx --provider cpu --repeat 3
+```
+
+It uses `--batch --dry-run` for both modes, writes raw logs plus `runs.jsonl`
+and `summary.csv` under `dist\transformer-measure`, and reports wall-clock/CLI
+timing, K-likeness, safety, collision/LN counts, active ONNX provider, accepted
+relanes, fallback relanes, evaluated candidates, and rejection counters. Rebuild
+with `.\scripts\verify_cmake_core_msys.bat onnx` first when you need current
+ONNX-enabled binaries.
+
+For a larger local evaluation set, select random osu!mania charts from an osu!
+Songs folder after filtering converted charts and extreme outliers:
+
+```powershell
+python .\scripts\select_converter_eval_set.py --songs-root "<osu Songs folder>" --source-keys 4,5,7 --per-source-key 25 --out-dir dist\converter-eval-set
+python .\scripts\measure_transformer_policy.py --input-list dist\converter-eval-set\eval_set_relative_paths.txt --input-base "<osu Songs folder>" --exe C:\tmp\keyweaver-core-verify-msys-onnx\KeyWeaver.exe --model models\u_e_circusgalop_chart_dataset_lane_policy.onnx --provider cpu --repeat 3
+```
+
+The selector writes relative paths by default so local Songs-folder paths do not
+land in reusable manifests. Add `--write-absolute-paths` only for local,
+ignored-by-git convenience files.
 
 ## Public API
 
@@ -175,10 +226,14 @@ KeyWeaver <input.osu|input.bms> [more inputs...]
   --dp                    reserve DP mode, reports SP fallback in v0.1
   --dry-run               convert in memory and report only
   --batch                 treat positional chart inputs as a batch; outputs default beside each input
+  --only-source-keys <list> convert only matching source key counts in batch, e.g. 4 or 4,7
   --jobs <number>         batch worker count override, default detected CPU thread count
   --report <path>         write conversion report json
   --target-profile <json> use a Target-K reference profile JSON for K-likeness scoring
                           target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled
+  --onnx-policy <model>   batch-only experimental ONNX Runtime lane-policy model
+  --onnx-provider <p>     ONNX execution provider: auto | cpu | cuda | dml, default auto
+  --onnx-policy-strict    in batch, fail instead of falling back when the ONNX policy cannot run
   --engine <engine>       classic | nk2, default classic; nk2 prototype converts 7K->10K
   --nk2-mode <mode>       native | faithful | harder | transform | report, report is analysis-only
   --nk2-native-weight <n> native authorship weight, default 0.5
@@ -213,6 +268,8 @@ build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --expansion-policy auto-low --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu --target 10 --preserve-convert --dry-run
+build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch --onnx-policy models/lane_policy.onnx --onnx-provider auto --dry-run
+build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch --only-source-keys 4 --dry-run
 build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch
 build/KeyWeaver.exe samples/simple_4k.osu samples/simple_7k_ln.osu --target 10 --batch --jobs 2
 build/KeyWeaver.exe path/to/chart.bms --target 4 --dry-run
@@ -220,13 +277,19 @@ build/KeyWeaver.exe path/to/chart.bms --target 4 --dry-run
 
 BMS inputs must write BMS-family outputs (`.bms`, `.bme`, `.bml`, or `.pms`). If `--out` is omitted, the original extension is kept except 9K BMS output, which defaults to `.pms`.
 
-Already-converted inputs are skipped before conversion. KeyWeaver checks filenames plus chart `Creator` / `Version` metadata for converter markers such as `KeyWeaver10K`, `A7K`, `a10K`, `4to7c`, `7to10c`, and compact `4K10C` tags; CLI batch mode reports those files as `skipped` instead of failed.
+Already-converted inputs are skipped before conversion. KeyWeaver checks filenames plus chart `Creator` / `Version` metadata for converter markers such as `KeyWeaver10K`, `A7K`, `a10K`, `4to7c`, `7to10c`, and compact `4K10C` tags; CLI batch mode reports those files as `skipped` instead of failed. Batch `--only-source-keys` also uses the skipped count for charts whose inferred or overridden source key count is outside the requested list.
 
 ## GUI Playtest Tool
 
 `build/keyconv_gui.exe` is a Windows-only C++ playtest harness. It does not replace the core converter or implement chart editing; it shells out to `KeyWeaver.exe`, reads generated JSON/CSV reports, and displays a small summary/matrix for manual calibration.
 
 The JSON/text reports include `kLikenessScore` as a 0-100 Target-K diagnostic. For 7K-to-10K work it favors keeping the 7K anchor skeleton readable while rewarding natural adjacent-lane growth, fuller 10K lane use, balanced hands, and zero created-jack/near-conflict damage. Adjacent growth gates the final score so a chart with good lane entropy but a still-7K-like skeleton does not look falsely complete. Reports also include `tenKeyPlanner`, which is `staged-7-9-10` when the dedicated 7K-to-10K staged planner is active and `legacy` otherwise. Current Target-K profiles also measure 10K center/split behavior with `centerBridgeRate`, `centerSplitBalance`, and `splitChordRate`; reports expose both raw values and score components. Policy comparison JSON/CSV also includes the score so future adaptive budgets can pick candidates by score gain instead of a fixed added-note percentage.
+
+The ONNX policy contract is intentionally narrow and batch-only; single-chart conversions remain rule-based even in ONNX-enabled builds. The model input is a `float32[notes, 12]` tensor built from source lane, current target lane, key counts, normalized time, neighboring gaps, source chord size, hold flags/duration, source hand side, and active hold pressure. The first output must be either `float32[notes, lanes]` logits/probabilities or `[notes]` lane IDs as float, int32, or int64. For logits/probabilities, KeyWeaver ranks the top five candidate lanes and accepts the first candidate that passes safety, stopping if the current deterministic lane ranks ahead of the remaining candidates. `--onnx-provider auto` tries CUDA, then DirectML, then CPU according to the providers exposed by the loaded ONNX Runtime package; `cuda` and `dml` request those providers explicitly. Reports expose requested, active, available providers, evaluated candidate count, fallback relanes, same-lane no-ops, and candidate rejection counters for out-of-range, collision, LN conflict, and created-jack safety gates. KeyWeaver treats the model as advice only: unsafe predictions that would create same-time collisions, LN overlap, or source-different same-lane repeats are rejected, and builds without ONNX Runtime fall back to deterministic placement unless `--onnx-policy-strict` is used.
+
+Transformer training and model packaging are not part of the default release path. Any bundled model must be trained from chart-only data with explicit opt-in permission from the chart authors, must exclude audio, background images, storyboards, samples, and other beatmap-set assets, and must keep a sanitized dataset manifest documenting the permission scope. The current accepted reference direction is u_e-owned charts plus CircusGalop charts only when that mapper's permission covers model training, model distribution, generated/converted chart output, and any intended public or commercial use. A local osu! Songs metadata scan on 2026-06-10 found 632 eligible 10K author charts after converter exclusions: 155 u_e charts and 477 CircusGalop charts. A follow-up CircusGalop scan found additional clean non-10K source-key material: 4K=18, 5K=15, and 7K=16, plus sparse 1K=1 and 18K=1 audit material; 8K candidates were excluded as converter-tagged. The GUI Batch model preset `Transformer model (u_e X CircusGalop Chart dataset model)` uses `models/u_e_circusgalop_chart_dataset_lane_policy.onnx` when it is installed beside `KeyWeaver.exe` or in the current working folder, and passes `--onnx-policy-strict` so missing ONNX Runtime support fails visibly instead of silently falling back; single Convert and Matrix remain rule-based. See `docs/transformer-data-policy.md`.
+
+Large local lane-policy training is wrapped by `scripts/train_large_transformer_model.bat`. It trains a larger 7K->10K Transformer (`d_model=128`, `nhead=8`, `num_layers=4`, `dim_feedforward=512`) on the u_e/CircusGalop chart-only corpus, then exports and verifies `models/u_e_circusgalop_chart_dataset_lane_policy.onnx` for the GUI preset. This is intentionally a manual/approved long run, not part of normal build or release smoke checks.
 
 Style-profile workflow:
 
@@ -242,23 +305,25 @@ The broad profile scanner accepts osu!mania `CircleSize:10` charts whose `Creato
 
 Profile JSON includes 1000 ms window features and density buckets. It stores median/IQR-style summaries for all windows plus low/mid/high density, LN-heavy, chord-heavy, and jack-risk windows. The root `desired*` fields consumed by the current scorer are derived from these window medians, including 10K center/split metrics `desiredCenterBridgeRate`, `desiredCenterSplitBalance`, and `desiredSplitChordRate`. When `preserve-tap-plus` runs with `--target-profile`, KeyWeaver also enables an adaptive-growth-budget pass: the global added-note cap stays in place, but Composer pressure is based on the 1000 ms `densityBuckets.low/mid/high/chordHeavy/jackRisk` features rather than chart-level summaries.
 
-The code-level architecture walkthrough is in `docs/code-architecture.md`. The proposed second-generation NK2 engine design is in `docs/nk2-design.md`, and the current NK2 algorithm walkthrough is in `docs/nk2-algorithm.md`. The frozen v0.6.0 normal-mode algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. The 10K staged planner contract is in `docs/algorithm-lock-v0.6.1.md`, and the v1.0.0 GUI 10K default follows `docs/design-10k-fullfield-remix.md`. Treat these as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, 7K-to-10K planner behavior, jack/LN handling, stream transforms, or safety guard behavior should update the matching document and tests.
+The code-level architecture walkthrough is in `docs/code-architecture.md`. The Transformer dataset and permission guardrails are in `docs/transformer-data-policy.md`. Detailed release history before 1.1 is archived in `docs/changelog-legacy.md`. The proposed second-generation NK2 engine design is in `docs/nk2-design.md`, and the current NK2 algorithm walkthrough is in `docs/nk2-algorithm.md`. The frozen v0.6.0 normal-mode algorithm contract is in `docs/algorithm-lock-v0.6.0.md`. The 10K staged planner contract is in `docs/algorithm-lock-v0.6.1.md`, and the v1.0.0 GUI 10K default follows `docs/design-10k-fullfield-remix.md`. Treat these as the baseline for future 10K conversion tuning: any change to generated-note placement, bucket selection, local pressure, 7K-to-10K planner behavior, jack/LN handling, stream transforms, safety guard behavior, or Transformer dataset scope should update the matching document and tests.
 
 GUI scope:
 
 ```text
+- simplified conversion-console layout with Files, Recipe, Run, Summary, and Log panels
 - select input .osu or BMS-family chart
 - output beside the input chart by default, with optional folder override
 - drag a chart file onto an already-open GUI window to convert with the current Target field
 - drag files onto `keyconv_gui.exe` or `KeyWeaver.exe`; the GUI loads the first chart so Target can be set before conversion
 - optional source-key override and a 4K-10K target selector
-- choose Algorithm `NK1 (Classic)` or `NK2 (Experimental)` in the GUI; NK2 exposes `faithful`, `native`, `harder`, and `transform` modes for single-chart conversion
+- choose Algorithm `NK1 (Classic)` or `NK2 (Experimental)` in the GUI; NK2 exposes `faithful`, `native`, `harder`, and `transform` modes for single-chart and batch conversion
 - GUI target-10 conversions use `--ten-key-planner staged-7-14-10 --ten-k-fullfield-remix` by default
-- choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter`, and Preserve Convert
+- choose streamlined GUI options: expansion `auto (more)` / `auto (normal)` / `auto (low)`, compress `auto`, stream `off` / `superrandom` / `full-jitter` / `super-symmetry`, and Preserve Convert
 - run one conversion and parse report JSON
-- run GUI Batch from dropped charts or a selected songs/root folder, with status text showing percent done and remaining files
+- run GUI Batch from a dropped folder, multiple dropped charts, or a selected folder, with status text showing percent done and remaining files
+- use Batch model `Transformer model (u_e X CircusGalop Chart dataset model)` by default for Classic fast-batch ONNX lane-policy inference when the model file is installed
 - run preserve/preserve-tap-plus/echo-balanced/training-scaffold/harder-balanced policy matrix
-- NK2 is still experimental and single-input only in this milestone; GUI Batch and Matrix stay NK1-only
+- NK2 remains experimental but is selectable for GUI Batch; Matrix stays NK1-only
 - open output/report and copy the generated CLI command
 ```
 
@@ -274,7 +339,7 @@ BMS-family inputs selected in the GUI write BMS-family outputs with the same ext
 - `--optimizer beam`, `--style dp`, and `--dp` are accepted as reserved options and report a fallback warning.
 - Strong compression can drop or roll notes under no-overlap policies. Default high-to-low `auto` compression uses `no-overlap-drop`, so overflow taps or holds are omitted when the target key count cannot represent the source chord/LN occupancy cleanly. This prioritizes low-key recreation over preserving every object. Use explicit `--compress-policy no-overlap-hybrid` to roll overflow holds when possible, or `--compress-policy no-overlap-roll` when tap overflow should also be rolled instead of deleted.
 - Converted osu!mania difficulty names append a KeyWeaver mode marker. The base is `KeyWeaverNK`, where `N` is the target key count, and high-key auto expansion adds `(more)`, `(normal)`, or `(low)`. Stream transforms add `-sRan` or `-jitter`, for example `KeyWeaver10K-sRan (more)` or `KeyWeaver10K-jitter (low)`. If `--out` is omitted, the `.osu` is written beside the input using the same marker and a numeric suffix when needed.
-- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. GUI Batch converts dropped files or a selected folder, and blank Output writes each chart beside its original file.
+- The GUI mirrors this local-output default: after selecting one input chart, generated chart/JSON/CSV files default to that chart's folder unless the Output field is changed. GUI Batch uses dropped folders, multiple dropped files, or a selected folder instead of treating one selected chart as a batch, and blank Output writes each chart beside its original file.
 - Default playable compression rejects near-time roll placements under `--distance-policy aimod-safe`; check `nearTimeConflicts`, `sameLaneNearConflicts`, `unsnappedRolledNotes`, `droppedByDistanceGuard`, and `rerolledByDistanceGuard` in the JSON report.
 - Higher-key conversion also collapses inherited sub-16 ms cross-lane source pairs into safe same-time chords when possible, so dense source timing does not remain as visual overlap in 10K output.
 - If `--expansion-policy` is omitted or set to `auto` / `auto-normal`, KeyWeaver uses `preserve` for same/lower key-count conversion and `preserve-tap-plus` when converting to a higher key count. High-key auto presets target generated-note budgets of `auto-low` 10%, `auto-normal` 15%, and `auto-more` 20%; explicit `--expansion-policy preserve` disables deterministic additions on higher-key output. Check `addedNotes`, `addedByChordFill`, `addedByTrainingScaffold`, `addedNoteRatio`, and rejection counters in the JSON report.

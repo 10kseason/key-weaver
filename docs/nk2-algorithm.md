@@ -396,6 +396,25 @@ support provenance.
 `rankedCandidates()` scores every lane candidate and sorts descending by score,
 breaking ties by lower lane index.
 
+The implementation now keeps the score as named dimensions before summing it.
+This makes NK2 easier to extend without hiding why a lane won:
+
+- native
+- remix
+- coverage
+- anchor
+- continuity
+- source jack
+- jack safety
+- motif
+- symmetry
+- adjacent-copy
+
+The text and JSON reports average these dimensions over accepted single-slice
+candidate choices and count hard-gate rejections. Local same-time beam solving
+keeps its existing `localSolverCandidates` diagnostics because it explores many
+temporary states before choosing a final slice.
+
 The score is a weighted combination of:
 
 - native closeness to the direct scaled lane
@@ -1082,6 +1101,7 @@ Top-level fields:
 - generatedProvenance
 - layoutScores
 - phraseProfile
+- candidateRanking
 - warnings
 
 Important placement fields:
@@ -1103,6 +1123,19 @@ Important placement fields:
 - `sourceAnchorTotal`
 - `sourceAnchorScore`
 - `laneDistribution`
+
+Important candidate-ranking fields:
+
+- `scoredNotes`
+- `scoredLanes`
+- `scoreSamples`
+- `acceptedFirstChoice`
+- `acceptedAfterHardGate`
+- `directFallbacks`
+- `rejectedBySameTime`
+- `rejectedByLn`
+- `rejectedByCreatedJack`
+- `acceptedScoreAverages`
 
 Important support fields:
 
@@ -1184,8 +1217,8 @@ second marker.
 
 ## GUI Surface
 
-The GUI exposes NK2 as an experimental single-chart algorithm. Batch and matrix
-flows remain NK1-only in the current milestone.
+The GUI exposes NK2 as an experimental algorithm for both single-chart and batch
+chart-output conversion. Matrix remains NK1-only in the current milestone.
 
 Expected GUI model:
 
@@ -1342,6 +1375,8 @@ design document. Known gaps:
 - 7K -> 10K has a permissive fallback that can still produce reported damage if
   all safer candidates fail.
 - Strong-beat detection is intentionally simple.
+- NK2 does not yet run its candidate ranking through ONNX Runtime. The current
+  ONNX/GPU hook is the batch-only Classic lane-policy path.
 - Manual playtest is still required for authored-feel acceptance.
 
 ## Future Work
@@ -1354,6 +1389,8 @@ Natural next steps:
 - Make support generation available for more higher-key pairs.
 - Add generated-LN support only after tap support is consistently safe.
 - Use profile-guided phrase scores to choose among candidate variants.
+- Add an optional ONNX Runtime scorer for NK2 candidate ranking in batch mode,
+  while keeping collision, LN, repeat, and support-note safety gates in C++.
 - Add stronger lower-key merge ranking before dropping source notes.
 - Implement same-key transform mutation for `nk2-mode transform`.
 - Add real-chart sample gates for NK2 support and layout regressions.

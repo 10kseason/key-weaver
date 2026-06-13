@@ -6,6 +6,7 @@
 #include "core/distance.hpp"
 #include "core/gesture.hpp"
 #include "core/mapping.hpp"
+#include "core/model_policy.hpp"
 #include "core/optimizer.hpp"
 #include "core/quality.hpp"
 #include "core/repeat.hpp"
@@ -1523,6 +1524,12 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
         placed = sortedNotes(std::move(placed));
     }
 
+    const auto onnxPolicyStats = applyOnnxLanePolicy(chart, placed, options);
+    result.report.warnings.insert(result.report.warnings.end(),
+                                  onnxPolicyStats.warnings.begin(),
+                                  onnxPolicyStats.warnings.end());
+    result.report.shiftedNotes += onnxPolicyStats.acceptedRelanes;
+
     createdJacksFromBaseMapping =
         static_cast<int>(detectCreatedJackPairs(chart, placed, options.jackWindowMs).size());
 
@@ -1587,6 +1594,21 @@ ConvertResult convertChart(const Chart& chart, const ConvertOptions& options) {
     fillReportCounts(result.report, result.chart.notes, options.targetKeyCount);
     result.report.quality =
         computeQualityReport(chart, result.chart, options.sourceKeyCount, options.targetKeyCount, options.jackWindowMs);
+    result.report.quality.onnxPolicyRequested = onnxPolicyStats.requested;
+    result.report.quality.onnxPolicyLoaded = onnxPolicyStats.modelLoaded;
+    result.report.quality.onnxPolicyProviderRequested = onnxPolicyStats.providerRequested;
+    result.report.quality.onnxPolicyProviderActive = onnxPolicyStats.providerActive;
+    result.report.quality.onnxPolicyAvailableProviders = onnxPolicyStats.availableProviders;
+    result.report.quality.onnxPolicyAttemptedNotes = onnxPolicyStats.attemptedNotes;
+    result.report.quality.onnxPolicyEvaluatedCandidates = onnxPolicyStats.evaluatedCandidates;
+    result.report.quality.onnxPolicyAcceptedRelanes = onnxPolicyStats.acceptedRelanes;
+    result.report.quality.onnxPolicyFallbackRelanes = onnxPolicyStats.fallbackRelanes;
+    result.report.quality.onnxPolicyRejectedRelanes = onnxPolicyStats.rejectedRelanes;
+    result.report.quality.onnxPolicySameLaneNoops = onnxPolicyStats.sameLaneNoops;
+    result.report.quality.onnxPolicyRejectedByOutOfRange = onnxPolicyStats.rejectedByOutOfRange;
+    result.report.quality.onnxPolicyRejectedByCollision = onnxPolicyStats.rejectedByCollision;
+    result.report.quality.onnxPolicyRejectedByLnConflict = onnxPolicyStats.rejectedByLnConflict;
+    result.report.quality.onnxPolicyRejectedByCreatedJack = onnxPolicyStats.rejectedByCreatedJack;
     const auto finalNoOverlap = validateNoOverlap(result.chart.notes, options.targetKeyCount);
     const auto finalDistance =
         validateDistance(result.chart.notes, options, chart.timingPoints, compressionStats.rolledNoteIds);

@@ -34,6 +34,22 @@ struct PlacedNote {
 struct Candidate {
     int lane = 0;
     double score = 0.0;
+    double nativeScore = 0.0;
+    double remixScore = 0.0;
+    double coverageScore = 0.0;
+    double anchorScore = 0.0;
+    double continuityScore = 0.0;
+    double sourceJackScore = 0.0;
+    double jackSafetyScore = 0.0;
+    double motifScore = 0.0;
+    double symmetryScore = 0.0;
+    double adjacentCopyScore = 0.0;
+};
+
+struct CandidateGateCounts {
+    int sameTime = 0;
+    int ln = 0;
+    int createdJack = 0;
 };
 
 constexpr double kFourToFiveFillAddedRatio = 0.12;
@@ -769,6 +785,49 @@ void countGeneratedProvenance(NK2Report& report, MotifKind motif) {
     }
 }
 
+void recordCandidateSearch(NK2Report& report,
+                           int candidateCount,
+                           const CandidateGateCounts& rejected) {
+    ++report.candidateScoredNotes;
+    report.candidateScoredLanes += candidateCount;
+    report.candidateRejectedBySameTime += rejected.sameTime;
+    report.candidateRejectedByLn += rejected.ln;
+    report.candidateRejectedByCreatedJack += rejected.createdJack;
+}
+
+void recordCandidateAccepted(NK2Report& report,
+                             const Candidate& candidate,
+                             int acceptedRank,
+                             int candidateCount,
+                             const CandidateGateCounts& rejected) {
+    recordCandidateSearch(report, candidateCount, rejected);
+    ++report.candidateScoreSamples;
+    if (acceptedRank == 0 && rejected.sameTime == 0 && rejected.ln == 0 &&
+        rejected.createdJack == 0) {
+        ++report.candidateAcceptedFirstChoice;
+    } else {
+        ++report.candidateAcceptedAfterHardGate;
+    }
+    report.candidateNativeScoreSum += candidate.nativeScore;
+    report.candidateRemixScoreSum += candidate.remixScore;
+    report.candidateCoverageScoreSum += candidate.coverageScore;
+    report.candidateAnchorScoreSum += candidate.anchorScore;
+    report.candidateContinuityScoreSum += candidate.continuityScore;
+    report.candidateSourceJackScoreSum += candidate.sourceJackScore;
+    report.candidateJackSafetyScoreSum += candidate.jackSafetyScore;
+    report.candidateMotifScoreSum += candidate.motifScore;
+    report.candidateSymmetryScoreSum += candidate.symmetryScore;
+    report.candidateAdjacentCopyScoreSum += candidate.adjacentCopyScore;
+    report.candidateTotalScoreSum += candidate.score;
+}
+
+void recordCandidateDirectFallback(NK2Report& report,
+                                   int candidateCount,
+                                   const CandidateGateCounts& rejected) {
+    recordCandidateSearch(report, candidateCount, rejected);
+    ++report.candidateDirectFallbacks;
+}
+
 double remixScoreForLane(int sourceLane,
                          int lane,
                          const std::vector<int>& laneUse,
@@ -937,18 +996,26 @@ std::vector<Candidate> rankedCandidates(const Note& note,
             laneCoverageNeedScore(lane, laneUse, options.targetKeyCount, options.layoutWeights);
         const double panelNeed = panelLaneNeedScore(lane, laneUse, options.targetKeyCount);
         const double wholeFieldNeed = wholeFieldNeedScore(lane, laneUse, options.targetKeyCount);
-        double score = (options.nativeWeight * nativeScore + options.remixWeight * remixScore) / totalBlend;
-        score += (options.remixWeight / totalBlend) * (freeOriginalTap ? 1.35 : 1.0) * coverageNeed;
-        score += (options.remixWeight / totalBlend) * freedomBoost *
-                 (freeOriginalTap ? 2.35 : 1.55) * wholeFieldNeed * longHoldSpreadScale;
+
+        Candidate candidate;
+        candidate.lane = lane;
+        candidate.nativeScore = (options.nativeWeight * nativeScore) / totalBlend;
+        candidate.remixScore = (options.remixWeight * remixScore) / totalBlend;
+        candidate.coverageScore +=
+            (options.remixWeight / totalBlend) * (freeOriginalTap ? 1.35 : 1.0) * coverageNeed;
+        candidate.coverageScore += (options.remixWeight / totalBlend) * freedomBoost *
+                                   (freeOriginalTap ? 2.35 : 1.55) * wholeFieldNeed *
+                                   longHoldSpreadScale;
         if (longHoldCopy) {
-            score += adjacentCopyPreferenceScore(lane, adjacentCopyLanes);
+            candidate.adjacentCopyScore += adjacentCopyPreferenceScore(lane, adjacentCopyLanes);
         }
         if (laneInSourcePanel(sourceLane, lane)) {
-            score += (options.nativeWeight / totalBlend) * (freeOriginalTap ? 0.10 : 0.35) *
-                     panelNeed * anchorLockScale;
-            score += (options.remixWeight / totalBlend) * (freeOriginalTap ? 0.35 : 0.70) *
-                     panelNeed;
+            candidate.coverageScore +=
+                (options.nativeWeight / totalBlend) * (freeOriginalTap ? 0.10 : 0.35) *
+                panelNeed * anchorLockScale;
+            candidate.coverageScore +=
+                (options.remixWeight / totalBlend) * (freeOriginalTap ? 0.35 : 0.70) *
+                panelNeed;
         }
 
         const bool freeLnAnchor = motif == MotifKind::LnAnchor;
@@ -958,51 +1025,56 @@ std::vector<Candidate> rankedCandidates(const Note& note,
                 laneCoveragePreference(lane, laneUse, options.targetKeyCount, options.layoutWeights),
                 0.5 + 0.5 * panelLaneNeedScore(lane, laneUse, options.targetKeyCount));
             const double anchorScale = clamp01(0.10 + 0.90 * anchorPreference);
-            score += (freerAnchor ? 0.10 : 0.45) * anchorScale * anchorLockScale;
+            candidate.anchorScore += (freerAnchor ? 0.10 : 0.45) * anchorScale * anchorLockScale;
             if (options.targetKeyCount == 8 && !sourceJackContinuation && motif != MotifKind::Jack) {
-                score -= freerAnchor ? 0.16 : 0.09;
+                candidate.anchorScore -= freerAnchor ? 0.16 : 0.09;
             }
         }
         if (laneInSourcePanel(sourceLane, lane)) {
-            score += (freerAnchor ? 0.03 : 0.15) * anchorLockScale;
+            candidate.anchorScore += (freerAnchor ? 0.03 : 0.15) * anchorLockScale;
         }
         if (note.type == NoteType::Hold && laneInBridge(lane)) {
-            score += freeLnAnchor ? 0.03 : 0.08;
+            candidate.anchorScore += freeLnAnchor ? 0.03 : 0.08;
         }
         if (sourceJackLane.has_value()) {
-            score += lane == *sourceJackLane ? 2.0 : -1.0;
+            candidate.sourceJackScore += lane == *sourceJackLane ? 2.0 : -1.0;
         }
         if (previousSingleSourceLane.has_value() && previousSingleTargetLane.has_value()) {
             const int sourceDelta = sourceLane - *previousSingleSourceLane;
             const int targetDelta = lane - *previousSingleTargetLane;
             if (sourceDelta != 0 && targetDelta != 0 && (sourceDelta > 0) == (targetDelta > 0)) {
-                score += 0.35;
+                candidate.continuityScore += 0.35;
                 if (std::abs(targetDelta) >= std::abs(sourceDelta)) {
-                    score += 0.12;
+                    candidate.continuityScore += 0.12;
                 }
             } else if (sourceDelta != 0) {
-                score -= 0.50;
+                candidate.continuityScore -= 0.50;
             }
         }
         if (wouldCreateNewJack(placed, sourceLane, note.time, lane, 500)) {
-            score -= 1.5;
+            candidate.jackSafetyScore -= 1.5;
         }
-        score += motifScoreAdjustment(motif,
-                                      note,
-                                      lane,
-                                      direct,
-                                      sourceLane,
-                                      options,
-                                      laneUse,
-                                      previousSingleSourceLane,
-                                      previousSingleTargetLane);
-        score += superSymmetryScoreAdjustment(note,
-                                              lane,
-                                              options,
-                                              placed,
-                                              previousSingleSourceLane,
-                                              previousSingleTargetLane);
-        ranked.push_back({lane, score});
+        candidate.motifScore += motifScoreAdjustment(motif,
+                                                     note,
+                                                     lane,
+                                                     direct,
+                                                     sourceLane,
+                                                     options,
+                                                     laneUse,
+                                                     previousSingleSourceLane,
+                                                     previousSingleTargetLane);
+        candidate.symmetryScore += superSymmetryScoreAdjustment(note,
+                                                               lane,
+                                                               options,
+                                                               placed,
+                                                               previousSingleSourceLane,
+                                                               previousSingleTargetLane);
+        candidate.score = candidate.nativeScore + candidate.remixScore + candidate.coverageScore +
+                          candidate.anchorScore + candidate.continuityScore +
+                          candidate.sourceJackScore + candidate.jackSafetyScore +
+                          candidate.motifScore + candidate.symmetryScore +
+                          candidate.adjacentCopyScore;
+        ranked.push_back(candidate);
     }
 
     std::stable_sort(ranked.begin(), ranked.end(), [](const Candidate& lhs, const Candidate& rhs) {
@@ -1022,7 +1094,8 @@ int chooseLane(const Note& note,
                const std::vector<PlacedNote>& placed,
                const std::optional<int>& previousSingleSourceLane,
                const std::optional<int>& previousSingleTargetLane,
-               MotifKind motif) {
+               MotifKind motif,
+               NK2Report* report) {
     const int sourceLane = sourceLaneOf(note);
     const bool sourceJackContinuation =
         isImmediateSourceJackContinuation(placed, sourceLane, note.time, 500);
@@ -1036,16 +1109,28 @@ int chooseLane(const Note& note,
                                          sourceJackContinuation,
                                          sourceJackContinuation ? MotifKind::Jack : motif);
 
-    for (const auto& candidate : ranked) {
+    CandidateGateCounts rejected;
+    for (std::size_t index = 0; index < ranked.size(); ++index) {
+        const auto& candidate = ranked[index];
         if (hasSameTimeCollision(occupiedLanes, candidate.lane)) {
+            ++rejected.sameTime;
             continue;
         }
         if (hasLongNoteConflict(placed, note, candidate.lane)) {
+            ++rejected.ln;
             continue;
         }
         if (!sourceJackContinuation &&
             wouldCreateNewJack(placed, sourceLane, note.time, candidate.lane, 500)) {
+            ++rejected.createdJack;
             continue;
+        }
+        if (report != nullptr) {
+            recordCandidateAccepted(*report,
+                                    candidate,
+                                    static_cast<int>(index),
+                                    static_cast<int>(ranked.size()),
+                                    rejected);
         }
         return candidate.lane;
     }
@@ -1053,10 +1138,20 @@ int chooseLane(const Note& note,
     for (const auto& candidate : ranked) {
         if (!hasSameTimeCollision(occupiedLanes, candidate.lane) &&
             !hasLongNoteConflict(placed, note, candidate.lane)) {
+            if (report != nullptr) {
+                recordCandidateAccepted(*report,
+                                        candidate,
+                                        1,
+                                        static_cast<int>(ranked.size()),
+                                        rejected);
+            }
             return candidate.lane;
         }
     }
 
+    if (report != nullptr) {
+        recordCandidateDirectFallback(*report, static_cast<int>(ranked.size()), rejected);
+    }
     return directLane(sourceLane, options.sourceKeyCount, options.targetKeyCount);
 }
 
@@ -1068,7 +1163,8 @@ std::optional<int> chooseLaneStrict(const Note& note,
                                     const std::vector<PlacedNote>& placed,
                                     const std::optional<int>& previousSingleSourceLane,
                                     const std::optional<int>& previousSingleTargetLane,
-                                    MotifKind motif) {
+                                    MotifKind motif,
+                                    NK2Report* report) {
     const int sourceLane = sourceLaneOf(note);
     const bool sourceJackContinuation =
         isImmediateSourceJackContinuation(placed, sourceLane, note.time, 500);
@@ -1081,18 +1177,33 @@ std::optional<int> chooseLaneStrict(const Note& note,
                                          previousSingleTargetLane,
                                          sourceJackContinuation,
                                          sourceJackContinuation ? MotifKind::Jack : motif);
-    for (const auto& candidate : ranked) {
+    CandidateGateCounts rejected;
+    for (std::size_t index = 0; index < ranked.size(); ++index) {
+        const auto& candidate = ranked[index];
         if (hasSameTimeCollision(occupiedLanes, candidate.lane)) {
+            ++rejected.sameTime;
             continue;
         }
         if (hasLongNoteConflict(placed, note, candidate.lane)) {
+            ++rejected.ln;
             continue;
         }
         if (!sourceJackContinuation &&
             wouldCreateNewJack(placed, sourceLane, note.time, candidate.lane, 500)) {
+            ++rejected.createdJack;
             continue;
         }
+        if (report != nullptr) {
+            recordCandidateAccepted(*report,
+                                    candidate,
+                                    static_cast<int>(index),
+                                    static_cast<int>(ranked.size()),
+                                    rejected);
+        }
         return candidate.lane;
+    }
+    if (report != nullptr) {
+        recordCandidateSearch(*report, static_cast<int>(ranked.size()), rejected);
     }
     return std::nullopt;
 }
@@ -2106,7 +2217,8 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
                                         placed,
                                         fastSingleContinuation ? previousSingleSourceLane : std::nullopt,
                                         fastSingleContinuation ? previousSingleTargetLane : std::nullopt,
-                                        motif);
+                                        motif,
+                                        &result.report);
             } else {
                 chosenLane = chooseLaneStrict(note,
                                               options,
@@ -2116,7 +2228,8 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
                                               placed,
                                               fastSingleContinuation ? previousSingleSourceLane : std::nullopt,
                                               fastSingleContinuation ? previousSingleTargetLane : std::nullopt,
-                                              motif);
+                                              motif,
+                                              &result.report);
             }
             if (!chosenLane.has_value()) {
                 const auto rolled = tryRollLowerKeyOverflowTap(note,

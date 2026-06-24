@@ -240,8 +240,9 @@ repeated LNs can move through bridge, under-used full-field lanes, and occasiona
 opposite-panel lanes.
 Neutral/stream-like original taps use the same idea at lower strength: source
 jacks, trills, stairs, and chords keep their motif-preservation rules, while
-ordinary original taps get weaker direct/source-panel locking and stronger
-full-field under-use pressure.
+ordinary original taps get weaker direct/source-panel locking, stronger
+full-field under-use pressure, and a soft `left/right/right/left` panel cadence
+to avoid one-sided visual clumping.
 Support generation is budgeted globally and per phrase: deterministic 2000 ms
 windows compute a native/harder cap from original note counts, and overflow is
 reported through `rejectedByPhraseBudget` plus the aggregate budget rejection

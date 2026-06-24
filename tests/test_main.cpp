@@ -967,6 +967,71 @@ void testTenKeyFullFieldLongStairAlternatesHandsInsideToken() {
     require(left > 0 && right > 0, "long full-field stair should not collapse into one hand");
 }
 
+void testTenKeyFullFieldShortStairAlternatesHandsInsideToken() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    addTimingPoint(chart);
+    for (int i = 0; i < 3; ++i) {
+        keyconv::Note note;
+        note.id = "short_stair" + std::to_string(i);
+        note.time = 1000 + i * 250;
+        note.lane = i;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    const auto rail = keyconv::buildFullFieldRail(chart, 7, 10, 2, 500, true);
+    const auto first = rail.hintsByNoteId.find("short_stair0");
+    const auto second = rail.hintsByNoteId.find("short_stair1");
+    const auto third = rail.hintsByNoteId.find("short_stair2");
+    require(first != rail.hintsByNoteId.end() &&
+                second != rail.hintsByNoteId.end() &&
+                third != rail.hintsByNoteId.end(),
+            "short full-field stair rail should cover every note");
+    require(first->second.role != second->second.role &&
+                second->second.role != third->second.role,
+            "short full-field stairs should switch hands inside the token");
+}
+
+void testTenKeyFullFieldFallbackSinglesSwitchHandsAfterDensePhrase() {
+    keyconv::Chart chart;
+    chart.meta.sourceKeyCount = 7;
+    addTimingPoint(chart);
+    for (int i = 0; i < 3; ++i) {
+        keyconv::Note note;
+        note.id = "jack" + std::to_string(i);
+        note.time = 1000 + i * 200;
+        note.lane = 0;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+    for (int i = 0; i < 3; ++i) {
+        keyconv::Note note;
+        note.id = "single" + std::to_string(i);
+        note.time = 1850 + i * 450;
+        note.lane = i + 1;
+        note.sourceLane = note.lane;
+        note.type = keyconv::NoteType::Tap;
+        chart.notes.push_back(note);
+    }
+
+    const auto rail = keyconv::buildFullFieldRail(chart, 7, 10, 2, 500, true);
+    const auto first = rail.hintsByNoteId.find("single0");
+    const auto second = rail.hintsByNoteId.find("single1");
+    const auto third = rail.hintsByNoteId.find("single2");
+    require(first != rail.hintsByNoteId.end() &&
+                second != rail.hintsByNoteId.end() &&
+                third != rail.hintsByNoteId.end(),
+            "full-field fallback rail should cover trailing singles");
+    require(first->second.role == keyconv::PhraseRole::RightHandVoice,
+            "first fallback single after a left-hand phrase should switch to right hand");
+    require(second->second.role == keyconv::PhraseRole::LeftHandVoice &&
+                third->second.role == keyconv::PhraseRole::RightHandVoice,
+            "nearby fallback singles should keep switching hands instead of catch-up clumping");
+}
+
 void testTenKeyFullFieldRemixDensityAndSafety() {
     keyconv::Chart chart;
     chart.meta.sourceKeyCount = 7;
@@ -1423,6 +1488,36 @@ void testPreserveTapPlusCanUseSecondSliceFillSlot() {
     require(quality.collisionCount == 0, "second fill slot should avoid collisions");
 }
 
+void testFourToSixSmallTapPlusAddsNativeLane() {
+    const auto chart = makeChart(4,
+                                 {
+                                     {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {1500, 1, keyconv::NoteType::Tap, std::nullopt},
+                                     {2000, 3, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 6;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveTapPlus;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    std::set<int> activeLanes;
+    for (const auto& note : result.chart.notes) {
+        activeLanes.insert(note.lane);
+    }
+
+    require(result.report.quality.addedByTapPlus >= 1,
+            "4K to 6K tap-plus should add at least one note on small charts");
+    require(activeLanes.size() >= 4,
+            "4K to 6K tap-plus should open a real extra 6K lane");
+    require(result.report.quality.collisionCount == 0, "4K to 6K tap-plus should avoid collisions");
+    require(result.report.quality.unsolvedCreatedJacks == 0,
+            "4K to 6K tap-plus should not leave unsolved created jacks");
+}
+
 void testPpgChordDoesNotCollapse() {
     const auto chart = makeChart(4,
                                  {
@@ -1586,6 +1681,30 @@ void testAssignmentAvoidsCreatedJackWithAdaptiveRadius() {
     require(prevented > 0, "adaptive assignment should count the rejected folding lane");
 }
 
+void testAdvisoryLanePolicyBiasesSafeCandidates() {
+    keyconv::Chart chart = makeChart(4, {
+        {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+        {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+    });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 4;
+    options.targetKeyCount = 10;
+    options.style = keyconv::ConversionStyle::Playable;
+    options.expansionPolicy = keyconv::ExpansionPolicy::PreserveNoteCount;
+    options.maxAddedNoteRatio = 0.0;
+    options.advisoryTargetLanes = {9, 9};
+    options.advisoryLaneWeight = 18.0;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+    const auto lanes = lanesOf(result.chart);
+    require(std::find(lanes.begin(), lanes.end(), 9) != lanes.end(),
+            "advisory lane should bias at least one safe placement");
+    require(result.report.quality.collisionCount == 0,
+            "advisory lane policy must not bypass same-time collision safety");
+}
+
 void testRepairDoesNotCreateJack() {
     auto notes = std::vector<keyconv::Note>{
         keyconv::Note{"hold", 900, 0, keyconv::NoteType::Hold, 1300, "", 2},
@@ -1735,6 +1854,42 @@ void testCompressHybridDropsTapOverflow() {
     require(result.report.quality.rolledByCompression == 0, "hybrid should not roll tap overflow by default");
     require(result.report.quality.collisionCount == 0, "hybrid tap drop should avoid collisions");
     require(result.report.quality.noOverlapGuaranteed, "hybrid tap drop should guarantee no overlap");
+}
+
+void testFiveToFourCenterLaneUsesNativeInnerPair() {
+    const auto chart = makeChart(5,
+                                 {
+                                     {1000, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {1700, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {2400, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {3100, 2, keyconv::NoteType::Tap, std::nullopt},
+                                     {3800, 0, keyconv::NoteType::Tap, std::nullopt},
+                                     {4500, 4, keyconv::NoteType::Tap, std::nullopt},
+                                 });
+
+    keyconv::ConvertOptions options;
+    options.sourceKeyCount = 5;
+    options.targetKeyCount = 4;
+    options.style = keyconv::ConversionStyle::Playable;
+
+    const keyconv::Converter converter;
+    const auto result = converter.convert(chart, options);
+
+    std::set<int> centerTargets;
+    for (const auto& note : result.chart.notes) {
+        if (note.sourceLane.value_or(note.lane) != 2) {
+            continue;
+        }
+        require(note.lane == 1 || note.lane == 2,
+                "5K center lane should fold into native 4K inner lanes only");
+        centerTargets.insert(note.lane);
+    }
+
+    require(centerTargets.size() == 2,
+            "5K center lane should use both 4K inner lanes instead of sticking to one side");
+    require(result.report.quality.collisionCount == 0, "5K to 4K native fold should avoid collisions");
+    require(result.report.quality.unsolvedCreatedJacks == 0,
+            "5K to 4K native fold should not leave unsolved created jacks");
 }
 
 void testCompressHybridRollsOverflowHold() {
@@ -4847,6 +5002,58 @@ void testNk2SevenToTenOriginalTapsUseFreerField() {
             "NK2 freer tap placement should keep created-jack gate intact");
 }
 
+void testNk2SevenToTenOriginalTapsFollowMirrorCadence() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int i = 0; i < 16; ++i) {
+        notes.push_back({1000 + i * 900, 0, keyconv::NoteType::Tap, std::nullopt});
+    }
+    auto chart = makeChart(7, notes);
+    addTimingPoint(chart);
+
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 10;
+    options.mode = keyconv::nk2::Mode::Faithful;
+
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const int expectedSides[] = {-1, 1, 1, -1, -1, 1, 1, -1};
+    const std::size_t expectedSideCount = sizeof(expectedSides) / sizeof(expectedSides[0]);
+    std::vector<int> actualSides;
+    int left = 0;
+    int right = 0;
+    for (const auto& note : result.chart.notes) {
+        if (note.sourceLane.value_or(note.lane) != 0) {
+            continue;
+        }
+        const int side = note.lane < 5 ? -1 : 1;
+        if (side < 0) {
+            ++left;
+        } else {
+            ++right;
+        }
+        if (actualSides.size() < expectedSideCount) {
+            actualSides.push_back(side);
+        }
+    }
+
+    require(actualSides.size() == expectedSideCount,
+            "NK2 mirror cadence fixture should keep the first eight original taps");
+    for (std::size_t i = 0; i < actualSides.size(); ++i) {
+        require(actualSides[i] == expectedSides[i],
+                "NK2 original taps should follow LRRL panel cadence instead of clumping left: " +
+                    distributionText(result.report.laneDistribution));
+    }
+    require(left == right,
+            "NK2 LRRL cadence should keep repeated side-lane taps balanced across panels: " +
+                distributionText(result.report.laneDistribution));
+    require(result.report.sameTimeCollisions == 0,
+            "NK2 LRRL cadence should keep collision gate intact");
+    require(result.report.longNoteConflicts == 0,
+            "NK2 LRRL cadence should keep LN gate intact");
+    require(result.report.createdJacks == 0,
+            "NK2 LRRL cadence should keep created-jack gate intact");
+}
+
 void testNk2SevenToTenCoveragePressureFillsBridgeGaps() {
     std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
     for (int i = 0; i < 24; ++i) {
@@ -4995,6 +5202,10 @@ int main() {
          testTenKeyFullFieldStreamAlternatesHandsInsideLongToken},
         {"10K full-field long stair alternates hands inside token",
          testTenKeyFullFieldLongStairAlternatesHandsInsideToken},
+        {"10K full-field short stair alternates hands inside token",
+         testTenKeyFullFieldShortStairAlternatesHandsInsideToken},
+        {"10K full-field fallback singles switch hands after dense phrase",
+         testTenKeyFullFieldFallbackSinglesSwitchHandsAfterDensePhrase},
         {"10K full-field remix density and safety",
          testTenKeyFullFieldRemixDensityAndSafety},
         {"8K playable candidate radius remains stable", testEightKeyPlayableCandidateRadiusRemainsStable},
@@ -5007,12 +5218,14 @@ int main() {
         {"adaptive growth budget uses density buckets", testAdaptiveGrowthBudgetUsesDensityBuckets},
         {"adaptive growth budget allows sparse profiled fill", testAdaptiveGrowthBudgetAllowsSparseProfiledFill},
         {"preserve tap plus can use second slice fill slot", testPreserveTapPlusCanUseSecondSliceFillSlot},
+        {"4K to 6K small tap-plus opens native lane", testFourToSixSmallTapPlusAddsNativeLane},
         {"PPG chord does not collapse", testPpgChordDoesNotCollapse},
         {"PPG LN avoids tap", testPpgLnAvoidsTap},
         {"PPG playable reduces jack and faithful preserves more", testPpgPlayableReducesJackAndFaithfulPreservesMore},
         {"PPG avoids created jack from moved pattern", testPpgAvoidsCreatedJackFromMovedPattern},
         {"different source lanes do not fold into jack", testDifferentSourceLanesDoNotFoldIntoJack},
         {"assignment avoids created jack with adaptive radius", testAssignmentAvoidsCreatedJackWithAdaptiveRadius},
+        {"advisory lane policy biases safe candidates", testAdvisoryLanePolicyBiasesSafeCandidates},
         {"repair does not create jack", testRepairDoesNotCreateJack},
         {"Converter facade reserved options", testConverterFacadeReservedOptions},
         {"training style parses and converts", testTrainingStyleParsesAndConverts},
@@ -5020,6 +5233,7 @@ int main() {
         {"compress drop five-note chord", testCompressDropFiveNoteChord},
         {"compress drop six-note chord", testCompressDropSixNoteChord},
         {"compress hybrid drops tap overflow", testCompressHybridDropsTapOverflow},
+        {"5K to 4K center lane uses native inner pair", testFiveToFourCenterLaneUsesNativeInnerPair},
         {"compress hybrid rolls overflow hold", testCompressHybridRollsOverflowHold},
         {"compress auto drops overflow hold for low-key recreation",
          testCompressAutoDropsOverflowHoldForLowKeyRecreation},
@@ -5135,6 +5349,8 @@ int main() {
          testNk2SevenToTenLnAnchorsUseFreerField},
         {"NK2 7K to 10K original taps use freer field",
          testNk2SevenToTenOriginalTapsUseFreerField},
+        {"NK2 7K to 10K original taps follow mirror cadence",
+         testNk2SevenToTenOriginalTapsFollowMirrorCadence},
         {"NK2 7K to 10K coverage pressure fills bridge gaps",
          testNk2SevenToTenCoveragePressureFillsBridgeGaps},
         {"NK2 7K to 10K panel coverage fills right-panel gaps",

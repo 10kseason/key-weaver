@@ -51,6 +51,8 @@ struct AssignmentContext {
     PpgWeights weights;
     bool preserveLaneDrift = false;
     bool tenKFullFieldRemix = false;
+    const std::vector<int>* advisoryTargetLanes = nullptr;
+    double advisoryLaneWeight = 0.0;
     int* preventedJacksByAssignment = nullptr;
     const GestureRail* gestureRail = nullptr;
 };

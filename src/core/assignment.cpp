@@ -87,6 +87,29 @@ void keepPreferredZoneCandidates(LaneCandidateSet& set) {
     }
 }
 
+std::optional<int> advisoryLaneForNoteIndex(const AssignmentContext& context, std::size_t noteIndex) {
+    if (context.advisoryTargetLanes == nullptr ||
+        noteIndex >= context.advisoryTargetLanes->size() ||
+        context.targetKeyCount <= 0) {
+        return std::nullopt;
+    }
+    const int lane = (*context.advisoryTargetLanes)[noteIndex];
+    if (lane < 0 || lane >= context.targetKeyCount) {
+        return std::nullopt;
+    }
+    return lane;
+}
+
+void addAdvisoryCandidate(LaneCandidateSet& set,
+                          const AssignmentContext& context,
+                          std::size_t noteIndex) {
+    const auto lane = advisoryLaneForNoteIndex(context, noteIndex);
+    if (!lane.has_value()) {
+        return;
+    }
+    addUnique(set.candidates, *lane);
+}
+
 double recentJackPenalty(const std::vector<Note>& placed, int time, int lane, int thresholdMs) {
     double penalty = 0.0;
     for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
@@ -389,8 +412,40 @@ bool useEvenHandSplit(int sourceKeyCount, int targetKeyCount) {
            sourceKeyCount % 2 == 0 && targetKeyCount % 2 == 0;
 }
 
+bool useNativeFiveToFourFold(int sourceKeyCount, int targetKeyCount) {
+    return sourceKeyCount == 5 && targetKeyCount == 4;
+}
+
+bool useNativeFiveToFourFold(const AssignmentContext& context) {
+    return useNativeFiveToFourFold(context.sourceKeyCount, context.targetKeyCount) &&
+           (context.style == ConversionStyle::Playable ||
+            context.style == ConversionStyle::Compress ||
+            context.style == ConversionStyle::Training);
+}
+
 std::pair<int, int> dualFiveZoneForSource(int sourceLane) {
     return sourceLane <= 3 ? std::pair<int, int>{0, 4} : std::pair<int, int>{5, 9};
+}
+
+std::pair<int, int> nativeFourZoneForFiveSource(int sourceLane) {
+    switch (clampInt(sourceLane, 0, 4)) {
+        case 0:
+            return {0, 0};
+        case 1:
+            return {0, 1};
+        case 2:
+            return {1, 2};
+        case 3:
+            return {2, 3};
+        case 4:
+        default:
+            return {3, 3};
+    }
+}
+
+int nativeFourBaseLaneForFiveSource(int sourceLane) {
+    static constexpr std::array<int, 5> kNativeFourAnchors = {0, 1, 1, 2, 3};
+    return kNativeFourAnchors[static_cast<std::size_t>(clampInt(sourceLane, 0, 4))];
 }
 
 std::pair<int, int> evenHandZoneForSource(int sourceLane, int sourceKeyCount, int targetKeyCount) {
@@ -420,6 +475,9 @@ std::pair<int, int> balanceZoneForSource(int sourceLane, int sourceKeyCount, int
     }
     if (useDualFiveSplit(sourceKeyCount, targetKeyCount)) {
         return dualFiveZoneForSource(sourceLane);
+    }
+    if (useNativeFiveToFourFold(sourceKeyCount, targetKeyCount)) {
+        return nativeFourZoneForFiveSource(sourceLane);
     }
     if (useEvenHandSplit(sourceKeyCount, targetKeyCount)) {
         return evenHandZoneForSource(sourceLane, sourceKeyCount, targetKeyCount);
@@ -594,6 +652,47 @@ double mirrorCompressScore(int sourceLane,
             std::clamp((panelAverage - centerUse) / std::max(1.0, panelAverage), 0.0, 1.0);
         if (!strongJackHint) {
             score += context.weights.density * centerNeed * 4.0;
+        }
+    }
+
+    return score;
+}
+
+double nativeFiveToFourFoldScore(const Note& source,
+                                 int targetLane,
+                                 const GestureHint* hint,
+                                 const AssignmentContext& context) {
+    if (!useNativeFiveToFourFold(context)) {
+        return 0.0;
+    }
+
+    const int sourceLane = source.sourceLane.value_or(source.lane);
+    const auto [zoneStart, zoneEnd] = nativeFourZoneForFiveSource(sourceLane);
+    if (targetLane < zoneStart || targetLane > zoneEnd) {
+        return -context.weights.shape * 4.0;
+    }
+
+    double score = context.weights.shape * 0.45;
+    if (sourceLane != 2 || targetLane < 1 || targetLane > 2 ||
+        context.laneUse.size() < static_cast<std::size_t>(context.targetKeyCount)) {
+        return score;
+    }
+
+    const int otherInner = targetLane == 1 ? 2 : 1;
+    const double laneUse = static_cast<double>(context.laneUse[static_cast<std::size_t>(targetLane)]);
+    const double otherUse = static_cast<double>(context.laneUse[static_cast<std::size_t>(otherInner)]);
+    const double average = std::max(1.0, (laneUse + otherUse) / 2.0);
+    score += context.weights.density * std::clamp((otherUse - laneUse) / average, -0.50, 0.90);
+
+    const bool longJackHint = hint != nullptr && hint->kind == PatternKind::Jack && hint->motifHitCount >= 5;
+    const auto previousCenter =
+        recentSameSourceLane(context.placed, sourceLane, source.time, std::max(0, context.jackWindowMs) * 2);
+    if (!longJackHint && previousCenter.has_value()) {
+        const int delta = std::abs(targetLane - previousCenter->lane);
+        if (delta == 1) {
+            score += context.weights.shape * 0.95;
+        } else if (delta == 0) {
+            score -= context.weights.shape * 0.35;
         }
     }
 
@@ -1013,8 +1112,13 @@ LaneCandidateSet generateCandidateLanes(int sourceLane,
     set.sourceLane = sourceLane;
     const bool stagedTenKey = tenKeyStagedNativeActive(sourceK, targetK, style, tenKeyPlannerPolicy);
     const bool mirrorTenKey = tenKeyMirrorCompressActive(sourceK, targetK, style, tenKeyPlannerPolicy);
+    const bool nativeFiveToFour = useNativeFiveToFourFold(sourceK, targetK) &&
+                                  (style == ConversionStyle::Playable ||
+                                   style == ConversionStyle::Compress ||
+                                   style == ConversionStyle::Training);
     set.baseLane = mirrorTenKey ? mirrorTenBaseLaneForSource(sourceLane)
                    : stagedTenKey ? stagedTenBaseLaneForSource(sourceLane)
+                   : nativeFiveToFour ? nativeFourBaseLaneForFiveSource(sourceLane)
                    : useDualFiveSplit(sourceK, targetK)
                        ? dualFiveBaseLaneForSource(sourceLane, targetK)
                        : mapLaneDirect(sourceLane, sourceK, targetK);
@@ -1027,6 +1131,11 @@ LaneCandidateSet generateCandidateLanes(int sourceLane,
         set.preferredZoneEnd = zoneEnd;
     } else if (useDualFiveSplit(sourceK, targetK)) {
         const auto [zoneStart, zoneEnd] = dualFiveZoneForSource(sourceLane);
+        set.hasPreferredZone = true;
+        set.preferredZoneStart = zoneStart;
+        set.preferredZoneEnd = zoneEnd;
+    } else if (nativeFiveToFour) {
+        const auto [zoneStart, zoneEnd] = nativeFourZoneForFiveSource(sourceLane);
         set.hasPreferredZone = true;
         set.preferredZoneStart = zoneStart;
         set.preferredZoneEnd = zoneEnd;
@@ -1119,6 +1228,13 @@ std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
         }
         const auto* hint = findGestureHint(context.gestureRail, note.id);
         addGestureCandidates(baseSet, hint, context.targetKeyCount);
+        addAdvisoryCandidate(baseSet, context, noteIndex);
+        if (useNativeFiveToFourFold(context) && sourceLane == 2) {
+            baseSet.hasPreferredZone = true;
+            baseSet.preferredZoneStart = 1;
+            baseSet.preferredZoneEnd = 2;
+            keepPreferredZoneCandidates(baseSet);
+        }
         if (context.tenKFullFieldRemix && hint != nullptr) {
             keepPreferredZoneCandidates(baseSet);
         }
@@ -1129,7 +1245,9 @@ std::vector<SliceAssignment> generateSliceAssignments(const TimeSlice& slice,
             sourceAnchor.reset();
         }
         const bool expansionMode = context.targetKeyCount > context.sourceKeyCount;
-        if (!expansionMode && slice.noteIndices.size() == 1 && sourceAnchor.has_value() &&
+        const bool nativeFiveToFourCenter = useNativeFiveToFourFold(context) && sourceLane == 2;
+        if (!expansionMode && !nativeFiveToFourCenter &&
+            slice.noteIndices.size() == 1 && sourceAnchor.has_value() &&
             std::find(candidates.begin(), candidates.end(), *sourceAnchor) != candidates.end() &&
             !hasSameTimeNote(context.placed, note.time, *sourceAnchor)) {
             Note anchored = note;
@@ -1192,12 +1310,14 @@ double scoreAssignment(const TimeSlice& slice,
         const bool sourceRepeatNearAny =
             sourceRepeatNearby ||
             hasNearbySourceLaneNeighbor(sourceNotes, sourceLane, source.id, source.time, jackWindowMsForBalance);
+        const bool nativeFiveToFourCenter = useNativeFiveToFourFold(context) && sourceLane == 2;
         const auto sourceAnchor =
             recentSourceLaneAnchor(context.placed, sourceLane, source.time, context.targetKeyCount);
         const bool looseTenKeyNonJack =
             tenKeyLooseNonJackExpansionActive(context) && slice.chordSize == 1 && hint == nullptr &&
             !sourceRepeatNearAny;
         const auto driftLane = preserveLaneDriftLane(sourceLane, source.time, context);
+        const auto advisoryLane = advisoryLaneForNoteIndex(context, slice.noteIndices[i]);
 
         score += context.weights.position *
                  (1.0 - std::abs(normalizedLane(sourceLane, context.sourceKeyCount) -
@@ -1205,6 +1325,7 @@ double scoreAssignment(const TimeSlice& slice,
         score += stagedTenKeyScore(sourceLane, targetLane, hint, context);
         score += mirrorCompressScore(sourceLane, targetLane, hint, context);
         score += dualFivePanelScore(sourceLane, targetLane, hint, context);
+        score += nativeFiveToFourFoldScore(source, targetLane, hint, context);
         if (!sourceJackLike && !sourceRepeatNearby && (!sourceAnchor.has_value() || looseTenKeyNonJack)) {
             const double densityScale = sourceAnchor.has_value() ? 0.9 : 1.5;
             score += context.weights.density *
@@ -1226,6 +1347,9 @@ double scoreAssignment(const TimeSlice& slice,
             if (looseTenKeyNonJack) {
                 anchorWeight = 0.60;
             }
+            if (nativeFiveToFourCenter) {
+                anchorWeight = 0.20;
+            }
             if (preserveLaneDriftActive(context) && !sourceRepeatNearby) {
                 anchorWeight = 0.30;
             }
@@ -1235,6 +1359,12 @@ double scoreAssignment(const TimeSlice& slice,
         }
         if (!sourceJackLike && !sourceRepeatNearby && driftLane.has_value()) {
             score += preserveLaneDriftScore(targetLane, *driftLane, context);
+        }
+        if (advisoryLane.has_value() && context.advisoryLaneWeight > 0.0) {
+            const double advisoryMatch = sourceLaneAnchorScore(targetLane,
+                                                               *advisoryLane,
+                                                               context.targetKeyCount);
+            score += context.advisoryLaneWeight * advisoryMatch;
         }
 
         if (!usedInSlice.insert(targetLane).second) {

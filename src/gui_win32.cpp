@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -54,21 +55,28 @@ constexpr int kCheckDebugReports = 121;
 constexpr int kStaticStatus = 122;
 constexpr int kComboAlgorithm = 123;
 constexpr int kComboNk2Mode = 124;
+constexpr int kComboModel = 125;
 
-constexpr COLORREF kColorWindow = RGB(246, 248, 250);
+constexpr const wchar_t* kModelOffLabel = L"off";
+constexpr const wchar_t* kTransformerUeCircusGalopModelLabel =
+    L"Transformer model (u_e X CircusGalop Chart dataset model)";
+constexpr const wchar_t* kTransformerUeCircusGalopModelPath =
+    L"models\\u_e_circusgalop_chart_dataset_lane_policy.onnx";
+
+constexpr COLORREF kColorWindow = RGB(242, 244, 247);
 constexpr COLORREF kColorPanel = RGB(255, 255, 255);
-constexpr COLORREF kColorPanelBorder = RGB(218, 224, 229);
-constexpr COLORREF kColorSidebar = RGB(8, 25, 32);
-constexpr COLORREF kColorSidebarMuted = RGB(171, 190, 197);
-constexpr COLORREF kColorText = RGB(24, 31, 36);
-constexpr COLORREF kColorMutedText = RGB(91, 103, 112);
-constexpr COLORREF kColorAccent = RGB(0, 160, 151);
-constexpr COLORREF kColorAccentDark = RGB(0, 111, 112);
-constexpr COLORREF kColorAmber = RGB(232, 169, 54);
+constexpr COLORREF kColorPanelBorder = RGB(212, 219, 226);
+constexpr COLORREF kColorSidebar = RGB(24, 34, 43);
+constexpr COLORREF kColorSidebarMuted = RGB(176, 190, 203);
+constexpr COLORREF kColorText = RGB(22, 29, 37);
+constexpr COLORREF kColorMutedText = RGB(88, 102, 116);
+constexpr COLORREF kColorAccent = RGB(0, 137, 123);
+constexpr COLORREF kColorAccentDark = RGB(23, 76, 133);
+constexpr COLORREF kColorAmber = RGB(219, 155, 45);
 
-constexpr int kSidebarWidth = 240;
-constexpr int kMainLeft = 270;
-constexpr int kMainRight = 1390;
+constexpr int kMainLeft = 32;
+constexpr int kMainRight = 1408;
+constexpr int kSidebarWidth = 0;
 
 struct ProcessResult {
     DWORD exitCode = 1;
@@ -83,6 +91,7 @@ struct ToolOptions {
     std::wstring targetKeys = L"10";
     std::wstring algorithm = L"NK1 (Classic)";
     std::wstring nk2Mode = L"faithful";
+    std::wstring modelPreset = kModelOffLabel;
     std::wstring expansionPolicy = L"auto (normal)";
     std::wstring compressPolicy = L"auto";
     std::wstring streamTransform = L"off";
@@ -123,6 +132,7 @@ struct AppState {
     HWND targetEdit = nullptr;
     HWND algorithmCombo = nullptr;
     HWND nk2ModeCombo = nullptr;
+    HWND modelCombo = nullptr;
     HWND expansionCombo = nullptr;
     HWND compressCombo = nullptr;
     HWND streamProfileCombo = nullptr;
@@ -147,6 +157,7 @@ struct AppState {
     std::wstring lastCommand;
     std::vector<std::filesystem::path> batchInputs;
     bool suppressInputChange = false;
+    bool batchInputsFromFolder = false;
 };
 
 struct DropTargetSubclass {
@@ -259,6 +270,11 @@ std::wstring getWindowText(HWND hwnd) {
 
 void setWindowText(HWND hwnd, const std::wstring& text) {
     SetWindowTextW(hwnd, text.c_str());
+    InvalidateRect(hwnd, nullptr, TRUE);
+    HWND parent = GetParent(hwnd);
+    if (parent != nullptr) {
+        InvalidateRect(parent, nullptr, FALSE);
+    }
 }
 
 bool pumpPendingUiMessages() {
@@ -449,17 +465,17 @@ void drawLogo(HDC dc, const AppState& state) {
     RECT version{96, 60, kSidebarWidth - 18, 80};
     RECT ready{96, 82, kSidebarWidth - 18, 104};
     drawUiText(dc, state.titleFont, RGB(246, 250, 250), L"KeyWeaver", title);
-    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.0.0", version);
+    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.1.1", version);
     drawUiText(dc, state.smallFont, RGB(116, 232, 172), L"Ready", ready);
 }
 
 void drawLanePreview(HDC dc, const AppState& state) {
-    RECT title{kMainRight - 340, 248, kMainRight - 20, 272};
+    RECT title{kMainRight - 320, 250, kMainRight - 18, 274};
     drawUiText(dc, state.sectionFont, kColorText, L"Lane Preview (Target 10K)", title);
-    const int x = kMainRight - 326;
-    const int y = 290;
+    const int x = kMainRight - 306;
+    const int y = 306;
     const int laneW = 26;
-    const int laneH = 82;
+    const int laneH = 76;
     HBRUSH dark = CreateSolidBrush(RGB(21, 28, 31));
     HBRUSH teal = CreateSolidBrush(kColorAccent);
     HBRUSH dimTeal = CreateSolidBrush(RGB(18, 82, 83));
@@ -534,43 +550,42 @@ void paintUiChrome(AppState& state, HDC dc) {
     RECT client{};
     GetClientRect(state.hwnd, &client);
     fillRect(dc, client, kColorWindow);
-    RECT sidebar{0, 0, kSidebarWidth, client.bottom};
-    fillRect(dc, sidebar, kColorSidebar);
 
-    drawLogo(dc, state);
-    drawSidebarItem(dc, state, 128, L"Convert", L"Single conversion", true);
-    drawSidebarItem(dc, state, 198, L"Batch", L"Multiple files", false);
-    drawSidebarItem(dc, state, 268, L"Reports", L"History & compare", false);
-    drawSidebarItem(dc, state, 338, L"Profiles", L"Target-K profiles", false);
-    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"Settings",
-               RECT{54, client.bottom - 176, kSidebarWidth - 16, client.bottom - 150});
-    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"Help",
-               RECT{54, client.bottom - 130, kSidebarWidth - 16, client.bottom - 104});
-    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"About",
-               RECT{54, client.bottom - 84, kSidebarWidth - 16, client.bottom - 58});
-    fillRect(dc, RECT{0, client.bottom - 42, kSidebarWidth, client.bottom - 41}, RGB(28, 48, 55));
-    drawUiText(dc, state.uiFont, RGB(222, 232, 235), L"<  Collapse",
-               RECT{28, client.bottom - 36, kSidebarWidth - 16, client.bottom - 8});
+    RECT header{kMainLeft, 24, kMainRight, 96};
+    roundRect(dc, header, RGB(23, 34, 45), RGB(23, 34, 45), 8);
+    fillRect(dc, RECT{header.left, header.bottom - 4, header.right, header.bottom}, kColorAccent);
+    drawUiText(dc, state.titleFont, RGB(247, 250, 252), L"KeyWeaver", RECT{56, 38, 260, 66});
+    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.1.1 conversion console",
+               RECT{56, 66, 320, 88});
+    drawUiText(dc, state.smallFont, RGB(207, 219, 229), L"Classic / NK2  |  Single / Batch  |  Reports",
+               RECT{1020, 52, 1386, 76}, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-    roundRect(dc, RECT{kMainLeft, 166, kMainRight, 214}, kColorPanel, kColorPanelBorder);
-    roundRect(dc, RECT{kMainLeft, 226, kMainRight, 426}, kColorPanel, kColorPanelBorder);
-    roundRect(dc, RECT{kMainLeft, 432, kMainRight, 492}, kColorPanel, kColorPanelBorder);
-    roundRect(dc, RECT{kMainLeft, 510, 840, client.bottom - 48}, kColorPanel, kColorPanelBorder);
-    roundRect(dc, RECT{858, 510, kMainRight, client.bottom - 48}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{32, 118, 672, 426}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{692, 118, 1128, 426}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{1148, 118, 1408, 426}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{32, 452, 512, client.bottom - 52}, kColorPanel, kColorPanelBorder);
+    roundRect(dc, RECT{532, 452, 1408, client.bottom - 52}, kColorPanel, kColorPanelBorder);
 
-    drawLanePreview(dc, state);
+    drawUiText(dc, state.sectionFont, kColorText, L"Files", RECT{54, 130, 250, 154});
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Executable, input, and output destination",
+               RECT{54, 152, 430, 174});
 
-    drawUiText(dc, state.sectionFont, kColorText, L"Report / Matrix Preview",
-               RECT{kMainLeft + 18, 524, 600, 548});
-    drawUiText(dc, state.uiFont, kColorText, L"Summary",
-               RECT{kMainLeft + 18, 558, kMainLeft + 120, 582});
-    drawUiText(dc, state.uiFont, kColorMutedText, L"Per-Policy Matrix",
-               RECT{kMainLeft + 118, 558, kMainLeft + 280, 582});
-    fillRect(dc, RECT{kMainLeft + 18, 583, kMainLeft + 86, 585}, kColorAccent);
-    drawTimelinePreview(dc, state, RECT{kMainLeft + 18, client.bottom - 118, 822, client.bottom - 68});
+    drawUiText(dc, state.sectionFont, kColorText, L"Recipe", RECT{714, 130, 900, 154});
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Engine, target key count, and conversion policy",
+               RECT{714, 152, 1100, 174});
 
-    drawUiText(dc, state.sectionFont, kColorText, L"Log", RECT{876, 524, 1040, 548});
-    drawUiText(dc, state.smallFont, kColorMutedText, L"CPU: auto workers  |  Drag charts or folders onto the window",
+    drawUiText(dc, state.sectionFont, kColorText, L"Run", RECT{1170, 130, 1320, 154});
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Execute, open outputs, or copy CLI",
+               RECT{1170, 152, 1390, 174});
+
+    drawUiText(dc, state.sectionFont, kColorText, L"Summary", RECT{54, 466, 250, 492});
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Report metrics and batch results",
+               RECT{54, 490, 420, 512});
+    drawUiText(dc, state.sectionFont, kColorText, L"Log", RECT{554, 466, 720, 492});
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Command output",
+               RECT{554, 490, 880, 512});
+
+    drawUiText(dc, state.smallFont, kColorMutedText, L"Local chart conversion workspace",
                RECT{kMainLeft, client.bottom - 34, kMainRight, client.bottom - 8});
 }
 
@@ -578,6 +593,28 @@ std::filesystem::path moduleDirectory() {
     std::array<wchar_t, MAX_PATH> buffer{};
     const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
     return std::filesystem::path(std::wstring(buffer.data(), buffer.data() + length)).parent_path();
+}
+
+bool pathExists(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::exists(path, error);
+}
+
+std::filesystem::path transformerPresetModelPath(const ToolOptions& options) {
+    const auto baseDir = options.keyconvExe.has_parent_path() ? options.keyconvExe.parent_path()
+                                                              : moduleDirectory();
+    const auto besideExe = baseDir / kTransformerUeCircusGalopModelPath;
+    if (pathExists(besideExe)) {
+        return besideExe;
+    }
+
+    std::error_code error;
+    const auto besideWorkingDirectory = std::filesystem::current_path(error) / kTransformerUeCircusGalopModelPath;
+    if (!error && pathExists(besideWorkingDirectory)) {
+        return besideWorkingDirectory;
+    }
+
+    return besideExe;
 }
 
 std::filesystem::path absolutePath(const std::filesystem::path& path) {
@@ -763,6 +800,18 @@ bool nk2EngineActive(const ToolOptions& options) {
     return options.algorithm == L"NK2 (Experimental)";
 }
 
+bool transformerModelPresetActive(const ToolOptions& options) {
+    return options.modelPreset == kTransformerUeCircusGalopModelLabel;
+}
+
+std::wstring normalizedSourceOverride(const std::wstring& value) {
+    const auto text = trim(value);
+    if (text.empty() || text == L"auto") {
+        return {};
+    }
+    return text;
+}
+
 std::wstring nk2ModeCliValue(const std::wstring& value) {
     if (value == L"native") {
         return L"native";
@@ -902,9 +951,10 @@ std::wstring buildSingleCommand(ToolOptions options,
 
     std::wstring command = quoteArg(options.keyconvExe);
     appendArg(command, quoteArg(options.inputFile));
-    if (!trim(options.sourceOverride).empty()) {
+    const auto sourceOverride = normalizedSourceOverride(options.sourceOverride);
+    if (!sourceOverride.empty()) {
         appendArg(command, L"--source");
-        appendArg(command, trim(options.sourceOverride));
+        appendArg(command, sourceOverride);
     }
     appendArg(command, L"--target");
     appendArg(command, options.targetKeys);
@@ -989,9 +1039,10 @@ std::wstring buildBatchCommand(const ToolOptions& options,
     appendArg(command, L"--batch");
     appendArg(command, L"--input-list");
     appendArg(command, quoteArg(inputList));
-    if (!trim(options.sourceOverride).empty()) {
+    const auto sourceOverride = normalizedSourceOverride(options.sourceOverride);
+    if (!sourceOverride.empty()) {
         appendArg(command, L"--source");
-        appendArg(command, trim(options.sourceOverride));
+        appendArg(command, sourceOverride);
     }
     appendArg(command, L"--target");
     appendArg(command, options.targetKeys);
@@ -1034,6 +1085,13 @@ std::wstring buildBatchCommand(const ToolOptions& options,
         appendArg(command, L"--out-dir");
         appendArg(command, quoteArg(*forcedOutputDir));
     }
+    if (transformerModelPresetActive(options)) {
+        appendArg(command, L"--onnx-policy");
+        appendArg(command, quoteArg(transformerPresetModelPath(options)));
+        appendArg(command, L"--onnx-provider");
+        appendArg(command, L"auto");
+        appendArg(command, L"--onnx-policy-strict");
+    }
     appendArg(command, L"--batch-quiet");
     return command;
 }
@@ -1049,9 +1107,10 @@ std::wstring buildMatrixCommand(const ToolOptions& options, OutputPaths& paths) 
 
     std::wstring command = quoteArg(options.keyconvExe);
     appendArg(command, quoteArg(options.inputFile));
-    if (!trim(options.sourceOverride).empty()) {
+    const auto sourceOverride = normalizedSourceOverride(options.sourceOverride);
+    if (!sourceOverride.empty()) {
         appendArg(command, L"--source");
-        appendArg(command, trim(options.sourceOverride));
+        appendArg(command, sourceOverride);
     }
     appendArg(command, L"--target");
     appendArg(command, options.targetKeys);
@@ -1068,7 +1127,9 @@ std::wstring buildMatrixCommand(const ToolOptions& options, OutputPaths& paths) 
     return command;
 }
 
-ProcessResult runProcess(const std::wstring& command, const std::filesystem::path& workingDirectory) {
+ProcessResult runProcess(const std::wstring& command,
+                         const std::filesystem::path& workingDirectory,
+                         const std::function<void(std::string_view)>& onOutput = {}) {
     SECURITY_ATTRIBUTES security{};
     security.nLength = sizeof(security);
     security.bInheritHandle = TRUE;
@@ -1150,6 +1211,9 @@ ProcessResult runProcess(const std::wstring& command, const std::filesystem::pat
     DWORD bytesRead = 0;
     while (ReadFile(readPipe, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0) {
         output.append(buffer.data(), buffer.data() + bytesRead);
+        if (onOutput) {
+            onOutput(std::string_view(buffer.data(), bytesRead));
+        }
     }
 
     WaitForSingleObject(process.hProcess, INFINITE);
@@ -1346,12 +1410,12 @@ std::optional<int> detectCircleSize(const std::filesystem::path& osuPath) {
 
 std::optional<int> parseSourceOverrideKeyCount(const std::wstring& value) {
     const auto text = trim(value);
-    if (text.empty()) {
+    if (text.empty() || text == L"auto") {
         return std::nullopt;
     }
     wchar_t* end = nullptr;
     const long parsed = std::wcstol(text.c_str(), &end, 10);
-    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 32) {
+    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 10) {
         return -1;
     }
     return static_cast<int>(parsed);
@@ -1577,18 +1641,54 @@ void setComboSelection(HWND combo, const wchar_t* value) {
     }
 }
 
+void disableBatchOnlyModel(ToolOptions& options) {
+    options.modelPreset = kModelOffLabel;
+}
+
+void selectDefaultBatchModel(AppState& state) {
+    if (state.modelCombo == nullptr || state.keyconvEdit == nullptr) {
+        return;
+    }
+    ToolOptions options;
+    options.keyconvExe = absolutePath(std::filesystem::path(getWindowText(state.keyconvEdit)));
+    const auto modelPath = transformerPresetModelPath(options);
+    setComboSelection(state.modelCombo,
+                      pathExists(modelPath) ? kTransformerUeCircusGalopModelLabel : kModelOffLabel);
+}
+
 void updateAlgorithmControlState(AppState& state) {
     if (state.nk2ModeCombo == nullptr || state.algorithmCombo == nullptr) {
         return;
     }
     const bool nk2 = comboText(state.algorithmCombo) == L"NK2 (Experimental)";
     EnableWindow(state.nk2ModeCombo, nk2 ? TRUE : FALSE);
+    if (state.modelCombo != nullptr) {
+        if (nk2 && comboText(state.modelCombo) != kModelOffLabel) {
+            setComboSelection(state.modelCombo, kModelOffLabel);
+        }
+        EnableWindow(state.modelCombo, nk2 ? FALSE : TRUE);
+    }
 }
 
 void appendLog(AppState& state, const std::wstring& text) {
+    std::wstring normalized;
+    normalized.reserve(text.size() + 16);
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const wchar_t ch = text[index];
+        if (ch == L'\r') {
+            normalized += L"\r\n";
+            if (index + 1 < text.size() && text[index + 1] == L'\n') {
+                ++index;
+            }
+        } else if (ch == L'\n') {
+            normalized += L"\r\n";
+        } else {
+            normalized.push_back(ch);
+        }
+    }
     const int length = GetWindowTextLengthW(state.logEdit);
     SendMessageW(state.logEdit, EM_SETSEL, length, length);
-    SendMessageW(state.logEdit, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(text.c_str()));
+    SendMessageW(state.logEdit, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(normalized.c_str()));
 }
 
 void clearSummary(AppState& state) {
@@ -1600,10 +1700,13 @@ void addSummaryLine(AppState& state, const std::wstring& text) {
 }
 
 std::wstring progressText(std::size_t done, std::size_t total, const wchar_t* label) {
-    const std::size_t percent = total == 0 ? 100 : (done * 100) / total;
+    const std::size_t percentDone = total == 0 ? 100 : (done * 100) / total;
+    const std::size_t percentLeft = percentDone >= 100 ? 0 : 100 - percentDone;
     const std::size_t remaining = done >= total ? 0 : total - done;
     std::wostringstream out;
-    out << label << L": " << percent << L"% done, " << remaining << L" left";
+    out << label << L": " << percentDone << L"% done, "
+        << percentLeft << L"% left, "
+        << remaining << L" left";
     return out.str();
 }
 
@@ -1663,10 +1766,11 @@ ToolOptions readToolOptions(const AppState& state) {
     const auto outputDirText = trim(getWindowText(state.outputDirEdit));
     options.outputDir = outputDirText.empty() ? options.inputFile.parent_path()
                                               : absolutePath(std::filesystem::path(outputDirText));
-    options.sourceOverride = trim(getWindowText(state.sourceEdit));
+    options.sourceOverride = normalizedSourceOverride(comboText(state.sourceEdit));
     options.targetKeys = trim(comboText(state.targetEdit));
     options.algorithm = comboText(state.algorithmCombo);
     options.nk2Mode = comboText(state.nk2ModeCombo);
+    options.modelPreset = comboText(state.modelCombo);
     options.expansionPolicy = comboText(state.expansionCombo);
     options.compressPolicy = comboText(state.compressCombo);
     options.streamTransform = comboText(state.streamProfileCombo);
@@ -1677,7 +1781,7 @@ ToolOptions readToolOptions(const AppState& state) {
     return options;
 }
 
-bool validateToolOptions(const ToolOptions& options, HWND owner) {
+bool validateToolOptions(const ToolOptions& options, HWND owner, bool batchMode = false) {
     if (options.keyconvExe.empty() || !std::filesystem::exists(options.keyconvExe)) {
         MessageBoxW(owner, L"KeyWeaver executable path is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
@@ -1697,12 +1801,36 @@ bool validateToolOptions(const ToolOptions& options, HWND owner) {
     }
     const auto sourceOverride = parseSourceOverrideKeyCount(options.sourceOverride);
     if (sourceOverride.has_value() && *sourceOverride < 0) {
-        MessageBoxW(owner, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
+        MessageBoxW(owner, L"Source must be auto or a key count from 1 to 10.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     if (nk2EngineActive(options) && nk2ModeCliValue(options.nk2Mode).empty()) {
         MessageBoxW(owner, L"NK2 mode is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
+    }
+    if (transformerModelPresetActive(options)) {
+        if (!batchMode) {
+            MessageBoxW(owner,
+                        L"Transformer model is batch-only. Use Batch Folder with a chart folder or multi-file drop.",
+                        L"KeyWeaver GUI",
+                        MB_ICONERROR);
+            return false;
+        }
+        if (nk2EngineActive(options)) {
+            MessageBoxW(owner,
+                        L"Transformer model uses the Classic ONNX lane-policy path. Switch Algorithm to NK1 (Classic).",
+                        L"KeyWeaver GUI",
+                        MB_ICONERROR);
+            return false;
+        }
+        const auto modelPath = transformerPresetModelPath(options);
+        if (!std::filesystem::exists(modelPath)) {
+            MessageBoxW(owner,
+                        (L"Transformer model file is not installed:\n" + modelPath.wstring()).c_str(),
+                        L"KeyWeaver GUI",
+                        MB_ICONERROR);
+            return false;
+        }
     }
     if (nk2EngineActive(options) &&
         options.streamTransform != L"off" &&
@@ -1802,6 +1930,7 @@ void copyToClipboard(HWND owner, const std::wstring& text) {
 
 void executeSingleConvert(AppState& state) {
     auto options = readToolOptions(state);
+    disableBatchOnlyModel(options);
     if (!validateToolOptions(options, state.hwnd)) {
         return;
     }
@@ -1852,6 +1981,7 @@ void executeSingleConvert(AppState& state) {
 
 void executeMatrix(AppState& state) {
     auto options = readToolOptions(state);
+    disableBatchOnlyModel(options);
     if (!validateToolOptions(options, state.hwnd)) {
         return;
     }
@@ -1898,7 +2028,7 @@ std::optional<std::filesystem::path> explicitOutputDir(const AppState& state) {
 }
 
 std::vector<std::filesystem::path> batchInputsForState(const AppState& state) {
-    if (!state.batchInputs.empty()) {
+    if (!state.batchInputs.empty() && (state.batchInputs.size() > 1 || state.batchInputsFromFolder)) {
         return state.batchInputs;
     }
     const auto inputText = trim(getWindowText(state.inputEdit));
@@ -1910,7 +2040,7 @@ std::vector<std::filesystem::path> batchInputsForState(const AppState& state) {
     if (std::filesystem::is_directory(input, error)) {
         return collectOsuFilesRecursively(input);
     }
-    return {input};
+    return {};
 }
 
 std::vector<std::filesystem::path> chooseBatchFolderInputs(AppState& state) {
@@ -1922,6 +2052,7 @@ std::vector<std::filesystem::path> chooseBatchFolderInputs(AppState& state) {
     setInputText(state, root.wstring());
     setWindowText(state.outputDirEdit, L"");
     state.batchInputs.clear();
+    state.batchInputsFromFolder = true;
     clearSummary(state);
     addSummaryLine(state, L"Scanning folder...");
     setStatus(state, L"Scanning: counting files");
@@ -2028,47 +2159,22 @@ void applyBatchJobResult(AppState& state, const BatchJobResult& result, int& suc
     appendLog(state, L"Output: " + result.paths.outputChart.wstring() + L"\r\n");
 }
 
-void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
+void executeBatchConvert(AppState& state) {
     auto baseOptions = readToolOptions(state);
-    if (nk2EngineActive(baseOptions)) {
-        MessageBoxW(state.hwnd,
-                    L"NK2 is single-input only in this milestone. Use Convert for one chart, or switch Algorithm to NK1 (Classic) for Batch.",
-                    L"KeyWeaver batch",
-                    MB_ICONINFORMATION);
-        setStatus(state, L"Batch unavailable for NK2");
-        return;
-    }
-    auto inputs = chooseFolderFirst ? chooseBatchFolderInputs(state) : batchInputsForState(state);
-    const auto inputText = trim(getWindowText(state.inputEdit));
-    const auto inputPath = inputText.empty() ? std::filesystem::path() : absolutePath(std::filesystem::path(inputText));
-    std::error_code inputError;
-    const bool hasDirectoryInput = !inputPath.empty() && std::filesystem::is_directory(inputPath, inputError);
-    if (!chooseFolderFirst && (inputs.empty() || (!hasDirectoryInput && state.batchInputs.size() <= 1))) {
+    auto inputs = batchInputsForState(state);
+    if (inputs.empty()) {
         inputs = chooseBatchFolderInputs(state);
     }
     if (inputs.empty()) {
-        MessageBoxW(state.hwnd, L"Select a songs folder containing .osu files, or drop multiple chart files first.",
+        MessageBoxW(state.hwnd, L"Choose or drop a chart folder for Batch. Single chart input uses Convert.",
                     L"KeyWeaver GUI", MB_ICONERROR);
         return;
     }
-    if (baseOptions.keyconvExe.empty() || !std::filesystem::exists(baseOptions.keyconvExe)) {
-        MessageBoxW(state.hwnd, L"KeyWeaver executable path is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
-        return;
-    }
-    if (baseOptions.targetKeys.empty()) {
-        MessageBoxW(state.hwnd, L"Target key count is required.", L"KeyWeaver GUI", MB_ICONERROR);
-        return;
-    }
-    const auto targetKeyCount = parseGuiTargetKeyCount(baseOptions.targetKeys);
-    if (targetKeyCount.has_value() && *targetKeyCount < 0) {
-        MessageBoxW(state.hwnd, L"GUI Target must be a key count from 4 to 10.", L"KeyWeaver GUI", MB_ICONERROR);
+    baseOptions.inputFile = absolutePath(inputs.front());
+    if (!validateToolOptions(baseOptions, state.hwnd, true)) {
         return;
     }
     const auto sourceFilter = parseSourceOverrideKeyCount(baseOptions.sourceOverride);
-    if (sourceFilter.has_value() && *sourceFilter < 0) {
-        MessageBoxW(state.hwnd, L"Source override must be a key count between 1 and 32.", L"KeyWeaver GUI", MB_ICONERROR);
-        return;
-    }
 
     const auto forcedOutputDir = explicitOutputDir(state);
     clearSummary(state);
@@ -2078,6 +2184,15 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
                      L" file(s), target " + baseOptions.targetKeys + L"K\r\n");
     if (sourceFilter.has_value()) {
         appendLog(state, L"Source filter: only " + std::to_wstring(*sourceFilter) + L"K .osu charts\r\n");
+    }
+    if (nk2EngineActive(baseOptions)) {
+        appendLog(state, L"Algorithm: NK2 (" + nk2ModeCliValue(baseOptions.nk2Mode) + L")\r\n");
+    }
+    if (transformerModelPresetActive(baseOptions) && !baseOptions.debugReports) {
+        appendLog(state, L"Model: " + baseOptions.modelPreset + L"\r\n");
+        appendLog(state, L"ONNX policy: " + transformerPresetModelPath(baseOptions).wstring() + L"\r\n");
+    } else if (transformerModelPresetActive(baseOptions)) {
+        appendLog(state, L"Batch model: disabled for Debug JSON per-chart conversion.\r\n");
     }
 
     if (!baseOptions.debugReports) {
@@ -2156,20 +2271,77 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
         }
         appendLog(state, L"Fast batch uses one KeyWeaver.exe process with an input list.\r\n");
         appendLog(state, L"> " + command + L"\r\n");
+        setStatus(state, progressText(0, fastInputs.size(), L"Batch"));
         UpdateWindow(state.hwnd);
 
+        std::mutex liveOutputMutex;
+        std::string liveOutput;
+        std::string lineBuffer;
+        bool streamedAnyOutput = false;
+        auto handleFastBatchLine = [&](std::string line) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            constexpr std::string_view progressPrefix = "Progress: ";
+            constexpr std::string_view summaryPrefix = "Batch summary:";
+            if (line.rfind(std::string(progressPrefix), 0) == 0) {
+                setStatus(state, L"Batch: " + widen(line.substr(progressPrefix.size())));
+            } else if (line.rfind(std::string(summaryPrefix), 0) == 0) {
+                addSummaryLine(state, widen(line));
+            }
+        };
+        auto drainFastBatchOutput = [&]() {
+            std::string chunk;
+            {
+                std::lock_guard<std::mutex> lock(liveOutputMutex);
+                chunk.swap(liveOutput);
+            }
+            if (chunk.empty()) {
+                return;
+            }
+            streamedAnyOutput = true;
+            appendLog(state, widen(chunk));
+            lineBuffer += chunk;
+            for (;;) {
+                const auto newline = lineBuffer.find('\n');
+                if (newline == std::string::npos) {
+                    break;
+                }
+                auto line = lineBuffer.substr(0, newline);
+                lineBuffer.erase(0, newline + 1);
+                handleFastBatchLine(std::move(line));
+            }
+            UpdateWindow(state.hwnd);
+        };
+
         auto future = std::async(std::launch::async,
-                                 [command, workingDir = baseOptions.keyconvExe.parent_path()]() {
-                                     return runProcess(command, workingDir);
+                                 [command,
+                                  workingDir = baseOptions.keyconvExe.parent_path(),
+                                  &liveOutputMutex,
+                                  &liveOutput]() {
+                                     return runProcess(command,
+                                                       workingDir,
+                                                       [&](std::string_view chunk) {
+                                                           std::lock_guard<std::mutex> lock(liveOutputMutex);
+                                                           liveOutput.append(chunk.data(), chunk.size());
+                                                       });
                                  });
         while (future.wait_for(std::chrono::milliseconds(80)) != std::future_status::ready) {
+            drainFastBatchOutput();
             pumpPendingUiMessages();
             Sleep(20);
         }
         const auto result = future.get();
+        drainFastBatchOutput();
+        if (!lineBuffer.empty()) {
+            handleFastBatchLine(std::move(lineBuffer));
+            lineBuffer.clear();
+        }
         std::error_code removeError;
         std::filesystem::remove(inputList, removeError);
-        appendLog(state, widen(result.output) + L"\r\n");
+        if (!streamedAnyOutput && !result.output.empty()) {
+            appendLog(state, widen(result.output) + L"\r\n");
+        }
 
         if (result.exitCode != 0) {
             setStatus(state, L"Batch failed");
@@ -2291,6 +2463,25 @@ void executeBatchConvert(AppState& state, bool chooseFolderFirst = false) {
 void loadDroppedFiles(AppState& state,
                       std::vector<std::filesystem::path> files,
                       bool runNow) {
+    bool droppedFolder = false;
+    std::optional<std::filesystem::path> singleDroppedFolder;
+    if (files.size() == 1) {
+        const auto path = absolutePath(files.front());
+        std::error_code error;
+        if (std::filesystem::is_directory(path, error)) {
+            droppedFolder = true;
+            singleDroppedFolder = path;
+        }
+    } else {
+        for (const auto& rawPath : files) {
+            std::error_code error;
+            if (std::filesystem::is_directory(absolutePath(rawPath), error)) {
+                droppedFolder = true;
+                break;
+            }
+        }
+    }
+
     files = expandDroppedPaths(files);
     if (files.empty()) {
         MessageBoxW(state.hwnd,
@@ -2301,25 +2492,30 @@ void loadDroppedFiles(AppState& state,
     }
 
     state.batchInputs = files;
-    setInputText(state, files.front().wstring());
-    if (files.size() == 1) {
+    state.batchInputsFromFolder = droppedFolder;
+    if (singleDroppedFolder.has_value()) {
+        setInputText(state, singleDroppedFolder->wstring());
+    } else {
+        setInputText(state, files.front().wstring());
+    }
+    if (files.size() == 1 && !droppedFolder) {
         setWindowText(state.outputDirEdit, files.front().parent_path().wstring());
     } else {
         setWindowText(state.outputDirEdit, L"");
     }
     updateDetectedSource(state);
     appendLog(state, L"\r\nLoaded dropped chart(s): " + std::to_wstring(files.size()) + L"\r\n");
-    if (files.size() > 1) {
+    if (files.size() > 1 || droppedFolder) {
         appendLog(state, L"Output field is blank: each chart writes beside its original file.\r\n");
     }
 
     if (!runNow) {
         return;
     }
-    if (files.size() == 1) {
+    if (files.size() == 1 && !droppedFolder) {
         executeSingleConvert(state);
     } else {
-        executeBatchConvert(state, false);
+        executeBatchConvert(state);
     }
 }
 
@@ -2341,7 +2537,7 @@ void createUi(AppState& state) {
     state.titleFont = makeUiFont(20, FW_BOLD);
     state.sectionFont = makeUiFont(16, FW_SEMIBOLD);
     state.smallFont = makeUiFont(13);
-    state.monoFont = CreateFontW(-14,
+    state.monoFont = CreateFontW(-13,
                                  0,
                                  0,
                                  0,
@@ -2363,136 +2559,121 @@ void createUi(AppState& state) {
     state.sidebarBrush = CreateSolidBrush(kColorSidebar);
     state.editBrush = CreateSolidBrush(RGB(253, 254, 255));
 
-    const int labelX = kMainLeft + 4;
-    const int editX = kMainLeft + 158;
-    const int editW = 842;
-    const int buttonX = kMainLeft + 1016;
-    int y = 30;
-
-    makeControl(state, L"STATIC", L"KeyWeaver (exe)", 0, labelX, y + 6, 140, 22, -1);
-    state.keyconvEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, editW, 28, kEditKeyconv,
+    makeControl(state, L"STATIC", L"KeyWeaver.exe", 0, 54, 178, 120, 22, -1);
+    state.keyconvEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, 54, 202, 470, 28, kEditKeyconv,
                                     WS_EX_CLIENTEDGE);
-    makeControl(state, L"BUTTON", L"Browse...", BS_PUSHBUTTON, buttonX, y, 110, 28, kButtonBrowseKeyconv);
-    y += 44;
+    makeControl(state, L"BUTTON", L"Browse", BS_PUSHBUTTON, 538, 202, 110, 28, kButtonBrowseKeyconv);
 
-    makeControl(state, L"STATIC", L"Input (chart)", 0, labelX, y + 6, 140, 22, -1);
-    state.inputEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, editW, 28, kEditInput,
+    makeControl(state, L"STATIC", L"Input chart or folder", 0, 54, 238, 160, 22, -1);
+    state.inputEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, 54, 262, 470, 28, kEditInput,
                                   WS_EX_CLIENTEDGE);
-    makeControl(state, L"BUTTON", L"Browse...", BS_PUSHBUTTON, buttonX, y, 110, 28, kButtonBrowseInput);
-    y += 44;
+    makeControl(state, L"BUTTON", L"Browse", BS_PUSHBUTTON, 538, 262, 110, 28, kButtonBrowseInput);
 
-    makeControl(state, L"STATIC", L"Output (folder)", 0, labelX, y + 6, 140, 22, -1);
-    state.outputDirEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, editX, y, editW, 28, kEditOutputDir,
+    makeControl(state, L"STATIC", L"Output folder", 0, 54, 298, 120, 22, -1);
+    state.outputDirEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, 54, 322, 470, 28, kEditOutputDir,
                                       WS_EX_CLIENTEDGE);
-    makeControl(state, L"BUTTON", L"Browse...", BS_PUSHBUTTON, buttonX, y, 110, 28, kButtonBrowseOutputDir);
+    makeControl(state, L"BUTTON", L"Browse", BS_PUSHBUTTON, 538, 322, 110, 28, kButtonBrowseOutputDir);
 
-    y = 178;
-    makeControl(state, L"STATIC", L"Source:", 0, kMainLeft + 18, y + 9, 64, 22, -1);
-    state.sourceEdit = makeControl(state, L"EDIT", L"", ES_AUTOHSCROLL, kMainLeft + 82, y + 5, 62, 26, kEditSource,
-                                   WS_EX_CLIENTEDGE);
-    makeControl(state, L"STATIC", L"auto", SS_CENTER, kMainLeft + 152, y + 8, 46, 22, -1);
-    state.detectedLabel = makeControl(state, L"STATIC", L"Detected: auto", 0, kMainLeft + 366, y + 9, 130, 22,
+    makeControl(state, L"STATIC", L"Source", 0, 714, 178, 80, 22, -1);
+    state.sourceEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                                   714, 202, 110, 180, kEditSource);
+    for (const auto* item : {L"auto", L"1", L"2", L"3", L"4", L"5", L"6", L"7", L"8", L"9", L"10"}) {
+        addComboItem(state.sourceEdit, item);
+    }
+    setComboSelection(state.sourceEdit, L"auto");
+    state.detectedLabel = makeControl(state, L"STATIC", L"Detected: auto", 0, 852, 206, 138, 22,
                                       kStaticDetected);
-    makeControl(state, L"STATIC", L"->", SS_CENTER, kMainLeft + 500, y + 9, 42, 22, -1);
-    makeControl(state, L"STATIC", L"Target:", 0, kMainLeft + 574, y + 9, 70, 22, -1);
+    makeControl(state, L"STATIC", L"Target", 0, 1014, 178, 80, 22, -1);
     state.targetEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                   kMainLeft + 640, y + 5, 150, 180, kEditTarget);
+                                   1014, 202, 88, 180, kEditTarget);
     for (const auto* item : {L"4", L"5", L"6", L"7", L"8", L"9", L"10"}) {
         addComboItem(state.targetEdit, item);
     }
     setComboSelection(state.targetEdit, L"10");
 
-    y = 242;
-    makeControl(state, L"STATIC", L"Algorithm", 0, kMainLeft + 18, y + 6, 86, 22, -1);
+    makeControl(state, L"STATIC", L"Algorithm", 0, 714, 238, 100, 22, -1);
     state.algorithmCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                       kMainLeft + 106, y, 168, 110, kComboAlgorithm);
+                                       714, 262, 178, 110, kComboAlgorithm);
     for (const auto* item : {L"NK1 (Classic)", L"NK2 (Experimental)"}) {
         addComboItem(state.algorithmCombo, item);
     }
     setComboSelection(state.algorithmCombo, L"NK1 (Classic)");
 
-    makeControl(state, L"STATIC", L"NK2 Mode", 0, kMainLeft + 300, y + 6, 86, 22, -1);
+    makeControl(state, L"STATIC", L"NK2 Mode", 0, 912, 238, 100, 22, -1);
     state.nk2ModeCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                     kMainLeft + 386, y, 134, 130, kComboNk2Mode);
+                                     912, 262, 116, 130, kComboNk2Mode);
     for (const auto* item : {L"faithful", L"native", L"harder", L"transform"}) {
         addComboItem(state.nk2ModeCombo, item);
     }
     setComboSelection(state.nk2ModeCombo, L"faithful");
 
-    makeControl(state, L"STATIC", L"Expansion", 0, kMainLeft + 548, y + 6, 86, 22, -1);
+    makeControl(state, L"STATIC", L"Expansion", 0, 714, 298, 100, 22, -1);
     state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                       kMainLeft + 636, y, 186, 170, kComboExpansion);
+                                       714, 322, 142, 170, kComboExpansion);
     for (const auto* item : {L"auto (more)", L"auto (normal)", L"auto (low)"}) {
         addComboItem(state.expansionCombo, item);
     }
     setComboSelection(state.expansionCombo, L"auto (normal)");
-    y += 42;
 
-    makeControl(state, L"STATIC", L"Compress", 0, kMainLeft + 18, y + 6, 86, 22, -1);
+    makeControl(state, L"STATIC", L"Compress", 0, 876, 298, 100, 22, -1);
     state.compressCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                      kMainLeft + 106, y, 176, 180, kComboCompress);
+                                      876, 322, 112, 180, kComboCompress);
     for (const auto* item : {L"auto"}) {
         addComboItem(state.compressCombo, item);
     }
     setComboSelection(state.compressCombo, L"auto");
 
-    makeControl(state, L"STATIC", L"Stream", 0, kMainLeft + 320, y + 6, 64, 22, -1);
+    makeControl(state, L"STATIC", L"Stream", 0, 1008, 298, 100, 22, -1);
     state.streamProfileCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                           kMainLeft + 384, y, 172, 180, kComboStreamProfile);
+                                           1008, 322, 94, 180, kComboStreamProfile);
     for (const auto* item : {L"off", L"superrandom", L"full-jitter", L"super-symmetry"}) {
         addComboItem(state.streamProfileCombo, item);
     }
     setComboSelection(state.streamProfileCombo, L"off");
-    y += 42;
+
+    makeControl(state, L"STATIC", L"Batch model", 0, 714, 356, 130, 22, -1);
+    state.modelCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                                   714, 380, 388, 180, kComboModel);
+    for (const auto* item : {kModelOffLabel, kTransformerUeCircusGalopModelLabel}) {
+        addComboItem(state.modelCombo, item);
+    }
+    setComboSelection(state.modelCombo, kModelOffLabel);
 
     state.preserveConvertCheck = makeControl(state,
                                              L"BUTTON",
                                              L"Preserve Convert",
                                              BS_AUTOCHECKBOX,
-                                             kMainLeft + 18,
-                                             y,
+                                             714,
+                                             416,
                                              180,
                                              22,
                                              kCheckPreserveConvert);
-    makeControl(state, L"STATIC", L"faithful mapping, strict source jacks", 0,
-                kMainLeft + 202, y + 2, 300, 22, -1);
     state.debugReportsCheck = makeControl(state,
                                           L"BUTTON",
                                           L"Debug JSON",
                                           BS_AUTOCHECKBOX,
-                                          kMainLeft + 650,
-                                          y,
+                                          912,
+                                          416,
                                           124,
                                           22,
                                           kCheckDebugReports);
-    y += 40;
 
-    makeControl(state, L"STATIC", L"Planner", 0, kMainLeft + 18, y + 5, 82, 22, -1);
-    makeControl(state, L"STATIC", L"auto (staged 7-14-10 for 10K)", 0, kMainLeft + 106, y + 5, 260, 22, -1);
-    y += 38;
-
-    makeControl(state, L"STATIC", L"Profile (Target-K)", 0, kMainLeft + 18, y + 5, 122, 22, -1);
-    makeControl(state, L"STATIC", L"keyweaver_10k_broad_style_v1.json (auto)", 0,
-                kMainLeft + 148, y + 5, 360, 22, -1);
-
-    y = 440;
-    makeControl(state, L"BUTTON", L">  Convert    F5", BS_DEFPUSHBUTTON, kMainLeft, y, 176, 34, kButtonConvert);
-    state.batchButton = makeControl(state, L"BUTTON", L"Batch    F6", BS_PUSHBUTTON, kMainLeft + 198, y, 170, 34,
+    makeControl(state, L"BUTTON", L"Convert", BS_DEFPUSHBUTTON, 1170, 182, 216, 36, kButtonConvert);
+    state.batchButton = makeControl(state, L"BUTTON", L"Batch Folder", BS_PUSHBUTTON, 1170, 228, 216, 36,
                                     kButtonBatch);
-    makeControl(state, L"BUTTON", L"Matrix    F7", BS_PUSHBUTTON, kMainLeft + 390, y, 170, 34, kButtonMatrix);
-    makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, kMainLeft + 632, y, 156, 34, kButtonOpenOutput);
-    makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, kMainLeft + 804, y, 156, 34, kButtonOpenReport);
-    makeControl(state, L"BUTTON", L"Copy CLI", BS_PUSHBUTTON, kMainLeft + 976, y, 128, 34, kButtonCopyCommand);
-    y += 42;
+    makeControl(state, L"BUTTON", L"Matrix", BS_PUSHBUTTON, 1170, 274, 216, 36, kButtonMatrix);
+    makeControl(state, L"BUTTON", L"Open Output", BS_PUSHBUTTON, 1170, 320, 102, 28, kButtonOpenOutput);
+    makeControl(state, L"BUTTON", L"Open Report", BS_PUSHBUTTON, 1284, 320, 102, 28, kButtonOpenReport);
+    makeControl(state, L"BUTTON", L"Copy CLI", BS_PUSHBUTTON, 1170, 360, 216, 28, kButtonCopyCommand);
 
-    state.statusLabel = makeControl(state, L"STATIC", L"Ready", 0, kMainLeft + 18, y + 4, 520, 22, kStaticStatus);
+    state.statusLabel = makeControl(state, L"STATIC", L"Ready", 0, 1170, 402, 216, 24, kStaticStatus);
 
     state.summaryList = makeControl(state, L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_HSCROLL,
-                                    kMainLeft + 18, 612, 520, 78, kListSummary, WS_EX_CLIENTEDGE);
+                                    54, 518, 436, 266, kListSummary, WS_EX_CLIENTEDGE);
 
-    state.logEdit = makeControl(state, L"EDIT", L"", ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
-                                                   ES_READONLY | WS_VSCROLL | WS_HSCROLL,
-                                876, 566, 496, 220, kEditLog, WS_EX_CLIENTEDGE);
+    state.logEdit = makeControl(state, L"EDIT", L"", ES_MULTILINE | ES_AUTOVSCROLL |
+                                                   ES_READONLY | WS_VSCROLL,
+                                554, 518, 832, 266, kEditLog, WS_EX_CLIENTEDGE);
     if (state.monoFont != nullptr) {
         setChildFont(state.logEdit, state.monoFont);
     }
@@ -2500,6 +2681,7 @@ void createUi(AppState& state) {
     const auto exe = preferredKeyWeaverExe();
     setWindowText(state.keyconvEdit, exe.wstring());
     setWindowText(state.outputDirEdit, L"");
+    selectDefaultBatchModel(state);
     updateAlgorithmControlState(state);
 }
 
@@ -2541,9 +2723,11 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CTLCOLORSTATIC:
             if (state) {
                 HDC dc = reinterpret_cast<HDC>(wParam);
-                SetBkMode(dc, TRANSPARENT);
+                SetBkMode(dc, OPAQUE);
+                SetBkColor(dc, kColorPanel);
                 SetTextColor(dc, kColorText);
-                return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
+                return reinterpret_cast<LRESULT>(state->panelBrush != nullptr ? state->panelBrush
+                                                                               : GetStockObject(WHITE_BRUSH));
             }
             break;
         case WM_CTLCOLOREDIT:
@@ -2574,6 +2758,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             const auto notification = HIWORD(wParam);
             if (controlId == kEditInput && notification == EN_CHANGE && !state->suppressInputChange) {
                 state->batchInputs.clear();
+                state->batchInputsFromFolder = false;
             }
             if (controlId == kComboAlgorithm && notification == CBN_SELCHANGE) {
                 updateAlgorithmControlState(*state);
@@ -2585,6 +2770,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                                      std::filesystem::path(getWindowText(state->keyconvEdit)));
                     if (path.has_value()) {
                         setWindowText(state->keyconvEdit, path->wstring());
+                        selectDefaultBatchModel(*state);
+                        updateAlgorithmControlState(*state);
                     }
                     return 0;
                 }
@@ -2594,6 +2781,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                                      std::filesystem::path(getWindowText(state->inputEdit)));
                     if (path.has_value()) {
                         state->batchInputs = {*path};
+                        state->batchInputsFromFolder = false;
                         setInputText(*state, path->wstring());
                         syncOutputDirToInput(*state);
                         updateDetectedSource(*state);
@@ -2611,7 +2799,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     executeSingleConvert(*state);
                     return 0;
                 case kButtonBatch:
-                    executeBatchConvert(*state, true);
+                    executeBatchConvert(*state);
                     return 0;
                 case kButtonMatrix:
                     executeMatrix(*state);
@@ -2634,8 +2822,10 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 case kButtonCopyCommand: {
                     if (state->lastCommand.empty()) {
+                        auto options = readToolOptions(*state);
+                        disableBatchOnlyModel(options);
                         OutputPaths paths;
-                        state->lastCommand = buildSingleCommand(readToolOptions(*state), paths);
+                        state->lastCommand = buildSingleCommand(options, paths);
                     }
                     copyToClipboard(hwnd, state->lastCommand);
                     return 0;
@@ -2652,7 +2842,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 if (wParam == VK_F6) {
-                    executeBatchConvert(*state, true);
+                    executeBatchConvert(*state);
                     return 0;
                 }
                 if (wParam == VK_F7) {
@@ -2706,7 +2896,7 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
     UpdateWindow(hwnd);
     if (!initialInputs.empty()) {
         loadDroppedFiles(state, initialInputs, false);
-        appendLog(state, L"Choose Target keys, then press Convert or Batch.\r\n");
+        appendLog(state, L"Choose Target keys, then press Convert or Batch Folder.\r\n");
         setStatus(state, L"Ready");
     }
 
@@ -2727,6 +2917,18 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
     options.outputDir = outputDir.empty() ? options.inputFile.parent_path() : absolutePath(outputDir);
     options.debugReports = true;
     std::filesystem::create_directories(options.outputDir);
+
+    AppState batchSelectionSmoke;
+    batchSelectionSmoke.batchInputs = {options.inputFile};
+    if (!batchInputsForState(batchSelectionSmoke).empty()) {
+        std::cerr << "GUI smoke expected one selected chart to open folder batch flow\n";
+        return 1;
+    }
+    batchSelectionSmoke.batchInputsFromFolder = true;
+    if (batchInputsForState(batchSelectionSmoke).size() != 1) {
+        std::cerr << "GUI smoke expected a dropped folder with one chart to stay batchable\n";
+        return 1;
+    }
 
     OutputPaths singlePaths;
     const auto singleCommand = buildSingleCommand(options, singlePaths);
@@ -2763,6 +2965,38 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         }
     }
 
+    ToolOptions transformerBatchOptions = options;
+    transformerBatchOptions.modelPreset = kTransformerUeCircusGalopModelLabel;
+    transformerBatchOptions.debugReports = false;
+    const auto expectedTransformerModelPath = transformerPresetModelPath(transformerBatchOptions);
+    const auto besideExeTransformerModelPath =
+        transformerBatchOptions.keyconvExe.parent_path() / kTransformerUeCircusGalopModelPath;
+    const auto workingDirectoryTransformerModelPath = absolutePath(std::filesystem::path(kTransformerUeCircusGalopModelPath));
+    if (pathExists(besideExeTransformerModelPath) &&
+        expectedTransformerModelPath != besideExeTransformerModelPath) {
+        std::cerr << "GUI smoke expected Transformer model path beside KeyWeaver.exe\n";
+        return 1;
+    }
+    if (!pathExists(besideExeTransformerModelPath) &&
+        pathExists(workingDirectoryTransformerModelPath) &&
+        expectedTransformerModelPath != workingDirectoryTransformerModelPath) {
+        std::cerr << "GUI smoke expected Transformer model path to fall back to the working folder\n";
+        return 1;
+    }
+    const auto transformerBatchList = makeBatchInputListPath();
+    writeBatchInputList(transformerBatchList, {options.inputFile});
+    const auto transformerBatchCommand = buildBatchCommand(transformerBatchOptions,
+                                                           transformerBatchList,
+                                                           std::optional<std::filesystem::path>{});
+    std::filesystem::remove(transformerBatchList);
+    if (transformerBatchCommand.find(L"--onnx-policy") == std::wstring::npos ||
+        transformerBatchCommand.find(expectedTransformerModelPath.wstring()) == std::wstring::npos ||
+        transformerBatchCommand.find(L"--onnx-provider auto") == std::wstring::npos ||
+        transformerBatchCommand.find(L"--onnx-policy-strict") == std::wstring::npos) {
+        std::cerr << "GUI smoke expected Transformer model batch command flags\n";
+        return 1;
+    }
+
     ToolOptions nk2Options = options;
     nk2Options.algorithm = L"NK2 (Experimental)";
     nk2Options.nk2Mode = L"faithful";
@@ -2788,6 +3022,50 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         return 1;
     }
 
+    ToolOptions nk2BatchOptions = nk2Options;
+    nk2BatchOptions.outputDir.clear();
+    nk2BatchOptions.debugReports = false;
+    const auto nk2BatchDir = options.outputDir / L"nk2_batch";
+    std::filesystem::create_directories(nk2BatchDir);
+    const auto nk2BatchList = makeBatchInputListPath();
+    writeBatchInputList(nk2BatchList, {options.inputFile});
+    const std::optional<std::filesystem::path> nk2BatchOutputDir = nk2BatchDir;
+    const auto nk2BatchCommand = buildBatchCommand(nk2BatchOptions, nk2BatchList, nk2BatchOutputDir);
+    if (nk2BatchCommand.find(L"--batch") == std::wstring::npos ||
+        nk2BatchCommand.find(L"--engine nk2") == std::wstring::npos ||
+        nk2BatchCommand.find(L"--nk2-mode faithful") == std::wstring::npos) {
+        std::cerr << "GUI smoke expected NK2 batch command flags\n";
+        std::filesystem::remove(nk2BatchList);
+        return 1;
+    }
+    std::string nk2BatchStreamedOutput;
+    const auto nk2Batch = runProcess(nk2BatchCommand,
+                                     nk2BatchOptions.keyconvExe.parent_path(),
+                                     [&](std::string_view chunk) {
+                                         nk2BatchStreamedOutput.append(chunk.data(), chunk.size());
+                                     });
+    std::filesystem::remove(nk2BatchList);
+    if (nk2Batch.exitCode != 0) {
+        std::cerr << nk2Batch.output;
+        return 1;
+    }
+    if (nk2BatchStreamedOutput.find("Progress: 100% done, 0 left") == std::string::npos &&
+        nk2BatchStreamedOutput.find("Progress: 100% done, 0% left, 0 left") == std::string::npos) {
+        std::cerr << "GUI smoke expected streaming NK2 batch progress output\n";
+        return 1;
+    }
+    bool nk2BatchWroteChart = false;
+    for (const auto& entry : std::filesystem::directory_iterator(nk2BatchDir)) {
+        if (isSupportedChartPath(entry.path())) {
+            nk2BatchWroteChart = true;
+            break;
+        }
+    }
+    if (!nk2BatchWroteChart) {
+        std::cerr << "GUI smoke expected NK2 batch to write a chart\n";
+        return 1;
+    }
+
     OutputPaths matrixPaths;
     const auto matrixCommand = buildMatrixCommand(options, matrixPaths);
     const auto matrix = runProcess(matrixCommand, options.keyconvExe.parent_path());
@@ -2803,6 +3081,7 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
 
     std::cout << "gui smoke ok: totalNotes=" << summary.totalNotes
               << " nk2Notes=" << nk2Summary.totalNotes
+              << " nk2Batch=yes"
               << " matrixRows=" << rows.size() << "\n";
     return 0;
 }

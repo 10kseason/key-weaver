@@ -1,5 +1,6 @@
 #include "core/converter.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <vector>
 
@@ -79,6 +80,23 @@ ConvertResult Converter::convert(const Chart& input, const ConvertOptions& optio
     }
     if (effective.echoMaxLocalNps < 0.0) {
         throw std::runtime_error("echoMaxLocalNps must be non-negative");
+    }
+    if (effective.advisoryLaneWeight < 0.0) {
+        throw std::runtime_error("advisoryLaneWeight must be non-negative");
+    }
+    if (!effective.advisoryTargetLanes.empty() &&
+        effective.advisoryTargetLanes.size() != input.notes.size()) {
+        throw std::runtime_error("advisoryTargetLanes must be empty or match input note count");
+    }
+    if (!effective.advisoryTargetLanes.empty()) {
+        const auto invalid = std::find_if(effective.advisoryTargetLanes.begin(),
+                                          effective.advisoryTargetLanes.end(),
+                                          [&](int lane) {
+                                              return lane < 0 || lane >= effective.targetKeyCount;
+                                          });
+        if (invalid != effective.advisoryTargetLanes.end()) {
+            throw std::runtime_error("advisoryTargetLanes contains a target lane outside targetKeyCount");
+        }
     }
 
     if (effective.optimizer == OptimizerKind::Beam) {

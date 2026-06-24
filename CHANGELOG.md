@@ -1,10 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 End Stable - 2026-06-19
 
+- Added experimental batch-only ONNX Runtime CUDA lane-policy support via `--onnx-policy` / `--onnx-provider cuda`; model output is advisory and still passes through existing assignment safety checks.
+- Target-10 batch now auto-loads the bundled `models/lane_policy_student_mlp_u_e_circusgalop.onnx` in ONNX-enabled builds, with `--no-auto-onnx-policy` available for deterministic batch.
+- Updated the Windows CUDA ONNX build helper to default to `C:\keyweaver-cmake`, prefer the NuGet Windows GPU package, and copy NuGet-cached CUDA 12/cuDNN 9 runtime DLLs when available.
+- Added a lightweight lane-policy student training/export script for drop-in MLP ONNX distillation experiments.
 - Extended experimental NK2 with same-time local solver diagnostics, lower-key tap overflow roll rescue, generalized high-key support notes, and LN head/tail adjacent tap support.
 - Added NK2-only `--stream-transform super-symmetry` and a matching GUI Stream option to preserve source mirror pairs and gapless adjacent-lane stairs.
-- Fixed 10K Full-Field Mirror-Remix stream/burst/stair rail hints so long tokens alternate primary hands instead of collapsing into one side of the field.
+- Tuned NK2 7K-to-10K original-tap placement with a soft `left/right/right/left` panel cadence so repeated side-lane phrases do not clump into the left panel.
+- Fixed CLI/GUI NK2 batch validation so non-report NK2 batch conversions can run through the fast `--input-list` path again.
+- Changed GUI Source to an `auto`/`1K`-`10K` selector and made CLI batch `--source` skip non-matching source-key charts instead of converting mixed-key batches blindly.
+- Fixed 10K Full-Field Mirror-Remix stream/burst/stair rail hints so tokens alternate primary hands more frequently instead of collapsing into one side of the field.
 - Fixed GUI drag-and-drop so drops on child controls are accepted, dropped folders expand to contained chart files, and multi-chart drops keep per-chart output folders by leaving Output blank.
 - Optimized large GUI batches by routing non-debug runs through one quiet CLI batch process with `--input-list`, avoiding one spawned `KeyWeaver.exe` process per chart.
 - Added millisecond timing output for single-chart CLI/GUI conversions, including read, parse, profile, convert, export, write, and report phases.

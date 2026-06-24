@@ -1,4 +1,5 @@
 build/
+build-*/
 dist/
 scripts/build/
 테스트 대상/

@@ -508,7 +508,11 @@ int maxAddedTotal(const Chart& original, const ConvertOptions& options) {
     if (effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusMore ||
         effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlus ||
         effectiveExpansionPolicy(options) == ExpansionPolicy::PreserveTapPlusLow) {
-        return static_cast<int>(std::floor(static_cast<double>(original.notes.size()) * targetRatio));
+        const int budget = static_cast<int>(std::floor(static_cast<double>(original.notes.size()) * targetRatio));
+        if (options.sourceKeyCount == 4 && options.targetKeyCount == 6 && original.notes.size() >= 2) {
+            return std::max(1, budget);
+        }
+        return budget;
     }
     return std::max(1, static_cast<int>(std::floor(static_cast<double>(original.notes.size()) *
                                                    targetRatio)));
@@ -542,7 +546,7 @@ bool tenKeyQuarterEighthDensityActive(const ConvertOptions& options) {
 }
 
 bool evenKeyGeneratedPolicyActive(const ConvertOptions& options) {
-    return highKeyGeneratedTuningActive(options) &&
+    return options.targetKeyCount > options.sourceKeyCount &&
            options.sourceKeyCount >= 2 && options.targetKeyCount >= 2 &&
            options.sourceKeyCount % 2 == 0 && options.targetKeyCount % 2 == 0;
 }

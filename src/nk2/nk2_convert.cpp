@@ -4,7 +4,9 @@
 #include "nk2/layout_model.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -31,11 +33,6 @@ struct PlacedNote {
     std::optional<int> endTime;
 };
 
-struct Candidate {
-    int lane = 0;
-    double score = 0.0;
-};
-
 constexpr double kFourToFiveFillAddedRatio = 0.12;
 constexpr double kFourToFiveFillPhraseRatio = 0.30;
 constexpr int kFourToFiveFillMinimumBudget = 8;
@@ -45,6 +42,32 @@ constexpr int kDefaultSupportJackWindowMs = 500;
 constexpr int kFourToFiveSupportJackWindowMs = 240;
 constexpr int kDefaultSupportSameSourceGapMs = 120;
 constexpr int kFourToFiveSupportSameSourceGapMs = 80;
+constexpr int kMaxKeyCount = 10;
+
+using LaneMask = std::uint16_t;
+
+struct Candidate {
+    int lane = 0;
+    double score = 0.0;
+};
+
+struct LanePool {
+    std::array<int, kMaxKeyCount> lanes{};
+    int count = 0;
+};
+
+struct CandidateList {
+    std::array<Candidate, kMaxKeyCount> candidates{};
+    int count = 0;
+
+    const Candidate* begin() const {
+        return candidates.data();
+    }
+
+    const Candidate* end() const {
+        return candidates.data() + count;
+    }
+};
 
 enum class MotifKind {
     Neutral,
@@ -91,6 +114,30 @@ struct PlacementStats {
     int sourceAnchorTotal = 0;
     std::vector<int> laneDistribution;
 };
+
+using LastBySource = std::array<std::optional<PlacedNote>, kMaxKeyCount>;
+
+int sourceLaneOf(const Note& note);
+
+struct SupportSafetyIndex {
+    std::array<std::vector<PlacedNote>, kMaxKeyCount> lanes;
+};
+
+void addToSupportSafetyIndex(SupportSafetyIndex& index, const Note& note) {
+    if (note.lane < 0 || note.lane >= kMaxKeyCount) {
+        return;
+    }
+    index.lanes[static_cast<std::size_t>(note.lane)].push_back(
+        PlacedNote{note.time, note.lane, sourceLaneOf(note), note.type, note.endTime});
+}
+
+SupportSafetyIndex buildSupportSafetyIndex(const Chart& chart) {
+    SupportSafetyIndex index;
+    for (const auto& note : chart.notes) {
+        addToSupportSafetyIndex(index, note);
+    }
+    return index;
+}
 
 int sourceLaneOf(const Note& note) {
     return note.sourceLane.value_or(note.lane);
@@ -179,17 +226,47 @@ std::vector<SliceInfo> buildSlices(const Chart& chart, int sameTimeEpsilonMs) {
     return slices;
 }
 
-void addUnique(std::vector<int>& lanes, int lane, int targetKeyCount) {
-    if (lane < 0 || lane >= targetKeyCount) {
+void addUnique(LanePool& lanes, int lane, int targetKeyCount) {
+    if (lane < 0 || lane >= targetKeyCount || lanes.count >= kMaxKeyCount) {
         return;
     }
-    if (std::find(lanes.begin(), lanes.end(), lane) == lanes.end()) {
-        lanes.push_back(lane);
+    for (int index = 0; index < lanes.count; ++index) {
+        if (lanes.lanes[static_cast<std::size_t>(index)] == lane) {
+            return;
+        }
+    }
+    lanes.lanes[static_cast<std::size_t>(lanes.count++)] = lane;
+}
+
+void addCandidate(CandidateList& candidates, int lane, double score) {
+    if (candidates.count >= kMaxKeyCount) {
+        return;
+    }
+    candidates.candidates[static_cast<std::size_t>(candidates.count++)] = Candidate{lane, score};
+}
+
+bool candidateBefore(const Candidate& lhs, const Candidate& rhs) {
+    if (lhs.score != rhs.score) {
+        return lhs.score > rhs.score;
+    }
+    return lhs.lane < rhs.lane;
+}
+
+void sortCandidates(CandidateList& candidates) {
+    for (int index = 1; index < candidates.count; ++index) {
+        const Candidate current = candidates.candidates[static_cast<std::size_t>(index)];
+        int insert = index;
+        while (insert > 0 && candidateBefore(current, candidates.candidates[static_cast<std::size_t>(insert - 1)])) {
+            candidates.candidates[static_cast<std::size_t>(insert)] =
+                candidates.candidates[static_cast<std::size_t>(insert - 1)];
+            --insert;
+        }
+        candidates.candidates[static_cast<std::size_t>(insert)] = current;
     }
 }
 
-std::vector<int> candidatePoolForSevenToTen(int sourceLane) {
-    std::vector<int> lanes;
+LanePool candidatePoolForSevenToTen(int sourceLane) {
+    LanePool lanes;
     const int direct = directLane(sourceLane, 7, 10);
     addUnique(lanes, direct, 10);
 
@@ -237,12 +314,12 @@ std::vector<int> candidatePoolForSevenToTen(int sourceLane) {
     return lanes;
 }
 
-std::vector<int> candidatePoolFor(int sourceLane, int sourceKeyCount, int targetKeyCount) {
+LanePool candidatePoolFor(int sourceLane, int sourceKeyCount, int targetKeyCount) {
     if (sourceKeyCount == 7 && targetKeyCount == 10) {
         return candidatePoolForSevenToTen(sourceLane);
     }
 
-    std::vector<int> lanes;
+    LanePool lanes;
     const int direct = directLane(sourceLane, sourceKeyCount, targetKeyCount);
     addUnique(lanes, direct, targetKeyCount);
     addUnique(lanes, direct - 1, targetKeyCount);
@@ -314,32 +391,6 @@ double desiredLaneShare(int lane, int targetKeyCount, const LayoutWeights& weigh
     return weighted;
 }
 
-double laneCoverageNeedScore(int lane,
-                             const std::vector<int>& laneUse,
-                             int targetKeyCount,
-                             const LayoutWeights& weights) {
-    if (targetKeyCount <= 0 || lane < 0 || lane >= targetKeyCount ||
-        lane >= static_cast<int>(laneUse.size())) {
-        return 0.0;
-    }
-
-    const int total = std::accumulate(laneUse.begin(), laneUse.end(), 0);
-    const double desired = desiredLaneShare(lane, targetKeyCount, weights);
-    if (desired <= 0.0) {
-        return 0.0;
-    }
-
-    const double virtualTotal = std::max(4.0, static_cast<double>(targetKeyCount) * 0.5);
-    const double actual = static_cast<double>(laneUse[static_cast<std::size_t>(lane)]) +
-                          desired * virtualTotal;
-    const double expected = desired * (static_cast<double>(total) + virtualTotal + 1.0);
-    const double ratio = expected <= 0.0 ? 1.0 : actual / expected;
-    if (ratio <= 1.0) {
-        return clamp01((1.0 - ratio) * 1.8);
-    }
-    return -clamp01((ratio - 1.0) * 0.9);
-}
-
 double genericTargetFreedomMultiplier(int targetKeyCount) {
     if (targetKeyCount == 8) {
         return 1.35;
@@ -368,10 +419,10 @@ bool isLongHoldForAdjacentCopy(const Note& note) {
     return holdDurationMs(note) >= 1000;
 }
 
-std::vector<int> adjacentCopyLaneCandidates(const Note& note,
-                                            const NK2Options& options,
-                                            const std::map<int, PlacedNote>& lastBySource) {
-    std::vector<int> lanes;
+LanePool adjacentCopyLaneCandidates(const Note& note,
+                                    const NK2Options& options,
+                                    const LastBySource& lastBySource) {
+    LanePool lanes;
     const int sourceLane = sourceLaneOf(note);
     for (const int sourceDelta : {-1, 1}) {
         const int adjacentSource = sourceLane + sourceDelta;
@@ -379,10 +430,10 @@ std::vector<int> adjacentCopyLaneCandidates(const Note& note,
             continue;
         }
 
-        const auto adjacentPlaced = lastBySource.find(adjacentSource);
-        if (adjacentPlaced != lastBySource.end()) {
-            addUnique(lanes, adjacentPlaced->second.lane - sourceDelta, options.targetKeyCount);
-            addUnique(lanes, adjacentPlaced->second.lane, options.targetKeyCount);
+        const auto& adjacentPlaced = lastBySource[static_cast<std::size_t>(adjacentSource)];
+        if (adjacentPlaced.has_value()) {
+            addUnique(lanes, adjacentPlaced->lane - sourceDelta, options.targetKeyCount);
+            addUnique(lanes, adjacentPlaced->lane, options.targetKeyCount);
         }
 
         const int adjacentDirect = directLane(
@@ -392,10 +443,10 @@ std::vector<int> adjacentCopyLaneCandidates(const Note& note,
     return lanes;
 }
 
-double adjacentCopyPreferenceScore(int lane, const std::vector<int>& adjacentCopyLanes) {
+double adjacentCopyPreferenceScore(int lane, const LanePool& adjacentCopyLanes) {
     double score = 0.0;
-    for (std::size_t index = 0; index < adjacentCopyLanes.size(); ++index) {
-        const int distance = std::abs(lane - adjacentCopyLanes[index]);
+    for (int index = 0; index < adjacentCopyLanes.count; ++index) {
+        const int distance = std::abs(lane - adjacentCopyLanes.lanes[static_cast<std::size_t>(index)]);
         const double rankDecay = static_cast<double>(index) * 0.08;
         if (distance == 0) {
             score = std::max(score, 1.35 - rankDecay);
@@ -481,24 +532,6 @@ double superSymmetryScoreAdjustment(const Note& note,
     return score;
 }
 
-double wholeFieldNeedScore(int lane, const std::vector<int>& laneUse, int targetKeyCount) {
-    if (targetKeyCount <= 0 || lane < 0 || lane >= targetKeyCount ||
-        lane >= static_cast<int>(laneUse.size())) {
-        return 0.0;
-    }
-
-    const int total = std::accumulate(laneUse.begin(), laneUse.end(), 0);
-    const double virtualTotal = static_cast<double>(targetKeyCount);
-    const double actual = static_cast<double>(laneUse[static_cast<std::size_t>(lane)]) + 1.0;
-    const double expected = (static_cast<double>(total) + virtualTotal + 1.0) /
-                            static_cast<double>(targetKeyCount);
-    const double ratio = expected <= 0.0 ? 1.0 : actual / expected;
-    if (ratio <= 1.0) {
-        return clamp01((1.0 - ratio) * 2.2);
-    }
-    return -clamp01((ratio - 1.0) * 0.8);
-}
-
 std::optional<std::pair<int, int>> panelRangeForLane(int lane, int targetKeyCount) {
     if (targetKeyCount < 8 || targetKeyCount % 2 != 0 || lane < 0 || lane >= targetKeyCount) {
         return std::nullopt;
@@ -510,25 +543,104 @@ std::optional<std::pair<int, int>> panelRangeForLane(int lane, int targetKeyCoun
     return std::make_pair(split, targetKeyCount - 1);
 }
 
-double panelLaneNeedScore(int lane, const std::vector<int>& laneUse, int targetKeyCount) {
-    if (lane < 0 || lane >= targetKeyCount || lane >= static_cast<int>(laneUse.size())) {
+std::optional<int> panelSideForLane(int lane, int targetKeyCount) {
+    if (targetKeyCount < 8 || targetKeyCount % 2 != 0 || lane < 0 || lane >= targetKeyCount) {
+        return std::nullopt;
+    }
+    return lane < targetKeyCount / 2 ? -1 : 1;
+}
+
+int mirrorCadenceSide(std::size_t placedOriginalNotes) {
+    // LRRL gives NK2 a mirrored two-note hand cadence without hard-assigning lanes.
+    constexpr int kLeftRightRightLeft[] = {-1, 1, 1, -1};
+    return kLeftRightRightLeft[placedOriginalNotes % 4];
+}
+
+struct LaneUseContext {
+    int targetKeyCount = 0;
+    LayoutWeights weights;
+    std::array<int, kMaxKeyCount> use{};
+    std::array<double, kMaxKeyCount> desiredShare{};
+    int total = 0;
+    int leftPanelTotal = 0;
+    int rightPanelTotal = 0;
+};
+
+LaneUseContext buildLaneUseContext(const std::vector<int>& laneUse,
+                                   int targetKeyCount,
+                                   const LayoutWeights& weights) {
+    LaneUseContext context;
+    context.targetKeyCount = std::max(0, std::min(kMaxKeyCount, targetKeyCount));
+    context.weights = weights;
+    const int split = context.targetKeyCount / 2;
+    for (int lane = 0; lane < context.targetKeyCount; ++lane) {
+        const int count = lane < static_cast<int>(laneUse.size()) ? laneUse[static_cast<std::size_t>(lane)] : 0;
+        context.use[static_cast<std::size_t>(lane)] = count;
+        context.desiredShare[static_cast<std::size_t>(lane)] = desiredLaneShare(lane, targetKeyCount, weights);
+        context.total += count;
+        if (targetKeyCount >= 8 && targetKeyCount % 2 == 0) {
+            if (lane < split) {
+                context.leftPanelTotal += count;
+            } else {
+                context.rightPanelTotal += count;
+            }
+        }
+    }
+    return context;
+}
+
+double laneCoverageNeedScoreFast(const LaneUseContext& context, int lane) {
+    if (context.targetKeyCount <= 0 || lane < 0 || lane >= context.targetKeyCount) {
         return 0.0;
     }
 
-    const auto range = panelRangeForLane(lane, targetKeyCount);
+    const double desired = context.desiredShare[static_cast<std::size_t>(lane)];
+    if (desired <= 0.0) {
+        return 0.0;
+    }
+
+    const double virtualTotal = std::max(4.0, static_cast<double>(context.targetKeyCount) * 0.5);
+    const double actual = static_cast<double>(context.use[static_cast<std::size_t>(lane)]) +
+                          desired * virtualTotal;
+    const double expected = desired * (static_cast<double>(context.total) + virtualTotal + 1.0);
+    const double ratio = expected <= 0.0 ? 1.0 : actual / expected;
+    if (ratio <= 1.0) {
+        return clamp01((1.0 - ratio) * 1.8);
+    }
+    return -clamp01((ratio - 1.0) * 0.9);
+}
+
+double wholeFieldNeedScoreFast(const LaneUseContext& context, int lane) {
+    if (context.targetKeyCount <= 0 || lane < 0 || lane >= context.targetKeyCount) {
+        return 0.0;
+    }
+
+    const double virtualTotal = static_cast<double>(context.targetKeyCount);
+    const double actual = static_cast<double>(context.use[static_cast<std::size_t>(lane)]) + 1.0;
+    const double expected = (static_cast<double>(context.total) + virtualTotal + 1.0) /
+                            static_cast<double>(context.targetKeyCount);
+    const double ratio = expected <= 0.0 ? 1.0 : actual / expected;
+    if (ratio <= 1.0) {
+        return clamp01((1.0 - ratio) * 2.2);
+    }
+    return -clamp01((ratio - 1.0) * 0.8);
+}
+
+double panelLaneNeedScoreFast(const LaneUseContext& context, int lane) {
+    if (lane < 0 || lane >= context.targetKeyCount) {
+        return 0.0;
+    }
+
+    const auto range = panelRangeForLane(lane, context.targetKeyCount);
     if (!range.has_value()) {
         return 0.0;
     }
 
     const auto [start, end] = *range;
-    int panelTotal = 0;
-    for (int panelLane = start; panelLane <= end; ++panelLane) {
-        panelTotal += laneUse[static_cast<std::size_t>(panelLane)];
-    }
-
+    const int panelTotal = lane < context.targetKeyCount / 2 ? context.leftPanelTotal : context.rightPanelTotal;
     const int width = std::max(1, end - start + 1);
     const double virtualTotal = static_cast<double>(width);
-    const double actual = static_cast<double>(laneUse[static_cast<std::size_t>(lane)]) +
+    const double actual = static_cast<double>(context.use[static_cast<std::size_t>(lane)]) +
                           virtualTotal / static_cast<double>(width);
     const double expected = (static_cast<double>(panelTotal) + virtualTotal + 1.0) /
                             static_cast<double>(width);
@@ -539,17 +651,66 @@ double panelLaneNeedScore(int lane, const std::vector<int>& laneUse, int targetK
     return -clamp01((ratio - 1.0) * 0.7);
 }
 
-double laneCoveragePreference(int lane,
-                              const std::vector<int>& laneUse,
-                              int targetKeyCount,
-                              const LayoutWeights& weights) {
-    const double globalNeed = laneCoverageNeedScore(lane, laneUse, targetKeyCount, weights);
-    const double panelNeed = panelLaneNeedScore(lane, laneUse, targetKeyCount);
-    const double freedomBoost = genericTargetFreedomMultiplier(targetKeyCount) - 1.0;
-    const double wholeFieldNeed = wholeFieldNeedScore(lane, laneUse, targetKeyCount);
+double laneCoveragePreferenceFast(const LaneUseContext& context, int lane) {
+    const double globalNeed = laneCoverageNeedScoreFast(context, lane);
+    const double panelNeed = panelLaneNeedScoreFast(context, lane);
+    const double freedomBoost = genericTargetFreedomMultiplier(context.targetKeyCount) - 1.0;
+    const double wholeFieldNeed = wholeFieldNeedScoreFast(context, lane);
     const double combinedNeed = std::max(
         -1.0, std::min(1.0, globalNeed + panelNeed * 0.45 + freedomBoost * wholeFieldNeed));
     return 0.5 + 0.5 * combinedNeed;
+}
+
+double remixScoreForLaneFast(int sourceLane, int lane, const LaneUseContext& context) {
+    const double coverageScore = laneCoveragePreferenceFast(context, lane);
+    const double panelScore = laneInSourcePanel(sourceLane, lane) ? 1.0 : 0.0;
+    const double bridgeScore = laneInBridge(lane) ? 1.0 : 0.0;
+    const double totalWeight = std::max(1, context.weights.panel + context.weights.bridge + context.weights.fullField);
+    return (static_cast<double>(context.weights.panel) * panelScore +
+            static_cast<double>(context.weights.bridge) * bridgeScore +
+            static_cast<double>(context.weights.fullField) * coverageScore) /
+           totalWeight;
+}
+
+double mirrorCadenceScoreAdjustment(int lane,
+                                    const NK2Options& options,
+                                    const LaneUseContext& laneContext,
+                                    const std::vector<PlacedNote>& placed,
+                                    bool freeOriginalTap,
+                                    bool sourceJackContinuation) {
+    if (sourceJackContinuation || !freeOriginalTap) {
+        return 0.0;
+    }
+
+    const auto side = panelSideForLane(lane, options.targetKeyCount);
+    if (!side.has_value()) {
+        return 0.0;
+    }
+
+    const int leftTotal = laneContext.leftPanelTotal;
+    const int rightTotal = laneContext.rightPanelTotal;
+
+    double score = 0.0;
+    const int desiredSide = mirrorCadenceSide(placed.size());
+    if (*side == desiredSide) {
+        score += freeOriginalTap ? 0.64 : 0.26;
+    } else {
+        score -= freeOriginalTap ? 0.30 : 0.10;
+    }
+
+    const int imbalance = leftTotal - rightTotal;
+    if (imbalance != 0) {
+        const bool candidateHelpsBalance =
+            (imbalance > 0 && *side > 0) || (imbalance < 0 && *side < 0);
+        const double magnitude = static_cast<double>(std::abs(imbalance));
+        if (candidateHelpsBalance) {
+            score += std::min(0.45, 0.08 * magnitude);
+        } else {
+            score -= std::min(0.24, 0.04 * magnitude);
+        }
+    }
+
+    return score;
 }
 
 bool isStrongBeat(int time, const std::vector<TimingPoint>& timingPoints) {
@@ -572,8 +733,18 @@ bool isStrongBeat(int time, const std::vector<TimingPoint>& timingPoints) {
     return std::abs(beatPosition - nearest) <= 0.04;
 }
 
-bool hasSameTimeCollision(const std::set<int>& occupiedLanes, int lane) {
-    return occupiedLanes.count(lane) > 0;
+bool hasSameTimeCollision(LaneMask occupiedLanes, int lane) {
+    if (lane < 0 || lane >= kMaxKeyCount) {
+        return false;
+    }
+    return (occupiedLanes & (LaneMask{1} << lane)) != 0;
+}
+
+void occupyLane(LaneMask& occupiedLanes, int lane) {
+    if (lane < 0 || lane >= kMaxKeyCount) {
+        return;
+    }
+    occupiedLanes = static_cast<LaneMask>(occupiedLanes | (LaneMask{1} << lane));
 }
 
 bool hasPlacedSameTimeCollision(const std::vector<PlacedNote>& placed, int time, int lane) {
@@ -585,34 +756,44 @@ bool hasPlacedSameTimeCollision(const std::vector<PlacedNote>& placed, int time,
     return false;
 }
 
+bool hasLongNoteConflictWithPlaced(const PlacedNote& existing, const Note& note, int lane) {
+    if (existing.lane != lane) {
+        return false;
+    }
+    if (existing.type == NoteType::Hold && existing.endTime.has_value() &&
+        note.time > existing.time && note.time <= *existing.endTime) {
+        return true;
+    }
+    if (note.type == NoteType::Hold && note.endTime.has_value()) {
+        const bool existingStartsInside = existing.time > note.time && existing.time <= *note.endTime;
+        const bool holdOverlap = existing.type == NoteType::Hold && existing.endTime.has_value() &&
+                                 note.time <= *existing.endTime && *note.endTime >= existing.time;
+        return existingStartsInside || holdOverlap;
+    }
+    return false;
+}
+
 bool hasLongNoteConflict(const std::vector<PlacedNote>& placed, const Note& note, int lane) {
     for (const auto& existing : placed) {
-        if (existing.lane != lane) {
-            continue;
-        }
-        if (existing.type == NoteType::Hold && existing.endTime.has_value() &&
-            note.time > existing.time && note.time <= *existing.endTime) {
+        if (hasLongNoteConflictWithPlaced(existing, note, lane)) {
             return true;
-        }
-        if (note.type == NoteType::Hold && note.endTime.has_value()) {
-            const bool existingStartsInside = existing.time > note.time && existing.time <= *note.endTime;
-            const bool holdOverlap = existing.type == NoteType::Hold && existing.endTime.has_value() &&
-                                     note.time <= *existing.endTime && *note.endTime >= existing.time;
-            if (existingStartsInside || holdOverlap) {
-                return true;
-            }
         }
     }
     return false;
 }
 
-std::optional<PlacedNote> lastPlacedForSource(const std::map<int, PlacedNote>& lastBySource,
-                                              int sourceLane) {
-    const auto found = lastBySource.find(sourceLane);
-    if (found == lastBySource.end()) {
+std::optional<PlacedNote> lastPlacedForSource(const LastBySource& lastBySource, int sourceLane) {
+    if (sourceLane < 0 || sourceLane >= kMaxKeyCount) {
         return std::nullopt;
     }
-    return found->second;
+    return lastBySource[static_cast<std::size_t>(sourceLane)];
+}
+
+void rememberLastBySource(LastBySource& lastBySource, int sourceLane, const PlacedNote& placedNote) {
+    if (sourceLane < 0 || sourceLane >= kMaxKeyCount) {
+        return;
+    }
+    lastBySource[static_cast<std::size_t>(sourceLane)] = placedNote;
 }
 
 bool isImmediateSourceJackContinuation(const std::vector<PlacedNote>& placed,
@@ -769,28 +950,13 @@ void countGeneratedProvenance(NK2Report& report, MotifKind motif) {
     }
 }
 
-double remixScoreForLane(int sourceLane,
-                         int lane,
-                         const std::vector<int>& laneUse,
-                         int targetKeyCount,
-                         const LayoutWeights& weights) {
-    const double coverageScore = laneCoveragePreference(lane, laneUse, targetKeyCount, weights);
-    const double panelScore = laneInSourcePanel(sourceLane, lane) ? 1.0 : 0.0;
-    const double bridgeScore = laneInBridge(lane) ? 1.0 : 0.0;
-    const double totalWeight = std::max(1, weights.panel + weights.bridge + weights.fullField);
-    return (static_cast<double>(weights.panel) * panelScore +
-            static_cast<double>(weights.bridge) * bridgeScore +
-            static_cast<double>(weights.fullField) * coverageScore) /
-           totalWeight;
-}
-
 double motifScoreAdjustment(MotifKind motif,
                             const Note& note,
                             int lane,
                             int direct,
                             int sourceLane,
                             const NK2Options& options,
-                            const std::vector<int>& laneUse,
+                            const LaneUseContext& laneContext,
                             const std::optional<int>& previousSingleSourceLane,
                             const std::optional<int>& previousSingleTargetLane) {
     double score = 0.0;
@@ -853,7 +1019,7 @@ double motifScoreAdjustment(MotifKind motif,
                     }
                 }
             }
-            score += 0.35 * laneCoverageNeedScore(lane, laneUse, options.targetKeyCount, options.layoutWeights);
+            score += 0.35 * laneCoverageNeedScoreFast(laneContext, lane);
             break;
         case MotifKind::Chord:
             score += laneInSourcePanel(sourceLane, lane) ? 0.35 : -0.35;
@@ -863,13 +1029,10 @@ double motifScoreAdjustment(MotifKind motif,
             break;
         case MotifKind::LnAnchor:
             score += lane == direct ? 0.05 * genericTargetAnchorLockMultiplier(options.targetKeyCount) : 0.0;
-            score += 0.45 * longHoldSpreadScale * laneCoverageNeedScore(
-                              lane, laneUse, options.targetKeyCount, options.layoutWeights);
-            score += 0.20 * longHoldSpreadScale * panelLaneNeedScore(
-                              lane, laneUse, options.targetKeyCount);
+            score += 0.45 * longHoldSpreadScale * laneCoverageNeedScoreFast(laneContext, lane);
+            score += 0.20 * longHoldSpreadScale * panelLaneNeedScoreFast(laneContext, lane);
             if (!laneInSourcePanel(sourceLane, lane)) {
-                score += 0.10 * longHoldSpreadScale * laneCoverageNeedScore(
-                                  lane, laneUse, options.targetKeyCount, options.layoutWeights);
+                score += 0.10 * longHoldSpreadScale * laneCoverageNeedScoreFast(laneContext, lane);
             }
             if (laneInBridge(lane)) {
                 score += 0.05;
@@ -877,11 +1040,9 @@ double motifScoreAdjustment(MotifKind motif,
             break;
         case MotifKind::Neutral:
             score += lane == direct ? 0.02 * genericTargetAnchorLockMultiplier(options.targetKeyCount) : 0.0;
-            score += 0.45 * laneCoverageNeedScore(
-                              lane, laneUse, options.targetKeyCount, options.layoutWeights);
+            score += 0.45 * laneCoverageNeedScoreFast(laneContext, lane);
             if (!laneInSourcePanel(sourceLane, lane)) {
-                score += 0.10 * laneCoverageNeedScore(
-                                  lane, laneUse, options.targetKeyCount, options.layoutWeights);
+                score += 0.10 * laneCoverageNeedScoreFast(laneContext, lane);
             }
             break;
     }
@@ -892,18 +1053,19 @@ double motifScoreAdjustment(MotifKind motif,
     return score;
 }
 
-std::vector<Candidate> rankedCandidates(const Note& note,
-                                        const NK2Options& options,
-                                        const std::vector<int>& laneUse,
-                                        const std::map<int, PlacedNote>& lastBySource,
-                                        const std::vector<PlacedNote>& placed,
-                                        const std::optional<int>& previousSingleSourceLane,
-                                        const std::optional<int>& previousSingleTargetLane,
-                                        bool sourceJackContinuation,
-                                        MotifKind motif) {
+CandidateList rankedCandidates(const Note& note,
+                                const NK2Options& options,
+                                const std::vector<int>& laneUse,
+                                const LastBySource& lastBySource,
+                                const std::vector<PlacedNote>& placed,
+                                const std::optional<int>& previousSingleSourceLane,
+                                const std::optional<int>& previousSingleTargetLane,
+                                bool sourceJackContinuation,
+                                MotifKind motif) {
     const int sourceLane = sourceLaneOf(note);
-    std::vector<Candidate> ranked;
+    CandidateList ranked;
     const auto pool = candidatePoolFor(sourceLane, options.sourceKeyCount, options.targetKeyCount);
+    const auto laneContext = buildLaneUseContext(laneUse, options.targetKeyCount, options.layoutWeights);
     const int direct = directLane(sourceLane, options.sourceKeyCount, options.targetKeyCount);
     const double totalBlend = std::max(0.001, options.nativeWeight + options.remixWeight);
     const double freedomMultiplier = genericTargetFreedomMultiplier(options.targetKeyCount);
@@ -912,8 +1074,10 @@ std::vector<Candidate> rankedCandidates(const Note& note,
         genericTargetAnchorLockMultiplier(options.targetKeyCount) / freedomMultiplier;
     const bool longHoldCopy = isLongHoldForAdjacentCopy(note);
     const double longHoldSpreadScale = longHoldCopy ? 0.25 : 1.0;
-    const auto adjacentCopyLanes =
-        longHoldCopy ? adjacentCopyLaneCandidates(note, options, lastBySource) : std::vector<int>{};
+    LanePool adjacentCopyLanes;
+    if (longHoldCopy) {
+        adjacentCopyLanes = adjacentCopyLaneCandidates(note, options, lastBySource);
+    }
 
     std::optional<int> sourceJackLane;
     if (sourceJackContinuation) {
@@ -923,7 +1087,8 @@ std::vector<Candidate> rankedCandidates(const Note& note,
         }
     }
 
-    for (const int lane : pool) {
+    for (int poolIndex = 0; poolIndex < pool.count; ++poolIndex) {
+        const int lane = pool.lanes[static_cast<std::size_t>(poolIndex)];
         const bool freeOriginalTap =
             note.type == NoteType::Tap && (motif == MotifKind::Neutral || motif == MotifKind::Stream);
         const double distance = std::abs(lane - direct);
@@ -931,12 +1096,10 @@ std::vector<Candidate> rankedCandidates(const Note& note,
         const double rawNativeScore = std::max(0.0, 1.0 - distance / nativeDistance);
         const double nativeAnchorContrast = options.targetKeyCount == 8 ? 0.55 : 1.0;
         const double nativeScore = 0.5 + (rawNativeScore - 0.5) * nativeAnchorContrast;
-        const double remixScore =
-            remixScoreForLane(sourceLane, lane, laneUse, options.targetKeyCount, options.layoutWeights);
-        const double coverageNeed =
-            laneCoverageNeedScore(lane, laneUse, options.targetKeyCount, options.layoutWeights);
-        const double panelNeed = panelLaneNeedScore(lane, laneUse, options.targetKeyCount);
-        const double wholeFieldNeed = wholeFieldNeedScore(lane, laneUse, options.targetKeyCount);
+        const double remixScore = remixScoreForLaneFast(sourceLane, lane, laneContext);
+        const double coverageNeed = laneCoverageNeedScoreFast(laneContext, lane);
+        const double panelNeed = panelLaneNeedScoreFast(laneContext, lane);
+        const double wholeFieldNeed = wholeFieldNeedScoreFast(laneContext, lane);
         double score = (options.nativeWeight * nativeScore + options.remixWeight * remixScore) / totalBlend;
         score += (options.remixWeight / totalBlend) * (freeOriginalTap ? 1.35 : 1.0) * coverageNeed;
         score += (options.remixWeight / totalBlend) * freedomBoost *
@@ -955,8 +1118,8 @@ std::vector<Candidate> rankedCandidates(const Note& note,
         const bool freerAnchor = freeLnAnchor || freeOriginalTap;
         if (lane == direct) {
             const double anchorPreference = std::min(
-                laneCoveragePreference(lane, laneUse, options.targetKeyCount, options.layoutWeights),
-                0.5 + 0.5 * panelLaneNeedScore(lane, laneUse, options.targetKeyCount));
+                laneCoveragePreferenceFast(laneContext, lane),
+                0.5 + 0.5 * panelLaneNeedScoreFast(laneContext, lane));
             const double anchorScale = clamp01(0.10 + 0.90 * anchorPreference);
             score += (freerAnchor ? 0.10 : 0.45) * anchorScale * anchorLockScale;
             if (options.targetKeyCount == 8 && !sourceJackContinuation && motif != MotifKind::Jack) {
@@ -993,32 +1156,33 @@ std::vector<Candidate> rankedCandidates(const Note& note,
                                       direct,
                                       sourceLane,
                                       options,
-                                      laneUse,
+                                      laneContext,
                                       previousSingleSourceLane,
                                       previousSingleTargetLane);
+        score += mirrorCadenceScoreAdjustment(lane,
+                                              options,
+                                              laneContext,
+                                              placed,
+                                              freeOriginalTap,
+                                              sourceJackContinuation);
         score += superSymmetryScoreAdjustment(note,
                                               lane,
                                               options,
                                               placed,
                                               previousSingleSourceLane,
                                               previousSingleTargetLane);
-        ranked.push_back({lane, score});
+        addCandidate(ranked, lane, score);
     }
 
-    std::stable_sort(ranked.begin(), ranked.end(), [](const Candidate& lhs, const Candidate& rhs) {
-        if (lhs.score != rhs.score) {
-            return lhs.score > rhs.score;
-        }
-        return lhs.lane < rhs.lane;
-    });
+    sortCandidates(ranked);
     return ranked;
 }
 
 int chooseLane(const Note& note,
                const NK2Options& options,
-               const std::set<int>& occupiedLanes,
+               LaneMask occupiedLanes,
                const std::vector<int>& laneUse,
-               const std::map<int, PlacedNote>& lastBySource,
+               const LastBySource& lastBySource,
                const std::vector<PlacedNote>& placed,
                const std::optional<int>& previousSingleSourceLane,
                const std::optional<int>& previousSingleTargetLane,
@@ -1062,9 +1226,9 @@ int chooseLane(const Note& note,
 
 std::optional<int> chooseLaneStrict(const Note& note,
                                     const NK2Options& options,
-                                    const std::set<int>& occupiedLanes,
+                                    LaneMask occupiedLanes,
                                     const std::vector<int>& laneUse,
-                                    const std::map<int, PlacedNote>& lastBySource,
+                                    const LastBySource& lastBySource,
                                     const std::vector<PlacedNote>& placed,
                                     const std::optional<int>& previousSingleSourceLane,
                                     const std::optional<int>& previousSingleTargetLane,
@@ -1099,15 +1263,15 @@ std::optional<int> chooseLaneStrict(const Note& note,
 
 struct SliceBeamState {
     std::vector<SolvedPlacement> solved;
-    std::set<int> occupiedLanes;
+    LaneMask occupiedLanes = 0;
     std::vector<int> laneUse;
     std::vector<PlacedNote> placed;
-    std::map<int, PlacedNote> lastBySource;
+    LastBySource lastBySource;
     double score = 0.0;
 };
 
 bool candidatePassesHardGates(const std::vector<PlacedNote>& placed,
-                              const std::set<int>& occupiedLanes,
+                              LaneMask occupiedLanes,
                               const Note& note,
                               int lane,
                               int sourceLane,
@@ -1132,7 +1296,7 @@ std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart&
                                                                     const SliceInfo& slice,
                                                                     const NK2Options& options,
                                                                     const std::vector<int>& laneUse,
-                                                                    const std::map<int, PlacedNote>& lastBySource,
+                                                                    const LastBySource& lastBySource,
                                                                     const std::vector<PlacedNote>& placed,
                                                                     NK2Report& report) {
     if (slice.noteIndices.size() <= 1 || slice.noteIndices.size() > 12) {
@@ -1186,14 +1350,14 @@ std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart&
                 note.sourceLane = sourceLane;
                 note.lane = candidate.lane;
                 next.solved.push_back({note, sourceJackContinuation ? MotifKind::Jack : motif});
-                next.occupiedLanes.insert(candidate.lane);
+                occupyLane(next.occupiedLanes, candidate.lane);
                 if (candidate.lane >= 0 && candidate.lane < options.targetKeyCount) {
                     ++next.laneUse[static_cast<std::size_t>(candidate.lane)];
                 }
 
                 PlacedNote placedNote{note.time, note.lane, sourceLane, note.type, note.endTime};
                 next.placed.push_back(placedNote);
-                next.lastBySource[sourceLane] = placedNote;
+                rememberLastBySource(next.lastBySource, sourceLane, placedNote);
                 next.score += candidate.score;
                 nextBeam.push_back(std::move(next));
                 ++report.localSolverCandidates;
@@ -1231,7 +1395,7 @@ std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart&
 std::optional<SolvedPlacement> tryRollLowerKeyOverflowTap(const Note& original,
                                                           const NK2Options& options,
                                                           const std::vector<int>& laneUse,
-                                                          const std::map<int, PlacedNote>& lastBySource,
+                                                          const LastBySource& lastBySource,
                                                           const std::vector<PlacedNote>& placed,
                                                           MotifKind motif) {
     if (options.targetKeyCount >= options.sourceKeyCount || original.type != NoteType::Tap) {
@@ -1254,7 +1418,7 @@ std::optional<SolvedPlacement> tryRollLowerKeyOverflowTap(const Note& original,
                                              std::nullopt,
                                              sourceJackContinuation,
                                              sourceJackContinuation ? MotifKind::Jack : motif);
-        std::set<int> emptyOccupied;
+        LaneMask emptyOccupied = 0;
         for (const auto& candidate : ranked) {
             if (!candidatePassesHardGates(placed,
                                           emptyOccupied,
@@ -1279,8 +1443,7 @@ PlacementStats collectPlacementStats(const Chart& converted,
                                      int createdJackWindowMs) {
     PlacementStats stats;
     stats.laneDistribution.assign(static_cast<std::size_t>(std::max(0, targetKeyCount)), 0);
-    std::vector<PlacedNote> placed;
-    placed.reserve(converted.notes.size());
+    std::array<std::vector<PlacedNote>, kMaxKeyCount> placedByLane;
     for (const auto& note : converted.notes) {
         if (note.lane >= 0 && note.lane < targetKeyCount) {
             ++stats.laneDistribution[static_cast<std::size_t>(note.lane)];
@@ -1292,15 +1455,18 @@ PlacementStats collectPlacementStats(const Chart& converted,
                 ++stats.sourceAnchorMatches;
             }
         }
-        for (const auto& existing : placed) {
-            if (existing.time == note.time && existing.lane == note.lane) {
-                ++stats.sameTimeCollisions;
+        if (note.lane >= 0 && note.lane < kMaxKeyCount) {
+            auto& lanePlaced = placedByLane[static_cast<std::size_t>(note.lane)];
+            for (const auto& existing : lanePlaced) {
+                if (existing.time == note.time) {
+                    ++stats.sameTimeCollisions;
+                }
+                if (hasLongNoteConflictWithPlaced(existing, note, note.lane)) {
+                    ++stats.longNoteConflicts;
+                }
             }
-            if (hasLongNoteConflict({existing}, note, note.lane)) {
-                ++stats.longNoteConflicts;
-            }
+            lanePlaced.push_back({note.time, note.lane, sourceLane, note.type, note.endTime});
         }
-        placed.push_back({note.time, note.lane, sourceLaneOf(note), note.type, note.endTime});
     }
 
     std::vector<const Note*> convertedSorted;
@@ -1604,10 +1770,11 @@ bool oppositePanelSupport(int sourceLane, int lane) {
     return lane >= 3 && lane <= 6;
 }
 
-std::vector<Candidate> rankedSupportLanes(const SupportEvent& event,
-                                          const std::vector<int>& laneUse,
-                                          const NK2Options& options) {
-    std::vector<Candidate> ranked;
+CandidateList rankedSupportLanes(const SupportEvent& event,
+                                 const std::vector<int>& laneUse,
+                                 const NK2Options& options) {
+    CandidateList ranked;
+    const auto laneContext = buildLaneUseContext(laneUse, options.targetKeyCount, options.layoutWeights);
     const int mirrorLane = options.targetKeyCount - 1 - event.anchorLane;
     auto pool = candidatePoolFor(event.sourceLane, options.sourceKeyCount, options.targetKeyCount);
     if (event.kind == SupportKind::Mirror) {
@@ -1615,13 +1782,14 @@ std::vector<Candidate> rankedSupportLanes(const SupportEvent& event,
         addUnique(pool, mirrorLane - 1, options.targetKeyCount);
         addUnique(pool, mirrorLane + 1, options.targetKeyCount);
     }
-    for (const int lane : pool) {
+    for (int poolIndex = 0; poolIndex < pool.count; ++poolIndex) {
+        const int lane = pool.lanes[static_cast<std::size_t>(poolIndex)];
         if (lane == event.anchorLane) {
             continue;
         }
-        double score = remixScoreForLane(event.sourceLane, lane, laneUse, options.targetKeyCount, options.layoutWeights);
-        score += 0.60 * laneCoverageNeedScore(lane, laneUse, options.targetKeyCount, options.layoutWeights);
-        score += 0.45 * panelLaneNeedScore(lane, laneUse, options.targetKeyCount);
+        double score = remixScoreForLaneFast(event.sourceLane, lane, laneContext);
+        score += 0.60 * laneCoverageNeedScoreFast(laneContext, lane);
+        score += 0.45 * panelLaneNeedScoreFast(laneContext, lane);
         if (lane == mirrorLane) {
             score += 0.55;
         }
@@ -1639,14 +1807,9 @@ std::vector<Candidate> rankedSupportLanes(const SupportEvent& event,
         if (event.kind == SupportKind::StrongBeat && laneInSourcePanel(event.sourceLane, lane)) {
             score += 0.10;
         }
-        ranked.push_back({lane, score});
+        addCandidate(ranked, lane, score);
     }
-    std::stable_sort(ranked.begin(), ranked.end(), [](const Candidate& lhs, const Candidate& rhs) {
-        if (lhs.score != rhs.score) {
-            return lhs.score > rhs.score;
-        }
-        return lhs.lane < rhs.lane;
-    });
+    sortCandidates(ranked);
     return ranked;
 }
 
@@ -1778,14 +1941,15 @@ std::vector<int> laneDistributionFor(const Chart& chart, int targetKeyCount) {
     return distribution;
 }
 
-bool supportCandidateIsSafe(const Chart& chart,
+bool supportCandidateIsSafe(const SupportSafetyIndex& index,
                             const Note& candidate,
                             int jackWindowMs,
                             int sameSourceGapMs) {
-    for (const auto& note : chart.notes) {
-        if (note.lane != candidate.lane) {
-            continue;
-        }
+    if (candidate.lane < 0 || candidate.lane >= kMaxKeyCount) {
+        return true;
+    }
+    const auto& laneNotes = index.lanes[static_cast<std::size_t>(candidate.lane)];
+    for (const auto& note : laneNotes) {
         if (note.time == candidate.time) {
             return false;
         }
@@ -1794,8 +1958,7 @@ bool supportCandidateIsSafe(const Chart& chart,
             return false;
         }
         const int dt = std::abs(note.time - candidate.time);
-        const int existingSourceLane = sourceLaneOf(note);
-        const int guardedGap = existingSourceLane == candidate.sourceLane ? sameSourceGapMs : jackWindowMs;
+        const int guardedGap = note.sourceLane == candidate.sourceLane ? sameSourceGapMs : jackWindowMs;
         if (dt > 0 && dt <= guardedGap) {
             return false;
         }
@@ -1848,7 +2011,8 @@ bool tryAcceptSupportEvent(Chart& chart,
                            std::map<int, int>& acceptedByPhrase,
                            const std::map<int, int>& sourceNotesByPhrase,
                            int acceptedSoFar,
-                           int budget) {
+                           int budget,
+                           SupportSafetyIndex& safetyIndex) {
     countSupportCandidate(report, event.kind);
 
     if (acceptedSoFar >= budget) {
@@ -1882,11 +2046,12 @@ bool tryAcceptSupportEvent(Chart& chart,
         const int supportJackWindowMs = supportJackWindowMsFor(options);
         const int sameSourceGapMs =
             fourToFiveFill ? kFourToFiveSupportSameSourceGapMs : kDefaultSupportSameSourceGapMs;
-        if (!supportCandidateIsSafe(chart, candidate, supportJackWindowMs, sameSourceGapMs)) {
+        if (!supportCandidateIsSafe(safetyIndex, candidate, supportJackWindowMs, sameSourceGapMs)) {
             continue;
         }
 
         chart.notes.push_back(candidate);
+        addToSupportSafetyIndex(safetyIndex, candidate);
         if (candidate.lane >= 0 && candidate.lane < options.targetKeyCount) {
             ++laneUse[static_cast<std::size_t>(candidate.lane)];
         }
@@ -1907,6 +2072,7 @@ void applySupportNotes(Chart& chart, NK2Report& report, const NK2Options& option
     const auto sourceNotesByPhrase = sourceNoteCountsBySupportPhrase(chart);
     report.supportPhraseWindows = static_cast<int>(sourceNotesByPhrase.size());
     auto laneUse = laneDistributionFor(chart, options.targetKeyCount);
+    auto safetyIndex = buildSupportSafetyIndex(chart);
     std::map<int, int> acceptedByPhrase;
     int accepted = 0;
     for (const auto& event : events) {
@@ -1918,7 +2084,8 @@ void applySupportNotes(Chart& chart, NK2Report& report, const NK2Options& option
                                   acceptedByPhrase,
                                   sourceNotesByPhrase,
                                   accepted,
-                                  budget)) {
+                                  budget,
+                                  safetyIndex)) {
             ++accepted;
         }
     }
@@ -2031,7 +2198,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     const auto slices = buildSlices(chart, options.sameTimeEpsilonMs);
     std::vector<int> laneUse(static_cast<std::size_t>(options.targetKeyCount), 0);
     std::vector<PlacedNote> placed;
-    std::map<int, PlacedNote> lastBySource;
+    LastBySource lastBySource;
     placed.reserve(chart.notes.size());
 
     std::optional<int> previousSingleSourceLane;
@@ -2040,7 +2207,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     std::vector<RecentSingleNote> recentSingles;
 
     for (const auto& slice : slices) {
-        std::set<int> occupiedLanes;
+        LaneMask occupiedLanes = 0;
         const bool singleNoteSlice = slice.noteIndices.size() == 1;
 
         if (!singleNoteSlice) {
@@ -2062,7 +2229,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
                     PlacedNote placedNote{
                         solved.note.time, solved.note.lane, sourceLane, solved.note.type, solved.note.endTime};
                     placed.push_back(placedNote);
-                    lastBySource[sourceLane] = placedNote;
+                    rememberLastBySource(lastBySource, sourceLane, placedNote);
                     const auto mirrorAnchor = sameTimeMirrorAnchorTargetLane(solved.note, placed, options);
                     if (mirrorAnchor.has_value() && *mirrorAnchor == solved.note.lane) {
                         ++result.report.superSymmetryMirrorAnchors;
@@ -2137,7 +2304,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
             note.sourceLane = sourceLane;
             note.lane = *chosenLane;
             if (std::abs(note.time - slice.time) <= options.sameTimeEpsilonMs) {
-                occupiedLanes.insert(*chosenLane);
+                occupyLane(occupiedLanes, *chosenLane);
             }
             if (*chosenLane >= 0 && *chosenLane < options.targetKeyCount) {
                 ++laneUse[static_cast<std::size_t>(*chosenLane)];
@@ -2156,7 +2323,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
                 ++result.report.superSymmetryGaplessStairs;
             }
             placed.push_back(placedNote);
-            lastBySource[sourceLane] = placedNote;
+            rememberLastBySource(lastBySource, sourceLane, placedNote);
             countMotifPlacement(result.report, placedMotif);
             result.chart.notes.push_back(note);
 

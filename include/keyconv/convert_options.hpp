@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include <keyconv/quality_report.hpp>
 
@@ -58,6 +59,8 @@ struct ConvertOptions {
     int echoHighDensityWindowMs = 1000;
     double echoMaxLocalNps = 12.0;
     std::optional<TargetKProfile> targetKProfile;
+    std::vector<int> advisoryTargetLanes;
+    double advisoryLaneWeight = 18.0;
     CollisionPolicy collisionPolicy = CollisionPolicy::ShiftNearest;
     unsigned int seed = 0;
 };

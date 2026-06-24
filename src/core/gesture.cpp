@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <set>
 
 namespace keyconv {
@@ -23,7 +25,12 @@ struct PhraseNote {
 struct FullFieldHandBalance {
     int leftNotes = 0;
     int rightNotes = 0;
+    bool hasRecentHand = false;
+    bool recentLeftHand = false;
+    int recentTime = std::numeric_limits<int>::min();
 };
+
+constexpr int kFullFieldFrequentHandSwitchMs = 750;
 
 int signOf(int value) {
     if (value > 0) {
@@ -445,21 +452,33 @@ bool fullFieldTokenShouldAlternateHands(PatternKind kind, std::size_t noteCount)
     if (kind == PatternKind::Stream || kind == PatternKind::Burst) {
         return true;
     }
-    if ((kind == PatternKind::StairUp || kind == PatternKind::StairDown) && noteCount >= 6) {
+    if ((kind == PatternKind::StairUp || kind == PatternKind::StairDown) && noteCount >= 3) {
         return true;
     }
     return false;
 }
 
-bool chooseFullFieldPrimaryLeft(const FullFieldHandBalance& balance) {
+bool chooseFullFieldPrimaryLeft(const FullFieldHandBalance& balance, int phraseStartTime) {
+    if (balance.hasRecentHand && phraseStartTime >= balance.recentTime &&
+        phraseStartTime - balance.recentTime <= kFullFieldFrequentHandSwitchMs) {
+        return !balance.recentLeftHand;
+    }
     return balance.leftNotes <= balance.rightNotes;
 }
 
-void recordFullFieldHand(FullFieldHandBalance& balance, bool leftHand, int count = 1) {
+void recordFullFieldHand(FullFieldHandBalance& balance,
+                         bool leftHand,
+                         int count = 1,
+                         std::optional<int> time = std::nullopt) {
     if (leftHand) {
         balance.leftNotes += count;
     } else {
         balance.rightNotes += count;
+    }
+    if (time.has_value() && (!balance.hasRecentHand || *time >= balance.recentTime)) {
+        balance.hasRecentHand = true;
+        balance.recentLeftHand = leftHand;
+        balance.recentTime = *time;
     }
 }
 
@@ -505,7 +524,7 @@ void addFullFieldTokenHints(GestureRail& rail,
         return;
     }
 
-    const bool primaryLeft = chooseFullFieldPrimaryLeft(balance);
+    const bool primaryLeft = chooseFullFieldPrimaryLeft(balance, notes.front().time);
     const int motifHitCount = static_cast<int>(notes.size());
     const int motifDurationMs = motifHitCount >= 2 ? notes.back().time - notes.front().time : 0;
     const auto [phraseSourceMin, phraseSourceMax] = sourceRangeForNotes(notes);
@@ -524,7 +543,7 @@ void addFullFieldTokenHints(GestureRail& rail,
                              phraseSourceMin,
                              phraseSourceMax);
         }
-        recordFullFieldHand(balance, primaryLeft, motifHitCount);
+        recordFullFieldHand(balance, primaryLeft, motifHitCount, notes.back().time);
         return;
     }
 
@@ -543,7 +562,7 @@ void addFullFieldTokenHints(GestureRail& rail,
                              motifDurationMs,
                              phraseSourceMin,
                              phraseSourceMax);
-            recordFullFieldHand(balance, leftHand);
+            recordFullFieldHand(balance, leftHand, 1, notes[index].time);
         }
         return;
     }
@@ -571,7 +590,7 @@ void addFullFieldTokenHints(GestureRail& rail,
                              motifDurationMs,
                              leftHand ? leftSourceMin : rightSourceMin,
                              leftHand ? leftSourceMax : rightSourceMax);
-            recordFullFieldHand(balance, leftHand);
+            recordFullFieldHand(balance, leftHand, 1, note.time);
         }
         return;
     }
@@ -591,7 +610,7 @@ void addFullFieldTokenHints(GestureRail& rail,
                              motifDurationMs,
                              phraseSourceMin,
                              phraseSourceMax);
-            recordFullFieldHand(balance, leftHand);
+            recordFullFieldHand(balance, leftHand, 1, notes[index].time);
         }
         return;
     }
@@ -610,7 +629,7 @@ void addFullFieldTokenHints(GestureRail& rail,
                          phraseSourceMin,
                          phraseSourceMax);
     }
-    recordFullFieldHand(balance, primaryLeft, motifHitCount);
+    recordFullFieldHand(balance, primaryLeft, motifHitCount, notes.back().time);
 }
 
 void addFullFieldSourceJackGroupHints(GestureRail& rail,
@@ -637,7 +656,7 @@ void addFullFieldSourceJackGroupHints(GestureRail& rail,
         if (notes.size() < 3) {
             continue;
         }
-        const bool primaryLeft = chooseFullFieldPrimaryLeft(balance);
+        const bool primaryLeft = chooseFullFieldPrimaryLeft(balance, notes.front().time);
         const int motifHitCount = static_cast<int>(notes.size());
         const int motifDurationMs = notes.back().time - notes.front().time;
         for (const auto& note : notes) {
@@ -652,7 +671,7 @@ void addFullFieldSourceJackGroupHints(GestureRail& rail,
                              motifHitCount,
                              motifDurationMs);
         }
-        recordFullFieldHand(balance, primaryLeft, motifHitCount);
+        recordFullFieldHand(balance, primaryLeft, motifHitCount, notes.back().time);
         ++motifId;
     }
 }
@@ -679,7 +698,7 @@ void addFullFieldFallbackHints(GestureRail& rail,
     }
 
     for (const auto& note : sortedPhraseNotes(std::move(notes))) {
-        const bool primaryLeft = chooseFullFieldPrimaryLeft(balance);
+        const bool primaryLeft = chooseFullFieldPrimaryLeft(balance, note.time);
         addFullFieldHint(rail,
                          note,
                          PatternKind::Single,
@@ -690,7 +709,7 @@ void addFullFieldFallbackHints(GestureRail& rail,
                          0,
                          1,
                          0);
-        recordFullFieldHand(balance, primaryLeft);
+        recordFullFieldHand(balance, primaryLeft, 1, note.time);
     }
 }
 

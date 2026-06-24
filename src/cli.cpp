@@ -8,6 +8,9 @@
 
 #include "nk2/nk2_convert.hpp"
 #include "nk2/nk2_report.hpp"
+#if defined(KEYWEAVER_WITH_ONNXRUNTIME)
+#include "onnx/onnx_cuda_policy.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -41,10 +44,17 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v1.0.0";
+constexpr const char* kToolVersion = "v1.1.1";
+constexpr const char* kDefaultBatchOnnxPolicyModel = "lane_policy_student_mlp_u_e_circusgalop.onnx";
+constexpr const char* kLegacyBatchOnnxPolicyModel = "u_e_circusgalop_chart_dataset_lane_policy.onnx";
 using SteadyClock = std::chrono::steady_clock;
 
 class ConvertedInputError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+class SourceKeyFilterSkip : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
@@ -269,6 +279,15 @@ struct CliOptions {
     bool batchMode = false;
     bool batchQuiet = false;
     std::optional<int> jobs;
+    std::optional<std::filesystem::path> onnxPolicy;
+    bool autoOnnxPolicy = true;
+    bool onnxPolicyAutoSelected = false;
+    std::string onnxProvider = "cuda";
+    bool onnxPolicyStrict = false;
+    int onnxDeviceId = 0;
+    int onnxMaxBatchNotes = 512;
+    bool onnxMaxBatchNotesProvided = false;
+    double onnxAdvisoryWeight = 18.0;
     bool preserveConvert = false;
     keyconv::nk2::Engine engine = keyconv::nk2::Engine::Classic;
     keyconv::nk2::Mode nk2Mode = keyconv::nk2::Mode::Native;
@@ -349,6 +368,15 @@ void printHelp(std::ostream& out) {
     out << "  --input-list <path>     Read batch input chart paths from a UTF-8 newline-delimited list.\n";
     out << "  --batch-quiet           Reduce batch stdout to progress, failures, and summary.\n";
     out << "  --jobs <number>         Batch worker count override. Default: detected CPU thread count.\n";
+    out << "  --onnx-policy <path>    Batch-only ONNX lane policy model. Requires KEYWEAVER_WITH_ONNXRUNTIME.\n";
+    out << "                          Target-10 batch auto-loads models/" << kDefaultBatchOnnxPolicyModel
+        << " when bundled.\n";
+    out << "  --no-auto-onnx-policy   Disable bundled ONNX lane policy auto-load.\n";
+    out << "  --onnx-provider cuda    ONNX Runtime execution provider. Only cuda is supported in this build path.\n";
+    out << "  --onnx-policy-strict    Fail instead of falling back to deterministic batch when CUDA policy fails.\n";
+    out << "  --onnx-device <number>  CUDA device id for ONNX Runtime. Default: 0.\n";
+    out << "  --onnx-max-batch-notes <number> Split CUDA inference into note chunks. Default: 512; use 0 for all notes.\n";
+    out << "  --onnx-advisory-weight <n> Lane-score weight for ONNX advisory lanes. Default: 18.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
@@ -826,6 +854,23 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.batchQuiet = true;
         } else if (arg == "--jobs") {
             options.jobs = parseInt(requireValue(i, args, arg), arg);
+        } else if (arg == "--onnx-policy") {
+            options.onnxPolicy = pathFromArgument(requireValue(i, args, arg));
+            options.onnxPolicyAutoSelected = false;
+            options.batchMode = true;
+        } else if (arg == "--no-auto-onnx-policy") {
+            options.autoOnnxPolicy = false;
+        } else if (arg == "--onnx-provider") {
+            options.onnxProvider = requireValue(i, args, arg);
+        } else if (arg == "--onnx-policy-strict") {
+            options.onnxPolicyStrict = true;
+        } else if (arg == "--onnx-device") {
+            options.onnxDeviceId = parseInt(requireValue(i, args, arg), arg);
+        } else if (arg == "--onnx-max-batch-notes") {
+            options.onnxMaxBatchNotes = parseInt(requireValue(i, args, arg), arg);
+            options.onnxMaxBatchNotesProvided = true;
+        } else if (arg == "--onnx-advisory-weight") {
+            options.onnxAdvisoryWeight = parseDouble(requireValue(i, args, arg), arg);
         } else if (arg == "--report") {
             options.report = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--target-profile") {
@@ -884,6 +929,37 @@ std::string readFile(const std::filesystem::path& path) {
     std::ostringstream buffer;
     buffer << in.rdbuf();
     return buffer.str();
+}
+
+std::optional<int> detectSourceKeyCount(const std::filesystem::path& input) {
+    const auto inputText = readFile(input);
+    const bool bmsInput = isBmsPath(input);
+    const keyconv::ParseOptions parseOptions{};
+    const auto chart = bmsInput ? keyconv::parseBms(inputText, parseOptions)
+                                : keyconv::parseOsu(inputText, parseOptions);
+    if (chart.meta.sourceKeyCount <= 0) {
+        return std::nullopt;
+    }
+    return chart.meta.sourceKeyCount;
+}
+
+void throwIfBatchSourceMismatch(const CliOptions& cli, const std::filesystem::path& input) {
+    if (!cli.source.has_value()) {
+        return;
+    }
+    const auto detected = detectSourceKeyCount(input);
+    if (detected.has_value() && *detected == *cli.source) {
+        return;
+    }
+
+    std::ostringstream message;
+    message << "source key filter " << *cli.source << "K did not match ";
+    if (detected.has_value()) {
+        message << *detected << "K";
+    } else {
+        message << "unknown source";
+    }
+    throw SourceKeyFilterSkip(message.str());
 }
 
 void writeFile(const std::filesystem::path& path, const std::string& text) {
@@ -1259,6 +1335,74 @@ std::optional<std::filesystem::path> bundledTargetProfilePath(int targetKeyCount
     return std::nullopt;
 }
 
+std::vector<std::filesystem::path> bundledSearchRoots() {
+    std::vector<std::filesystem::path> roots;
+#if defined(_WIN32)
+    const auto exePath = currentExecutablePath();
+    if (!exePath.empty()) {
+        roots.push_back(exePath.parent_path());
+    }
+#endif
+    std::error_code currentPathError;
+    const auto cwd = std::filesystem::current_path(currentPathError);
+    if (!currentPathError) {
+        roots.push_back(cwd);
+    }
+    return roots;
+}
+
+std::optional<std::filesystem::path> bundledBatchOnnxPolicyPath(int targetKeyCount) {
+#if defined(KEYWEAVER_WITH_ONNXRUNTIME)
+    if (targetKeyCount != 10) {
+        return std::nullopt;
+    }
+
+    const std::vector<std::filesystem::path> relativeCandidates = {
+        std::filesystem::path("models") / kDefaultBatchOnnxPolicyModel,
+        std::filesystem::path("models") / kLegacyBatchOnnxPolicyModel,
+        std::filesystem::path(kDefaultBatchOnnxPolicyModel),
+        std::filesystem::path("build") / kDefaultBatchOnnxPolicyModel,
+    };
+
+    for (const auto& root : bundledSearchRoots()) {
+        for (const auto& relativePath : relativeCandidates) {
+            const auto candidate = root / relativePath;
+            std::error_code existsError;
+            if (std::filesystem::is_regular_file(candidate, existsError)) {
+                return candidate;
+            }
+        }
+    }
+#else
+    (void)targetKeyCount;
+#endif
+    return std::nullopt;
+}
+
+void applyDefaultBatchOnnxPolicy(CliOptions& options) {
+#if defined(KEYWEAVER_WITH_ONNXRUNTIME)
+    const bool batch = options.batchMode || options.inputs.size() > 1;
+    if (options.help || !options.autoOnnxPolicy || options.onnxPolicy.has_value() ||
+        !options.target.has_value() || !batch || options.engine != keyconv::nk2::Engine::Classic) {
+        return;
+    }
+
+    const auto policyPath = bundledBatchOnnxPolicyPath(*options.target);
+    if (!policyPath.has_value()) {
+        return;
+    }
+
+    options.onnxPolicy = *policyPath;
+    options.onnxPolicyAutoSelected = true;
+    options.onnxPolicyStrict = true;
+    if (!options.onnxMaxBatchNotesProvided) {
+        options.onnxMaxBatchNotes = 0;
+    }
+#else
+    (void)options;
+#endif
+}
+
 void validateOptions(const CliOptions& options) {
     if (options.help) {
         return;
@@ -1282,8 +1426,9 @@ void validateOptions(const CliOptions& options) {
         throw std::runtime_error("--compare-policies must not be empty");
     }
     const bool batch = options.batchMode || options.inputs.size() > 1;
-    if (options.engine == keyconv::nk2::Engine::NK2 && batch) {
-        throw std::runtime_error("--engine nk2 is single-input only in this milestone");
+    if (options.engine == keyconv::nk2::Engine::NK2 && batch &&
+        options.nk2Mode == keyconv::nk2::Mode::Report) {
+        throw std::runtime_error("--nk2-mode report is single-input only");
     }
     if (options.engine == keyconv::nk2::Engine::NK2 && options.comparePolicies.has_value()) {
         throw std::runtime_error("--compare-policies is only supported by the classic engine");
@@ -1328,6 +1473,29 @@ void validateOptions(const CliOptions& options) {
     }
     if (!batch && options.batchQuiet) {
         throw std::runtime_error("--batch-quiet is only valid for batch mode");
+    }
+    if (options.onnxPolicy.has_value()) {
+        if (!batch) {
+            throw std::runtime_error("--onnx-policy is only valid for batch mode");
+        }
+        if (options.engine != keyconv::nk2::Engine::Classic) {
+            throw std::runtime_error("--onnx-policy is only supported by the classic engine");
+        }
+        if (options.onnxProvider != "cuda") {
+            throw std::runtime_error("--onnx-provider currently supports cuda only");
+        }
+        if (options.onnxDeviceId < 0) {
+            throw std::runtime_error("--onnx-device must be non-negative");
+        }
+        if (options.onnxMaxBatchNotes < 0) {
+            throw std::runtime_error("--onnx-max-batch-notes must be non-negative");
+        }
+        if (options.onnxAdvisoryWeight < 0.0) {
+            throw std::runtime_error("--onnx-advisory-weight must be non-negative");
+        }
+#if !defined(KEYWEAVER_WITH_ONNXRUNTIME)
+        throw std::runtime_error("--onnx-policy requires a build configured with KEYWEAVER_WITH_ONNXRUNTIME=ON");
+#endif
     }
     if (!batch && isBmsPath(options.input) && options.out.has_value() && !isBmsPath(*options.out)) {
         throw std::runtime_error("BMS input can only write BMS-family output (.bms, .bme, .bml, .pms)");
@@ -1499,6 +1667,67 @@ std::vector<std::string> splitCommaList(const std::string& value) {
 keyconv::ExpansionPolicy defaultExpansionPolicy(int sourceKeyCount, int targetKeyCount) {
     return targetKeyCount > sourceKeyCount ? keyconv::ExpansionPolicy::PreserveTapPlus
                                            : keyconv::ExpansionPolicy::PreserveNoteCount;
+}
+
+keyconv::ConvertOptions makeConvertOptions(const CliOptions& cli, const keyconv::Chart& chart) {
+    keyconv::ConvertOptions convertOptions;
+    convertOptions.sourceKeyCount = cli.source.value_or(chart.meta.sourceKeyCount);
+    convertOptions.targetKeyCount = *cli.target;
+    convertOptions.style = cli.style;
+    convertOptions.collisionPolicy = cli.collision;
+    convertOptions.optimizer = cli.optimizer;
+    convertOptions.compressPolicy = cli.compressPolicy;
+    convertOptions.distancePolicy = cli.distancePolicy;
+    convertOptions.expansionPolicy = cli.expansionPolicyProvided
+                                         ? cli.expansionPolicy
+                                         : defaultExpansionPolicy(convertOptions.sourceKeyCount,
+                                                                  convertOptions.targetKeyCount);
+    convertOptions.echoPolicy = cli.echoPolicy;
+    convertOptions.streamEchoProfile = cli.streamEchoProfile;
+    convertOptions.streamTransformPolicy = cli.streamTransformPolicy;
+    convertOptions.tenKeyPlannerPolicy = cli.tenKeyPlannerPolicy;
+    convertOptions.seed = cli.seed;
+    convertOptions.jackPreservePolicy = cli.jackPreservePolicy;
+    convertOptions.gestureRailEnabled = cli.gestureRailEnabled;
+    convertOptions.preserveLaneDrift = cli.preserveLaneDrift;
+    convertOptions.echoDiagnostics = cli.echoDiagnostics;
+    convertOptions.dpMode = cli.dpMode;
+    convertOptions.tenKFullFieldRemix = cli.tenKFullFieldRemix;
+    convertOptions.tenKFullFieldRemixDensityCeiling = cli.tenKFullFieldRemixDensityCeiling;
+    convertOptions.tenKFullFieldRemixPhaseStep = cli.tenKFullFieldRemixPhaseStep;
+    convertOptions.beamWidth = cli.beamWidth;
+    convertOptions.sameTimeEpsilonMs = cli.sameTimeEpsilonMs;
+    convertOptions.minObjectGapMs = cli.minObjectGapMs;
+    convertOptions.sameLaneMinGapMs = cli.sameLaneMinGapMs;
+    convertOptions.jackWindowMs = cli.jackWindowMs;
+    convertOptions.strictJackWindowMs = cli.strictJackWindowMs;
+    convertOptions.allowPlayableJackSplit = cli.allowPlayableJackSplit;
+    convertOptions.maxJackSplitLanes = cli.maxJackSplitLanes;
+    convertOptions.snapRolledNotes = cli.snapRolledNotes;
+    convertOptions.snapToleranceMs = cli.snapToleranceMs;
+    convertOptions.maxRollMs = cli.maxRollMs;
+    convertOptions.maxAddedNoteRatio = cli.maxAddedNoteRatio;
+    convertOptions.maxAddedPerSlice = cli.maxAddedPerSlice;
+    convertOptions.maxAddedPerMeasure = cli.maxAddedPerMeasure;
+    convertOptions.deterministicExpansion = cli.deterministicExpansion;
+    convertOptions.expansionMinGapMs = cli.expansionMinGapMs;
+    convertOptions.expansionSameLaneMinGapMs = cli.expansionSameLaneMinGapMs;
+    convertOptions.snapAddedNotes = cli.snapAddedNotes;
+    convertOptions.expansionSnapToleranceMs = cli.expansionSnapToleranceMs;
+    convertOptions.maxEchoAddedRatio = cli.maxEchoAddedRatio;
+    convertOptions.maxEchoPerPattern = cli.maxEchoPerPattern;
+    convertOptions.maxEchoPerMeasure = cli.maxEchoPerMeasure;
+    convertOptions.maxEchoPerSlice = cli.maxEchoPerSlice;
+    convertOptions.minEchoPatternLength = cli.minEchoPatternLength;
+    convertOptions.minPatternConfidence = cli.minPatternConfidence;
+    convertOptions.echoRequiresSnap = cli.echoRequiresSnap;
+    convertOptions.echoMinGapMs = cli.echoMinGapMs;
+    convertOptions.echoSameLaneMinGapMs = cli.echoSameLaneMinGapMs;
+    convertOptions.echoAvoidHighDensity = cli.echoAvoidHighDensity;
+    convertOptions.echoHighDensityWindowMs = cli.echoHighDensityWindowMs;
+    convertOptions.echoMaxLocalNps = cli.echoMaxLocalNps;
+    convertOptions.advisoryLaneWeight = cli.onnxAdvisoryWeight;
+    return convertOptions;
 }
 
 std::string jsonEscape(const std::string& value) {
@@ -2261,6 +2490,9 @@ BatchItemResult runBatchItem(const CliOptions& cli,
     result.input = input;
 
     try {
+        if (cli.batchMode || cli.inputs.size() > 1) {
+            throwIfBatchSourceMismatch(cli, input);
+        }
         CliOptions item = cli;
         item.input = input;
         item.inputs = {input};
@@ -2278,6 +2510,11 @@ BatchItemResult runBatchItem(const CliOptions& cli,
         result.skipped = true;
         result.output = "Skipped already-converted chart: " + displayPath(input) +
                         " (" + error.what() + ")\n";
+    } catch (const SourceKeyFilterSkip& error) {
+        result.exitCode = 0;
+        result.skipped = true;
+        result.output = "Skipped source-key mismatch: " + displayPath(input) +
+                        " (" + error.what() + ")\n";
     } catch (const std::exception& error) {
         result.exitCode = 1;
         result.error = "Batch item failed: " + displayPath(input) + ": " + error.what();
@@ -2286,7 +2523,282 @@ BatchItemResult runBatchItem(const CliOptions& cli,
     return result;
 }
 
+int runBatchConversion(const CliOptions& cli);
+
+struct ParsedBatchChart {
+    std::filesystem::path input;
+    bool bmsInput = false;
+    keyconv::Chart chart;
+    keyconv::ConvertOptions convertOptions;
+};
+
+struct OnnxBatchItemResult {
+    std::size_t index = 0;
+    std::filesystem::path input;
+    int exitCode = 1;
+    std::string output;
+    std::string error;
+};
+
+std::optional<keyconv::TargetKProfile> batchTargetProfile(const CliOptions& cli) {
+    auto profilePath = cli.targetProfile;
+    if (!profilePath.has_value()) {
+        profilePath = bundledTargetProfilePath(*cli.target);
+    }
+    if (!profilePath.has_value()) {
+        return std::nullopt;
+    }
+    auto profile = loadTargetKProfile(*profilePath);
+    if (profile.targetKeys != *cli.target) {
+        throw std::runtime_error("Target profile key count does not match --target");
+    }
+    return profile;
+}
+
+ParsedBatchChart parseBatchChartForOnnx(const CliOptions& cli,
+                                        const std::filesystem::path& input,
+                                        const std::optional<keyconv::TargetKProfile>& targetProfile) {
+    throwIfConvertedInput(input);
+    throwIfBatchSourceMismatch(cli, input);
+    const auto inputText = readFile(input);
+    const bool bmsInput = isBmsPath(input);
+    const keyconv::ParseOptions parseOptions{cli.source};
+    auto chart = bmsInput ? keyconv::parseBms(inputText, parseOptions)
+                          : keyconv::parseOsu(inputText, parseOptions);
+    throwIfConvertedInput(input, chart);
+
+    auto convertOptions = makeConvertOptions(cli, chart);
+    if (targetProfile.has_value()) {
+        convertOptions.targetKProfile = *targetProfile;
+    }
+    return {input, bmsInput, std::move(chart), std::move(convertOptions)};
+}
+
+OnnxBatchItemResult runOnnxBatchItem(const CliOptions& cli,
+                                     std::size_t index,
+                                     const ParsedBatchChart& item) {
+    OnnxBatchItemResult result;
+    result.index = index;
+    result.input = item.input;
+
+    try {
+        const keyconv::Converter converter;
+        const auto converted = converter.convert(item.chart, item.convertOptions);
+        std::ostringstream out;
+        if (!cli.dryRun) {
+            const auto outputText = item.bmsInput
+                                        ? keyconv::exportBms(converted.chart,
+                                                             item.convertOptions.targetKeyCount)
+                                        : keyconv::exportOsu(converted.chart,
+                                                             item.convertOptions.targetKeyCount);
+            const auto outputPath = defaultOutputPath(item.input, item.convertOptions, cli.outDir);
+            writeFile(outputPath, outputText);
+            if (!cli.batchQuiet) {
+                out << "Output written: " << displayPath(outputPath) << "\n";
+            }
+        } else if (!cli.batchQuiet) {
+            out << "Dry run: " << displayPath(item.input) << "\n";
+        }
+        result.exitCode = 0;
+        result.output = out.str();
+    } catch (const std::exception& error) {
+        result.exitCode = 1;
+        result.error = "Batch item failed: " + displayPath(item.input) + ": " + error.what();
+    }
+
+    return result;
+}
+
+int runDeterministicBatchFallback(const CliOptions& cli, const std::string& reason) {
+    if (cli.onnxPolicyStrict) {
+        std::cerr << "ONNX CUDA batch failed: " << reason << "\n";
+        return 1;
+    }
+    std::cerr << "ONNX CUDA batch failed, falling back to deterministic batch: " << reason << "\n";
+    CliOptions fallback = cli;
+    fallback.onnxPolicy.reset();
+    fallback.onnxPolicyStrict = false;
+    fallback.onnxPolicyAutoSelected = false;
+    return runBatchConversion(fallback);
+}
+
+int runOnnxBatchConversion(const CliOptions& cli) {
+#if !defined(KEYWEAVER_WITH_ONNXRUNTIME)
+    return runDeterministicBatchFallback(cli, "binary was built without KEYWEAVER_WITH_ONNXRUNTIME");
+#else
+    int succeeded = 0;
+    int failed = 0;
+    int skipped = 0;
+
+    std::cout << kToolName << " " << kToolVersion << "\n";
+    std::cout << "Batch mode: " << cli.inputs.size() << " input(s)\n";
+    std::cout << "Target keys: " << *cli.target << "\n";
+    std::cout << "ONNX lane policy: " << displayPath(*cli.onnxPolicy)
+              << (cli.onnxPolicyAutoSelected ? " (auto)" : "") << "\n";
+    std::cout << "ONNX provider: cuda";
+    if (cli.onnxDeviceId != 0) {
+        std::cout << " device=" << cli.onnxDeviceId;
+    }
+    std::cout << "\n";
+    std::cout << "Output: "
+              << (cli.outDir.has_value() ? displayPath(*cli.outDir) : "beside each input chart") << "\n";
+    if (cli.batchQuiet) {
+        std::cout << "Batch quiet: on\n";
+    }
+
+    std::vector<ParsedBatchChart> parsed;
+    parsed.reserve(cli.inputs.size());
+    try {
+        const auto targetProfile = batchTargetProfile(cli);
+        for (std::size_t index = 0; index < cli.inputs.size(); ++index) {
+            const auto& input = cli.inputs[index];
+            try {
+                parsed.push_back(parseBatchChartForOnnx(cli, input, targetProfile));
+            } catch (const ConvertedInputError& error) {
+                ++skipped;
+                if (!cli.batchQuiet) {
+                    std::cout << "Skipped already-converted chart: " << displayPath(input)
+                              << " (" << error.what() << ")\n";
+                }
+            } catch (const SourceKeyFilterSkip& error) {
+                ++skipped;
+                if (!cli.batchQuiet) {
+                    std::cout << "Skipped source-key mismatch: " << displayPath(input)
+                              << " (" << error.what() << ")\n";
+                }
+            } catch (const std::exception& error) {
+                ++failed;
+                std::cerr << "Batch item failed: " << displayPath(input) << ": "
+                          << error.what() << "\n";
+            }
+
+            const std::size_t done = index + 1;
+            const bool showProgress = !cli.batchQuiet || done == cli.inputs.size() ||
+                                      (done % std::max<std::size_t>(1, cli.inputs.size() / 100)) == 0;
+            if (showProgress) {
+                const std::size_t percent = (done * 100) / cli.inputs.size();
+                std::cout << "Prepare: " << percent << "% done, "
+                          << (cli.inputs.size() - done) << " left\n";
+            }
+        }
+    } catch (const std::exception& error) {
+        return runDeterministicBatchFallback(cli, error.what());
+    }
+
+    if (parsed.empty()) {
+        std::cout << "\nBatch summary: succeeded=0 failed=" << failed
+                  << " skipped=" << skipped << "\n";
+        return failed == 0 ? 0 : 1;
+    }
+
+    std::vector<keyconv::onnx::LanePolicyRequest> requests;
+    requests.reserve(parsed.size());
+    for (const auto& item : parsed) {
+        requests.push_back({&item.chart,
+                            item.convertOptions.sourceKeyCount,
+                            item.convertOptions.targetKeyCount});
+    }
+
+    keyconv::onnx::LanePolicyResult onnxResult;
+    try {
+        keyconv::onnx::LanePolicyOptions policyOptions;
+        policyOptions.modelPath = *cli.onnxPolicy;
+        policyOptions.cudaDeviceId = cli.onnxDeviceId;
+        policyOptions.maxBatchNotes = static_cast<std::size_t>(cli.onnxMaxBatchNotes);
+        onnxResult = keyconv::onnx::runCudaLanePolicy(requests, policyOptions);
+    } catch (const std::exception& error) {
+        return runDeterministicBatchFallback(cli, error.what());
+    }
+
+    std::cout << "ONNX CUDA inference: notes=" << onnxResult.totalNotes
+              << " run(s)=" << onnxResult.runCount
+              << " input=" << onnxResult.inputName
+              << " output=" << onnxResult.outputName << "\n";
+
+    for (std::size_t index = 0; index < parsed.size(); ++index) {
+        parsed[index].convertOptions.advisoryTargetLanes = onnxResult.lanesByChart.at(index);
+        parsed[index].convertOptions.advisoryLaneWeight = cli.onnxAdvisoryWeight;
+    }
+
+    const int baseFailed = failed;
+    const int baseSkipped = skipped;
+    const std::size_t baseCompleted = static_cast<std::size_t>(baseFailed + baseSkipped);
+    const std::size_t workerCount = batchWorkerCount(parsed.size(), cli.jobs);
+    std::cout << "Workers: " << workerCount << (cli.jobs.has_value() ? "" : " (auto)") << "\n";
+    if (workerCount > 1) {
+        std::cout << "Log order: completion order\n";
+    }
+
+    std::atomic<std::size_t> nextIndex{0};
+    std::atomic<std::size_t> parallelCompleted{0};
+    std::atomic<int> parallelSucceeded{0};
+    std::atomic<int> parallelFailed{0};
+    std::mutex logMutex;
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+
+    auto runWorker = [&]() {
+        for (;;) {
+            const std::size_t index = nextIndex.fetch_add(1);
+            if (index >= parsed.size()) {
+                break;
+            }
+            auto result = runOnnxBatchItem(cli, index, parsed[index]);
+            if (result.exitCode == 0) {
+                ++parallelSucceeded;
+            } else {
+                ++parallelFailed;
+            }
+
+            const std::size_t done = parallelCompleted.fetch_add(1) + 1;
+            const std::size_t completed = baseCompleted + done;
+            const std::size_t percent = (completed * 100) / cli.inputs.size();
+            const bool showItem = !cli.batchQuiet || result.exitCode != 0;
+            const bool showProgress = !cli.batchQuiet || done == parsed.size() ||
+                                      (done % std::max<std::size_t>(1, parsed.size() / 100)) == 0;
+
+            std::lock_guard<std::mutex> lock(logMutex);
+            if (showItem) {
+                std::cout << "\n[" << (result.index + 1) << "/" << parsed.size() << "] "
+                          << displayPath(result.input) << "\n";
+                if (!result.output.empty()) {
+                    std::cout << result.output;
+                    if (result.output.back() != '\n') {
+                        std::cout << "\n";
+                    }
+                }
+            }
+            if (result.exitCode != 0 && !result.error.empty()) {
+                std::cerr << result.error << "\n";
+            }
+            if (showProgress) {
+                std::cout << "Progress: " << percent << "% done, "
+                          << (cli.inputs.size() - completed) << " left\n";
+            }
+        }
+    };
+
+    for (std::size_t worker = 0; worker < workerCount; ++worker) {
+        workers.emplace_back(runWorker);
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+
+    succeeded += parallelSucceeded.load();
+    failed += parallelFailed.load();
+
+    std::cout << "\nBatch summary: succeeded=" << succeeded << " failed=" << failed
+              << " skipped=" << skipped << "\n";
+    return failed == 0 ? 0 : 1;
+#endif
+}
+
 int runBatchConversion(const CliOptions& cli) {
+    if (cli.onnxPolicy.has_value()) {
+        return runOnnxBatchConversion(cli);
+    }
+
     int succeeded = 0;
     int failed = 0;
     int skipped = 0;
@@ -2425,7 +2937,8 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        const auto cli = parseArgs(args);
+        auto cli = parseArgs(args);
+        applyDefaultBatchOnnxPolicy(cli);
         validateOptions(cli);
 
         if (cli.help) {

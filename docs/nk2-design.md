@@ -506,8 +506,11 @@ Neutral original tap anchors are also allowed to move more freely than the
 source skeleton. NK2 keeps stricter motif rules for source jacks, trills,
 stairs, and chords, but isolated or stream-like original taps receive reduced
 direct-lane/source-panel bonuses and stronger full-field under-use pressure.
-This makes side-lane source taps able to travel across the wider 10K field
-without treating the movement as generated support.
+They also receive a soft `left/right/right/left` panel cadence so long same-side
+phrases do not visually clump into the left panel. This makes side-lane source
+taps able to travel across the wider 10K field without treating the movement as
+generated support. The cadence is only a score term; collision, active-LN, and
+no-created-jack gates still decide legality.
 
 Generated support notes now carry provenance in both their internal note IDs and
 the NK2 report. Current prefixes include forms such as `nk2-ln-ln-*` and

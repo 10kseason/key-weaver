@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.1.1",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -97,11 +97,26 @@ try {
         Copy-Item -LiteralPath $dllPath -Destination $PackageDir
     }
 
-    foreach ($file in @("README.md", "CHANGELOG.md", "LICENSE")) {
+    foreach ($file in @("CHANGELOG.md", "LICENSE")) {
         Copy-Item -LiteralPath (Join-Path $Root $file) -Destination $PackageDir
     }
+    Get-ChildItem -LiteralPath $Root -Filter "README*.md" -File |
+        Copy-Item -Destination $PackageDir
     foreach ($dir in @("samples", "profiles", "docs")) {
         Copy-Item -LiteralPath (Join-Path $Root $dir) -Destination (Join-Path $PackageDir $dir) -Recurse
+    }
+    $ModelsDir = Join-Path $Root "models"
+    if (Test-Path $ModelsDir) {
+        Copy-Item -LiteralPath $ModelsDir -Destination (Join-Path $PackageDir "models") -Recurse
+    }
+    $BundledModels = "(none)"
+    $PackageModelsDir = Join-Path $PackageDir "models"
+    if (Test-Path $PackageModelsDir) {
+        $BundledModels = (Get-ChildItem -LiteralPath $PackageModelsDir -Filter "*.onnx" -File |
+            Select-Object -ExpandProperty Name) -join "`n"
+        if ([string]::IsNullOrWhiteSpace($BundledModels)) {
+            $BundledModels = "(none)"
+        }
     }
     Get-ChildItem -LiteralPath (Join-Path $PackageDir "samples") -Filter "* KeyWeaver*.osu" -File |
         Remove-Item -Force
@@ -112,15 +127,16 @@ try {
     }
 
     @"
-KeyWeaver v$Version Windows x64 package
+KeyWeaver v$Version End Stable Windows x64 package
 
 Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keyconv_gui.exe when both files are in this folder.
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
 Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
 The GUI Target selector supports 4K through 10K; 10K GUI conversions use Full-Field Mirror-Remix by default.
+Localized README files are included: README.md, README.en.md, README.ko.md, README.ja.md, README.zh-CN.md, README.zh-TW.md, README.ru.md.
 GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
-Source override is passed to GUI conversions.
+Source can be auto or 1K-10K in the GUI; numeric Source filters batch inputs to matching source-key charts.
 Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
 CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart and auto-detects CPU worker count.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
@@ -136,8 +152,12 @@ Use --stream-transform superrandom for deterministic per-note random lane assign
 Use --seed to vary deterministic stream-transform output.
 Bundled profile: profiles/keyweaver_10k_broad_style_v1.json
 Target-10 conversions auto-load the bundled profile; pass --target-profile to override it.
+ONNX builds auto-load models\lane_policy_student_mlp_u_e_circusgalop.onnx for target-10 CLI/GUI batch when bundled; pass --no-auto-onnx-policy to force deterministic batch.
 Normal-mode algorithm contract: docs/algorithm-lock-v0.6.0.md
 10K Full-Field Mirror-Remix design lock: docs/design-10k-fullfield-remix.md
+
+Bundled ONNX lane-policy models:
+$BundledModels
 
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")

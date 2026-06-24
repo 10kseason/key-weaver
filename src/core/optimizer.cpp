@@ -144,6 +144,8 @@ OptimizationResult greedyOptimizeSlices(const Chart& chart, const ConvertOptions
     context.weights = weightsForStyle(options.style);
     context.preserveLaneDrift = options.preserveLaneDrift;
     context.tenKFullFieldRemix = fullFieldRemix;
+    context.advisoryTargetLanes = options.advisoryTargetLanes.empty() ? nullptr : &options.advisoryTargetLanes;
+    context.advisoryLaneWeight = options.advisoryLaneWeight;
     context.preventedJacksByAssignment = &result.preventedJacksByAssignment;
     context.gestureRail = &gestureRail;
     context.laneUse.assign(static_cast<std::size_t>(options.targetKeyCount), 0);

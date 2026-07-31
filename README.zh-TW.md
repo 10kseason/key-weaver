@@ -1,25 +1,25 @@
-# KeyWeaver v1.1.1 End Stable
+# KeyWeaver v1.2.0
 
 語言: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
-KeyWeaver 是一個以 C++20/CMake 製作的鍵數轉換工具，用於 osu!mania `.osu` 譜面與 BMS 系列譜面。它面向 4K-10K SP 風格的本機確定性轉換，包含 CLI、Windows GUI、批次轉換、報告輸出，以及實驗性的 NK2 引擎。
+KeyWeaver 是一個以 C++20/CMake 製作的鍵數轉換工具，用於 osu!mania `.osu` 譜面與 BMS 系列譜面。它提供本機確定性轉換、CLI、Windows GUI、批次/報告輸出，以及支援到 18K 的升鍵、降鍵與同鍵轉換的實驗性 NK2 引擎。
 
 ## 本版本定位
 
-`v1.1.1 End Stable` 是目前專案狀態的最終本機穩定封裝線。它保留 v1.1 風格 GUI，並加入目前的 Source 選擇/過濾行為與 CLI/core 變更。本版本不執行 GitHub 發布或自動部署。
+`v1.2.0` 將實驗性 NK2 擴充至 1K-18K 的全部 source/target 組合，包括降鍵轉換與同鍵轉換，並提供已驗證的 Windows 套件、完整原始碼包與 NK2 純原始碼包。
 
 主要能力:
 
 - osu!mania `.osu` 輸入/輸出。
 - 基本 BMS/BME/BML/PMS 輸入/輸出；BMS 系列輸入只會寫出 BMS 系列輸出。
 - Source key 自動偵測與手動 override。
-- GUI Source 固定為 `auto` 與 `1`-`10`。
+- GUI Source 支援 `auto` 與 `1`-`18`。
 - 批次模式中選擇數字 Source 時，只轉換相符 source-key 的譜面，其餘略過。
-- GUI Target 支援 4K-10K。
+- GUI Target 支援 4K-18K。NK2 CLI/core 支援 1K-18K 的全部 source/target 組合，包括從高鍵數轉換到低鍵數。
 - 未指定 `--out` / `--out-dir` 時，輸出寫在輸入譜面旁。
 - 以 `--batch`、`--input-list`、`--jobs` 進行平行 CLI 批次轉換，並輸出進度與摘要。
 - Classic 轉換包含 collision、LN、distance、jack 安全檢查。
-- 實驗性 NK2 模式: `native`、`faithful`、`harder`、`transform`；`report` 僅限單一輸入分析。
+- 實驗性 NK2 模式: `native`、`faithful`、`harder`、`transform`；同鍵轉換只在 `transform` 中執行，`report` 僅限單一輸入分析。
 - GUI 10K 轉換預設使用 Full-Field Mirror-Remix。
 - 用於品質、策略比較、診斷的 JSON/CSV 報告。
 - 可選的 CUDA ONNX Runtime 批次 lane-policy hook。
@@ -31,7 +31,7 @@ KeyWeaver 是一個以 C++20/CMake 製作的鍵數轉換工具，用於 osu!mani
 只想執行工具時請使用 Windows 發布 zip:
 
 ```text
-KeyWeaver-v1.1.1-win64-<timestamp>.zip
+KeyWeaver-v1.2.0-win64-<timestamp>.zip
 ```
 
 套件內容:
@@ -49,8 +49,8 @@ KeyWeaver-v1.1.1-win64-<timestamp>.zip
 2. 執行 `keyconv_gui.exe`。
 3. 若 GUI 未自動偵測，手動選擇 `KeyWeaver.exe`。
 4. 選擇或拖入 osu!mania/BMS 系列譜面。
-5. Source 選擇 `auto` 或 `1`-`10`。
-6. Target 選擇 `4`-`10`。
+5. Source 選擇 `auto` 或 `1`-`18`。
+6. Target 選擇 `4`-`18`。
 7. 選擇 Classic 或 NK2。
 8. 按 Convert 或 Batch Folder。
 
@@ -114,7 +114,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 發布套件:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.1.1
+.\scripts\package_release.ps1 -Version 1.2.0
 ```
 
 package script 會執行 Release 建置、unit test、public header smoke、GUI smoke、CLI dry-run smoke、樣本轉換、reconversion guard、BMS guard，並在 `dist/release/` 寫出 zip 與 `.sha256`。
@@ -149,10 +149,12 @@ ONNX 說明:
 原始碼套件名稱格式:
 
 ```text
-KeyWeaver-v1.1.1-end-stable-source-<timestamp>.zip
+KeyWeaver-v1.2.0-source-<timestamp>.zip
 ```
 
 包含專案原始碼、文件、模型、腳本與發布 diff 產物。刻意排除 `.git`、本機 agent 指示、建置目錄與舊發布 zip。
+
+發佈頁另提供 KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip，其中只包含 src/nk2/ 下的 8 個檔案。
 
 ## 重要文件
 
@@ -166,7 +168,8 @@ KeyWeaver-v1.1.1-end-stable-source-<timestamp>.zip
 
 ## 限制與注意
 
-- BMS 支援是 MVP，並未涵蓋所有 BMS 擴充。
+- BMS 支援仍是 MVP。安全輸出配置為 1K-10K、12K、14K、16K、18K；其他 BMS target 會回報錯誤，而不會靜默捨棄軌道。
+- 9K 與 18K 的 BMS 系列輸出預設使用 `.pms`；強制以 18K 解析時會保留全部 18 個通道位置。
 - 未實作 DP 轉換。
 - Beam search 是保留選項，目前 fallback 到 greedy。
 - 強力鍵數壓縮可能依策略 drop 或 roll overflow notes。

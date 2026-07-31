@@ -1,25 +1,25 @@
-# KeyWeaver v1.1.1 End Stable
+# KeyWeaver v1.2.0
 
 言語: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
-KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数を変換する C++20/CMake 製ツールです。4K-10K の SP 系ローカル変換を主な対象とし、CLI、Windows GUI、バッチ変換、レポート出力、実験的な NK2 エンジンを含みます。
+KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数を変換する C++20/CMake 製ツールです。ローカルで決定論的に動作し、CLI、Windows GUI、バッチ/レポート出力、18K までの上方向・下方向・同一キー変換に対応する実験的 NK2 エンジンを含みます。
 
 ## このリリース
 
-`v1.1.1 End Stable` は、このプロジェクト状態を締めるローカル安定版パッケージです。v1.1 ベースの GUI を維持しつつ、現在の Source セレクタと Source フィルタ、CLI/core の変更を反映します。GitHub への公開や自動デプロイは行いません。
+`v1.2.0` は、実験的な NK2 を 1K-18K の全 source/target 組み合わせ、降格変換、同一キー変換まで拡張し、検証済み Windows パッケージと全ソース・NK2 専用ソースの各アーカイブを提供します。
 
 主な機能:
 
 - osu!mania `.osu` の入力/出力。
 - 基本的な BMS/BME/BML/PMS の入力/出力。BMS 系入力は BMS 系出力のまま保存します。
 - Source key の自動検出と手動 override。
-- GUI Source は `auto` と `1`-`10` に固定。
+- GUI Source は `auto` と `1`-`18` に対応。
 - バッチで数値 Source を選ぶと、一致する source-key のチャートだけを変換し、それ以外は skip します。
-- GUI Target は 4K-10K。
+- GUI Target は 4K-18K。NK2 CLI/core は 1K-18K の全 source/target 組み合わせと高キーから低キーへの変換に対応します。
 - `--out` / `--out-dir` を省略すると入力チャートの横に出力します。
 - `--batch`、`--input-list`、`--jobs` による並列 CLI バッチ、進捗、サマリー出力。
 - Classic 変換の collision、LN、distance、jack 安全チェック。
-- 実験的 NK2 モード: `native`、`faithful`、`harder`、`transform`。`report` は単一入力の解析専用です。
+- 実験的 NK2 モード: `native`、`faithful`、`harder`、`transform`。同一キー変換は `transform` のみで実行され、`report` は単一入力の解析専用です。
 - GUI の 10K 変換は既定で Full-Field Mirror-Remix を使います。
 - 変換品質、ポリシー比較、診断用 JSON/CSV レポート。
 - 任意の CUDA ONNX Runtime バッチ lane-policy フック。
@@ -31,7 +31,7 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 実行だけなら Windows リリース zip を使います。
 
 ```text
-KeyWeaver-v1.1.1-win64-<timestamp>.zip
+KeyWeaver-v1.2.0-win64-<timestamp>.zip
 ```
 
 中身:
@@ -49,8 +49,8 @@ KeyWeaver-v1.1.1-win64-<timestamp>.zip
 2. `keyconv_gui.exe` を起動します。
 3. 自動検出されない場合は `KeyWeaver.exe` を選択します。
 4. osu!mania/BMS 系チャートを選択またはドロップします。
-5. Source を `auto` または `1`-`10` から選びます。
-6. Target を `4`-`10` から選びます。
+5. Source を `auto` または `1`-`18` から選びます。
+6. Target を `4`-`18` から選びます。
 7. Classic または NK2 を選びます。
 8. Convert または Batch Folder を押します。
 
@@ -114,7 +114,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 リリースパッケージ:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.1.1
+.\scripts\package_release.ps1 -Version 1.2.0
 ```
 
 package script は Release ビルド、unit test、public header smoke、GUI smoke、CLI dry-run smoke、サンプル変換、再変換ガード、BMS ガードを実行し、`dist/release/` に zip と `.sha256` を作成します。
@@ -149,10 +149,12 @@ ONNX メモ:
 ソースパッケージ名:
 
 ```text
-KeyWeaver-v1.1.1-end-stable-source-<timestamp>.zip
+KeyWeaver-v1.2.0-source-<timestamp>.zip
 ```
 
 プロジェクトソース、文書、モデル、スクリプト、リリース diff 成果物を含みます。`.git`、ローカル agent 指示、ビルドフォルダ、古いリリース zip は除外します。
+
+リリースには、src/nk2/ 配下の 8 ファイルだけを収録した KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip も含まれます。
 
 ## 重要文書
 
@@ -166,7 +168,8 @@ KeyWeaver-v1.1.1-end-stable-source-<timestamp>.zip
 
 ## 制限と注意
 
-- BMS 対応は MVP で、すべての BMS 拡張を実装しているわけではありません。
+- BMS 対応は MVP で、すべての BMS 拡張を実装しているわけではありません。安全な出力レイアウトは 1K-10K、12K、14K、16K、18K で、それ以外はレーンを黙って破棄せずエラーにします。
+- 9K と 18K の BMS 系出力は既定で `.pms` を使い、18K 強制解析では 18 個のチャンネル位置をすべて保持します。
 - DP 変換は未実装です。
 - Beam search は予約オプションで、現在は greedy に fallback します。
 - 強いキー数圧縮では、選択した compression policy により overflow note を drop または roll することがあります。

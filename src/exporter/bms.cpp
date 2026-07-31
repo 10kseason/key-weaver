@@ -354,16 +354,20 @@ std::vector<int> channelsForKeyCount(int keyCount) {
     if (keyCount == 10) {
         return {11, 12, 13, 14, 15, 21, 22, 23, 24, 25};
     }
+    if (keyCount == 12) {
+        return {16, 11, 12, 13, 14, 15, 26, 21, 22, 23, 24, 25};
+    }
     if (keyCount == 14) {
         return {11, 12, 13, 14, 15, 18, 19, 21, 22, 23, 24, 25, 28, 29};
     }
     if (keyCount == 16) {
         return {16, 11, 12, 13, 14, 15, 18, 19, 26, 21, 22, 23, 24, 25, 28, 29};
     }
-
-    std::vector<int> channels = {11, 12, 13, 14, 15, 18, 19, 21, 22, 23, 24, 25, 28, 29};
-    channels.resize(static_cast<std::size_t>(std::min<int>(keyCount, channels.size())));
-    return channels;
+    if (keyCount == 18) {
+        return {11, 12, 13, 14, 15, 18, 19, 16, 17,
+                21, 22, 23, 24, 25, 28, 29, 26, 27};
+    }
+    return {};
 }
 
 int longChannelForNormalChannel(int channel) {
@@ -442,7 +446,7 @@ std::string keyWeaverMarker(int keyCount) {
 }
 
 int playerModeForKeyCount(int keyCount) {
-    return keyCount == 10 || keyCount == 14 || keyCount == 16 ? 3 : 1;
+    return keyCount >= 10 ? 3 : 1;
 }
 
 void writeKeyModeHeaders(std::ostream& out, int keyCount) {
@@ -457,6 +461,11 @@ void writeKeyModeHeaders(std::ostream& out, int keyCount) {
 std::string exportBms(const Chart& chart, std::optional<int> targetKeyCount) {
     const int keyCount = targetKeyCount.value_or(chart.meta.targetKeyCount.value_or(chart.meta.sourceKeyCount));
     const auto channels = channelsForKeyCount(keyCount);
+    if (static_cast<int>(channels.size()) != keyCount) {
+        throw std::invalid_argument(
+            "BMS export cannot represent " + std::to_string(keyCount) +
+            "K safely; supported BMS/PMS key counts are 1K..10K, 12K, 14K, 16K, and 18K");
+    }
     const auto timing = parseTimingMap(chart.raw);
 
     int maxTime = 0;

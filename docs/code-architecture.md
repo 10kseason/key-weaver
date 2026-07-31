@@ -136,14 +136,17 @@ Parsers live under `src/parser/` and public parser headers live under
 - `parser/osu.cpp`: parses osu!mania metadata, timing points, hit objects, and
   raw sections.
 - `parser/bms.cpp`: parses the supported BMS-family MVP: headers, visible key
-  channels, BPM changes, and `#LNTYPE 1` long-note channels.
+  channels, BPM changes, and `#LNTYPE 1` long-note channels. A forced 18K source
+  uses the full canonical 18-channel order so sparse files do not collapse lanes.
 
 Exporters live under `src/exporter/`.
 
 - `exporter/osu.cpp`: regenerates `HitObjects` and preserves other sections
   where practical.
 - `exporter/bms.cpp`: writes supported BMS-family output while preserving
-  non-playable header/media lines where practical.
+  non-playable header/media lines where practical. It has explicit safe layouts
+  for 1K-10K, 12K, 14K, 16K, and 18K; unsupported counts fail instead of
+  silently omitting lanes.
 
 The parser output is always normalized into `keyconv::Chart`; format-specific
 details should stay outside the core conversion algorithm when possible.
@@ -196,7 +199,7 @@ Supporting modules:
   finalization.
 - `report.*`: JSON and text serialization.
 
-## NK2 Report-Only Engine
+## NK2 Engine
 
 `src/nk2/` contains the second-generation engine skeleton described in
 `docs/nk2-design.md`.
@@ -204,23 +207,23 @@ Supporting modules:
 Current files:
 
 - `intent_graph.*`: source motif and anchor summarization.
-- `layout_model.*`: target layout summaries, including the 10K
-  panel/bridge/full-field model.
+- `layout_model.*`: profile-derived 1K..18K target geometry, normalized lane
+  projection, side/center ownership, mirroring, bridge, and desired lane shares.
 - `nk2_report.*`: NK2 options, report data, JSON/text serialization, and CLI
   enum parsing.
 - `nk2_convert.*`: NK2 report and prototype conversion entrypoints.
 
-In the current milestone, `--engine nk2 --nk2-mode report` remains
-analysis-only. Non-report NK2 mode has a focused 7K-to-10K placement prototype:
-it remaps source lanes into the 10K panel/bridge/full-field layout, preserves LN
-durations, preserves source jacks as same-lane repeats, avoids new target jacks
-when a safe candidate exists, and writes normal osu/BMS output through the
-existing exporters. `native` and `harder` can add limited LN-end and strong-beat
-support taps; each support candidate is accepted only if local safety checks
-find no same-time same-lane collision, same-lane active-LN conflict, or unsafe
-same-lane repeat. Placement and support ranking use layout-weighted coverage
-pressure from the 10K `panel/bridge/full-field = 3/2/6` target distribution,
-and NK2 reports include panel, bridge, full-field, and layout coverage scores.
+`--engine nk2 --nk2-mode report` remains analysis-only. Non-report NK2 supports
+all 1K..18K source/target pairs in both directions and explicit same-K transform.
+The focused 7K-to-10K prototype name remains, while every path uses the shared
+profile geometry and strict collision/LN/no-created-jack gates. NK2 preserves
+LN durations and source-jack identity when representable, and writes normal
+osu/BMS output through the existing exporters. `native` and `harder` can add
+limited LN-end and strong-beat support taps during higher-key conversion; each
+candidate is accepted only if local safety checks find no same-time same-lane
+collision, active-LN conflict, or unsafe repeat. Placement and support ranking
+use the configured `panel/bridge/full-field = 3/2/6` weights, and reports include
+panel, bridge, full-field, and layout coverage scores.
 The panel score is split into left/right panel spread diagnostics so real-chart
 checks can catch cases where a 10K side panel looks active overall but one
 lane inside the panel is under-used. Placement ranking is also motif-aware:
@@ -255,11 +258,13 @@ The current profile-guided phrase scoring hook is report-only: after generation,
 NK2 recomputes phrase windows, compares accepted support against the local cap,
 and serializes `phraseProfile` diagnostics. It does not choose among multiple
 profiles yet.
-Other non-same-K pairs from 1K through 10K use `nk2-generic-nk-relane-compress`.
-This generic path uses scaled source anchors plus target-lane coverage pressure.
-For lower-key output it drops only notes that cannot be placed without same-time
-collision, active-LN conflict, or created-jack damage; retiming and musical merge
-ranking are future work. Reports expose the drop count as `droppedNotes`.
+Other non-same-K pairs from 1K through 18K and same-K transform use
+`nk2-generic-nk-relane-compress`. This generic path uses normalized source
+anchors plus target-lane coverage pressure. For lower-key output it tries strict
+relaning and short safe-roll rescue, then drops only notes that still cannot be
+placed without same-time collision, active-LN conflict, or created-jack damage;
+phrase-aware musical merge ranking remains future work. Reports expose roll and
+drop counts separately.
 Generic 4K->5K is the current fill-note exception: it can add tap-only
 strong-beat and mirror support notes in faithful mode, with phrase-local budgets
 and the same collision/LN safety gates, so the added fifth lane is occupied

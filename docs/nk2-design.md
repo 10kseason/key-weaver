@@ -117,7 +117,9 @@ Each motif should carry at least:
 
 ## Target Layout Model
 
-NK2 must support any target key count, but layout behavior should be explicit.
+The current implementation supports 1K through 18K in both directions. Layout
+behavior is explicit and profile-derived instead of relying on fixed 10-lane
+arrays.
 
 For each target K, define:
 
@@ -131,7 +133,11 @@ For each target K, define:
 - chord width limits
 - LN occupancy constraints
 
-For 10K specifically, use all three interpretations together:
+Even layouts have equal left/right panels; odd layouts reserve a center lane.
+Layouts from 7K upward add a symmetric bridge with four lanes for even K and
+three for odd K. Normalized projection and mirroring work through 18K.
+
+For 10K specifically, the profile keeps all three interpretations together:
 
 ```text
 left/right 5K panels: lanes 0-4 and 5-9
@@ -217,9 +223,10 @@ Preferred fallback order:
 Retiming should not be used as a normal fix. Rhythm timing preservation is a
 core NK2 contract.
 
-Current lower-key prototype behavior is a strict relane/compress pass. It does
-not yet do phrase-aware merge ranking or playable roll/retime repair; it only
-drops an overflow note after the legal target lanes fail the hard safety gates.
+Current lower-key behavior is a strict relane/compress pass. After every legal
+target lane fails the collision, LN, and no-created-jack gates, tap overflow can
+use a short safe roll before it is reported as dropped. Phrase-aware merge
+ranking across a full phrase remains future work.
 
 ## Same-Key Conversion Policy
 
@@ -233,6 +240,8 @@ Same-K conversion is meaningful mainly for explicit transform modes such as:
 - future cleanup/report-only modes
 
 Without such a mode, same-K input should be skipped or reported as no-op.
+The current `transform` mode performs deterministic lane remixing while keeping
+timings and LN durations unchanged.
 
 ## Jack Policy
 
@@ -428,8 +437,9 @@ NK2 modes. The prototype preserves LN end times, keeps source jacks on the same
 target lane when possible, and reports lane distribution plus
 collision/LN/jack safety counters.
 
-Other non-same-K pairs from 1K through 10K now use a generic
-`nk2-generic-nk-relane-compress` prototype. This path covers early checks such
+Every other non-same-K pair from 1K through 18K, plus explicit same-K transform,
+now uses a generic `nk2-generic-nk-relane-compress` prototype with profile-based
+layout geometry. This path covers early checks such
 as 4K->5K, 7K->8K, and 7K->4K. It preserves timing and surviving LN durations,
 tries same-time local beam placement before the note-by-note fallback, tries all
 legal target lanes before giving up, and records `droppedNotes` only when a note
@@ -455,7 +465,7 @@ Milestone 3: NK2 native/remix scoring
 - implement strong-beat support notes
 - validate source recognizability before density gains
 
-Current Milestone 3 status: partially implemented for higher-key 1K..10K NK2
+Current Milestone 3 status: partially implemented for higher-key 1K..18K NK2
 pairs plus the generic `source=4,target=5` fill branch. Higher-key `native` and
 `harder` modes can add limited tap-only LN-head, LN-tail, strong-beat, and
 mirror support notes, while faithful mode keeps source note count except for
@@ -537,11 +547,12 @@ notes against the local native/harder cap, and reports `phraseProfile.score`,
 does not yet search multiple profile candidates from this score; it makes the
 future profile-guided search observable without changing Classic defaults.
 
-Milestone 4: any NK generalization
+Milestone 4: any NK generalization (implemented through 18K)
 
-- generalize layout models for 4K-10K first
-- then extend toward wider/niche NK if needed
-- include BMS-family smoke paths
+- profile-derived 1K-18K layout models
+- upward, downward, and explicit same-K transform paths
+- full 324-pair deterministic safety matrix
+- 18K BMS/PMS roundtrip smoke path
 
 Milestone 5: GUI integration
 

@@ -158,7 +158,13 @@ bool isPlayableChannel(int channel) {
     return isNormalKeyChannel(channel) || isLongKeyChannel(channel);
 }
 
-std::vector<int> laneOrderForChannels(const std::set<int>& usedChannels, bool doublePlay) {
+std::vector<int> laneOrderForChannels(const std::set<int>& usedChannels,
+                                      bool doublePlay,
+                                      std::optional<int> forcedKeyCount) {
+    if (forcedKeyCount == 18) {
+        return {11, 12, 13, 14, 15, 18, 19, 16, 17,
+                21, 22, 23, 24, 25, 28, 29, 26, 27};
+    }
     const std::vector<int> singleWithScratch = {16, 11, 12, 13, 14, 15, 18, 19};
     const std::vector<int> singleNoScratch = {11, 12, 13, 14, 15, 18, 19, 16};
     const std::vector<int> doubleNoScratch = {11, 12, 13, 14, 15, 18, 19, 21, 22, 23, 24, 25, 28, 29};
@@ -389,7 +395,7 @@ Chart parseBms(const std::string& text, const ParseOptions& options) {
                             std::any_of(usedChannels.begin(), usedChannels.end(), [](int channel) {
                                 return channel >= 21 && channel <= 29;
                             });
-    const auto laneOrder = laneOrderForChannels(usedChannels, doublePlay);
+    const auto laneOrder = laneOrderForChannels(usedChannels, doublePlay, options.sourceKeyCount);
     std::map<int, int> laneByChannel;
     for (std::size_t index = 0; index < laneOrder.size(); ++index) {
         laneByChannel[laneOrder[index]] = static_cast<int>(index);

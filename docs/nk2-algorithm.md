@@ -55,16 +55,16 @@ Current supported behavior:
 - `--engine nk2 --nk2-mode report` is analysis-only and never mutates chart
   output.
 - Same-key conversion is a no-op unless `--nk2-mode transform` is selected.
-- Non-report NK2 conversion supports experimental 1K..10K source/target pairs.
+- Non-report NK2 conversion supports every experimental 1K..18K source/target pair, including upward and downward conversion.
 - 7K -> 10K uses the dedicated `nk2-7k10k-panel-bridge-fullfield` prototype.
-- Other non-same 1K..10K pairs use `nk2-generic-nk-relane-compress`.
+- Other non-same 1K..18K pairs, plus explicit same-K transform, use `nk2-generic-nk-relane-compress`.
 - Same-time chord slices use a small local beam solver before falling back to
   the older note-by-note placement path.
 - Lower-key tap overflow can be rescued by short safe rolls before a source tap
   is counted as dropped.
 - 4K -> 5K is a special generic branch that can add fill/support notes even in
   faithful mode.
-- Support-note generation runs for higher-key 1K..10K NK2 pairs in native and
+- Support-note generation runs for higher-key 1K..18K NK2 pairs in native and
   harder modes; 4K -> 5K also enables it in faithful mode.
 - Support notes are tap-only in the current milestone.
 
@@ -284,29 +284,27 @@ Placement-time motif classification is handled separately in `nk2_convert.cpp`.
 
 `layout_model.*` summarizes the target field.
 
-For even targets at or above 8K:
+For every target from 1K through 18K, NK2 builds a `KeyLayoutProfile`. Even
+targets split into equal left/right panels. Odd targets reserve the middle lane
+as `Center` and split the remaining lanes between the two panels.
 
 ```text
-left panel  = lanes 0 .. targetK/2 - 1
-right panel = lanes targetK/2 .. targetK - 1
+even K: left = 0 .. K/2-1, right = K/2 .. K-1
+odd K:  left = 0 .. K/2-1, center = K/2, right = K/2+1 .. K-1
 ```
 
-For 10K:
+Targets at or above 7K also receive a symmetric bridge: four center lanes for
+even K and three center lanes for odd K. For example:
 
 ```text
-left panel  = lanes 0..4
-right panel = lanes 5..9
-bridge      = lanes 3..6
-kind        = 10K panel-bridge-fullfield
+10K bridge = lanes 3..6
+17K bridge = lanes 7..9
+18K bridge = lanes 7..10
 ```
 
-For target key counts at or above 7K but not 10K:
-
-```text
-bridge = lanes targetK/2 - 1 .. targetK/2 + 1
-```
-
-For smaller targets, bridge scoring falls back toward whole-field behavior.
+The profile owns mirror mapping, normalized source-to-target projection, lane
+side tests, bridge membership, and desired lane shares. Smaller targets have no
+bridge and rely on whole-field pressure.
 
 ## Candidate Lane Pools
 
@@ -336,25 +334,12 @@ every target lane
 
 Duplicates and out-of-range lanes are removed.
 
-### 7K -> 10K Pool
+### Dedicated 7K -> 10K Scoring
 
-7K -> 10K uses a stronger hand-authored pool before falling back to the whole
-field. Each source lane starts with its direct scaled lane, then adds local
-panel or bridge candidates:
-
-```text
-source 0: direct, 1, 2
-source 1: direct, 1, 3, 0
-source 2: direct, 4, 2
-source 3: direct, 4, 5, 3, 6
-source 4: direct, 5, 7
-source 5: direct, 7, 6, 9
-source 6: direct, 8, 7
-```
-
-After those candidates, it adds the mirrored direct lane and then all 10 lanes.
-This makes the ranking stage free to select under-used field lanes without
-losing the preferred 7K-to-10K panel/bridge anchors.
+7K -> 10K keeps its dedicated prototype name and stronger motif/layout scoring,
+but candidate generation now uses the same profile-derived whole-field pool as
+the other 1K..18K pairs. This removes fixed ten-lane arrays while preserving the
+10K panel/bridge/full-field behavior through scoring.
 
 ## Placement Motifs
 
@@ -679,11 +664,10 @@ Reject when:
 
 Current jack window for placement is `500 ms`.
 
-### Dedicated 7K -> 10K Acceptance
+### Unified Strict Acceptance
 
-The 7K -> 10K path uses `chooseLane()`.
-
-It first tries candidates with all gates:
+Every 1K..18K path, including the dedicated 7K -> 10K prototype, uses
+`chooseLaneStrict()` and accepts only candidates that pass all gates:
 
 ```text
 no same-time collision
@@ -691,21 +675,10 @@ no LN conflict
 no created target jack unless continuing a source jack
 ```
 
-If none pass, it tries again with only collision and LN gates. If that still
-fails, it falls back to the direct scaled lane.
+If no candidate passes, it returns no lane. For lower-key tap overflow, NK2 then
+tries short safe roll offsets before the source tap is dropped.
 
-This path prioritizes producing a full converted chart. Any resulting damage is
-reported later through warnings and counters.
-
-### Generic Strict Acceptance
-
-The generic path uses `chooseLaneStrict()`.
-
-It accepts only candidates that pass all gates. If no candidate passes, it
-returns no lane. For lower-key tap overflow, NK2 then tries short safe roll
-offsets before the source tap is dropped.
-
-This is the current lower-key and generic compression behavior: preserve what
+This is the current conversion and compression behavior: preserve what
 can be represented safely, rescue safe tap overflow with small rolls, and count
 only remaining impossible overflow in `droppedNotes`. Rolled lower-key taps are
 reported through `lowerKeyRolledNotes`.
@@ -721,7 +694,7 @@ keeps the best-scoring complete slice assignment.
 Current bounds:
 
 ```text
-maximum solved slice size: 12 notes
+maximum solved slice size: 18 notes
 candidate limit per state: 8 lanes
 beam width: 16 states
 ```
@@ -764,7 +737,7 @@ pressure all influence every candidate score.
 Faithful 7K -> 10K keeps source note count unless placement fallback damage is
 unavoidable. Native and harder can add support notes if safe candidates exist.
 
-## Generic 1K..10K Prototype
+## Generic 1K..18K Prototype
 
 Prototype name:
 
@@ -772,15 +745,16 @@ Prototype name:
 nk2-generic-nk-relane-compress
 ```
 
-This path covers non-same source/target pairs from 1K through 10K. It uses the
-same candidate ranking model but strict lane acceptance.
+This path covers all non-same source/target pairs from 1K through 18K and
+explicit same-K transform. It uses profile-derived target geometry, the shared
+candidate ranking model, and strict lane acceptance.
 
 For higher-key generic conversions, native and harder modes can add the same
 tap-only LN, strong-beat, and mirror support events used by the 7K -> 10K path.
 Faithful mode remains source-count-preserving except for the 4K -> 5K fill
 exception.
 
-For lower-key generic conversions, dropped notes represent objects that could
+For lower-key conversions, dropped notes represent objects that could
 not be placed or safely rolled without collision, LN conflict, or created-jack
 damage.
 
@@ -813,7 +787,7 @@ tap-only, source-related, budgeted, safety-gated, and provenance-tagged.
 Support generation currently runs when:
 
 ```text
-higher-key 1K..10K native/harder NK2 conversion
+higher-key 1K..18K native/harder NK2 conversion
 or 4K -> 5K faithful/native/harder NK2 conversion
 ```
 
@@ -1203,7 +1177,10 @@ stay consistent with the CLI options above.
 Current NK2 test coverage includes:
 
 - report-only intent graph summary
-- same-key no-op unless transform
+- same-key no-op unless transform, plus deterministic same-key lane mutation
+- 1K..18K layout-profile geometry and normalized projection
+- all 324 source/target key-count pairs, including every higher-to-lower pair
+- 18K BMS/PMS roundtrip and unsupported-layout rejection
 - generic 4K -> 5K conversion
 - generic 4K -> 5K whole-field spread
 - generic 7K -> 8K conversion
@@ -1233,6 +1210,7 @@ createdJacks == 0
 output lanes are inside target field
 source LN durations are preserved exactly
 same-key native/faithful/harder are no-op
+same-key transform performs deterministic safe relaning
 report mode does not mutate charts
 same-time local solver reports windows/candidates/fallbacks
 lower-key tap overflow reports rolled-note rescue
@@ -1334,13 +1312,9 @@ design document. Known gaps:
 - Intent graph is still a summary, not a full object graph.
 - There is no full-song multi-candidate solver or beam search.
 - Profile-guided phrase scoring is report-only.
-- Same-key transform mode is recognized but not fully implemented as a mutation
-  path.
 - Support notes are tap-only.
-- Lower-key conversion drops impossible overflow instead of doing phrase-aware
-  merge ranking across full phrases.
-- 7K -> 10K has a permissive fallback that can still produce reported damage if
-  all safer candidates fail.
+- Lower-key conversion uses strict relaning and safe short-roll rescue, but still
+  lacks phrase-aware merge ranking across full phrases for impossible overflow.
 - Strong-beat detection is intentionally simple.
 - Manual playtest is still required for authored-feel acceptance.
 

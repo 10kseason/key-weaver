@@ -42,9 +42,10 @@ constexpr int kDefaultSupportJackWindowMs = 500;
 constexpr int kFourToFiveSupportJackWindowMs = 240;
 constexpr int kDefaultSupportSameSourceGapMs = 120;
 constexpr int kFourToFiveSupportSameSourceGapMs = 80;
-constexpr int kMaxKeyCount = 10;
+constexpr int kMaxKeyCount = kMaxSupportedKeyCount;
 
-using LaneMask = std::uint16_t;
+using LaneMask = std::uint32_t;
+static_assert(kMaxKeyCount <= 32, "LaneMask must cover every supported NK2 lane");
 
 struct Candidate {
     int lane = 0;
@@ -164,9 +165,9 @@ int directLane(int sourceLane, int sourceKeyCount, int targetKeyCount) {
     if (sourceKeyCount <= 1 || targetKeyCount <= 1) {
         return 0;
     }
-    const double scaled = static_cast<double>(sourceLane) * static_cast<double>(targetKeyCount - 1) /
-                          static_cast<double>(sourceKeyCount - 1);
-    return clampInt(static_cast<int>(std::round(scaled)), 0, targetKeyCount - 1);
+    const auto sourceLayout = buildKeyLayoutProfile(sourceKeyCount);
+    const auto targetLayout = buildKeyLayoutProfile(targetKeyCount);
+    return laneForNormalizedPosition(targetLayout, normalizedLanePosition(sourceLayout, sourceLane));
 }
 
 bool isNk2GeneratedNote(const Note& note) {
@@ -265,60 +266,7 @@ void sortCandidates(CandidateList& candidates) {
     }
 }
 
-LanePool candidatePoolForSevenToTen(int sourceLane) {
-    LanePool lanes;
-    const int direct = directLane(sourceLane, 7, 10);
-    addUnique(lanes, direct, 10);
-
-    switch (sourceLane) {
-        case 0:
-            addUnique(lanes, 1, 10);
-            addUnique(lanes, 2, 10);
-            break;
-        case 1:
-            addUnique(lanes, 1, 10);
-            addUnique(lanes, 3, 10);
-            addUnique(lanes, 0, 10);
-            break;
-        case 2:
-            addUnique(lanes, 4, 10);
-            addUnique(lanes, 2, 10);
-            break;
-        case 3:
-            addUnique(lanes, 4, 10);
-            addUnique(lanes, 5, 10);
-            addUnique(lanes, 3, 10);
-            addUnique(lanes, 6, 10);
-            break;
-        case 4:
-            addUnique(lanes, 5, 10);
-            addUnique(lanes, 7, 10);
-            break;
-        case 5:
-            addUnique(lanes, 7, 10);
-            addUnique(lanes, 6, 10);
-            addUnique(lanes, 9, 10);
-            break;
-        case 6:
-            addUnique(lanes, 8, 10);
-            addUnique(lanes, 7, 10);
-            break;
-        default:
-            break;
-    }
-
-    addUnique(lanes, 9 - direct, 10);
-    for (int lane = 0; lane < 10; ++lane) {
-        addUnique(lanes, lane, 10);
-    }
-    return lanes;
-}
-
 LanePool candidatePoolFor(int sourceLane, int sourceKeyCount, int targetKeyCount) {
-    if (sourceKeyCount == 7 && targetKeyCount == 10) {
-        return candidatePoolForSevenToTen(sourceLane);
-    }
-
     LanePool lanes;
     const int direct = directLane(sourceLane, sourceKeyCount, targetKeyCount);
     addUnique(lanes, direct, targetKeyCount);
@@ -331,58 +279,30 @@ LanePool candidatePoolFor(int sourceLane, int sourceKeyCount, int targetKeyCount
     return lanes;
 }
 
-bool laneInSourcePanel(int sourceLane, int lane) {
-    if (sourceLane <= 2) {
-        return lane >= 0 && lane <= 4;
+bool laneInSourcePanel(int sourceLane,
+                       int lane,
+                       int sourceKeyCount,
+                       int targetKeyCount) {
+    const auto sourceLayout = buildKeyLayoutProfile(sourceKeyCount);
+    const auto targetLayout = buildKeyLayoutProfile(targetKeyCount);
+    const auto sourceSide = laneSideFor(sourceLayout, sourceLane);
+    const auto targetSide = laneSideFor(targetLayout, lane);
+    if (sourceSide == LaneSide::Center) {
+        return targetSide == LaneSide::Center || laneIsInBridge(targetLayout, lane);
     }
-    if (sourceLane >= 4) {
-        return lane >= 5 && lane <= 9;
-    }
-    return lane >= 3 && lane <= 6;
+    return sourceSide == targetSide;
 }
 
-bool laneInBridge(int lane) {
-    return lane >= 3 && lane <= 6;
+bool laneInBridge(int lane, int targetKeyCount) {
+    return laneIsInBridge(buildKeyLayoutProfile(targetKeyCount), lane);
 }
 
 bool sameDirection(int lhs, int rhs) {
     return lhs != 0 && rhs != 0 && (lhs > 0) == (rhs > 0);
 }
 
-std::pair<int, int> bridgeRangeForTarget(int targetKeyCount) {
-    if (targetKeyCount == 10) {
-        return {3, 6};
-    }
-    if (targetKeyCount >= 7) {
-        return {targetKeyCount / 2 - 1, targetKeyCount / 2 + 1};
-    }
-    return {0, targetKeyCount - 1};
-}
-
 double desiredLaneShare(int lane, int targetKeyCount, const LayoutWeights& weights) {
-    if (targetKeyCount <= 0 || lane < 0 || lane >= targetKeyCount) {
-        return 0.0;
-    }
-
-    const double totalWeight = static_cast<double>(std::max(1, weights.panel + weights.bridge + weights.fullField));
-    double weightedShare = 0.0;
-    weightedShare += static_cast<double>(weights.fullField) / static_cast<double>(targetKeyCount);
-
-    if (targetKeyCount >= 8 && targetKeyCount % 2 == 0) {
-        weightedShare += static_cast<double>(weights.panel) / static_cast<double>(targetKeyCount);
-    } else {
-        weightedShare += static_cast<double>(weights.panel) / static_cast<double>(targetKeyCount);
-    }
-
-    const auto [bridgeStart, bridgeEnd] = bridgeRangeForTarget(targetKeyCount);
-    if (lane >= bridgeStart && lane <= bridgeEnd) {
-        const int bridgeWidth = std::max(1, bridgeEnd - bridgeStart + 1);
-        weightedShare += static_cast<double>(weights.bridge) / static_cast<double>(bridgeWidth);
-    } else if (targetKeyCount < 7) {
-        weightedShare += static_cast<double>(weights.bridge) / static_cast<double>(targetKeyCount);
-    }
-
-    const double weighted = weightedShare / totalWeight;
+    const double weighted = desiredLaneShareFor(buildKeyLayoutProfile(targetKeyCount, weights), lane);
     if (targetKeyCount == 8) {
         constexpr double kWholeFieldBlend = 0.35;
         const double uniform = 1.0 / static_cast<double>(targetKeyCount);
@@ -533,21 +453,30 @@ double superSymmetryScoreAdjustment(const Note& note,
 }
 
 std::optional<std::pair<int, int>> panelRangeForLane(int lane, int targetKeyCount) {
-    if (targetKeyCount < 8 || targetKeyCount % 2 != 0 || lane < 0 || lane >= targetKeyCount) {
+    const auto layout = buildKeyLayoutProfile(targetKeyCount);
+    if (!layout.hasPanels || lane < 0 || lane >= targetKeyCount) {
         return std::nullopt;
     }
-    const int split = targetKeyCount / 2;
-    if (lane < split) {
-        return std::make_pair(0, split - 1);
+    const auto side = laneSideFor(layout, lane);
+    if (side == LaneSide::Left) {
+        return std::make_pair(layout.leftStart, layout.leftEnd);
     }
-    return std::make_pair(split, targetKeyCount - 1);
+    if (side == LaneSide::Right) {
+        return std::make_pair(layout.rightStart, layout.rightEnd);
+    }
+    return std::nullopt;
 }
 
 std::optional<int> panelSideForLane(int lane, int targetKeyCount) {
-    if (targetKeyCount < 8 || targetKeyCount % 2 != 0 || lane < 0 || lane >= targetKeyCount) {
+    const auto layout = buildKeyLayoutProfile(targetKeyCount);
+    if (!layout.hasPanels || lane < 0 || lane >= targetKeyCount) {
         return std::nullopt;
     }
-    return lane < targetKeyCount / 2 ? -1 : 1;
+    const auto side = laneSideFor(layout, lane);
+    if (side == LaneSide::Center) {
+        return std::nullopt;
+    }
+    return side == LaneSide::Left ? -1 : 1;
 }
 
 int mirrorCadenceSide(std::size_t placedOriginalNotes) {
@@ -557,6 +486,7 @@ int mirrorCadenceSide(std::size_t placedOriginalNotes) {
 }
 
 struct LaneUseContext {
+    int sourceKeyCount = 0;
     int targetKeyCount = 0;
     LayoutWeights weights;
     std::array<int, kMaxKeyCount> use{};
@@ -567,23 +497,24 @@ struct LaneUseContext {
 };
 
 LaneUseContext buildLaneUseContext(const std::vector<int>& laneUse,
+                                   int sourceKeyCount,
                                    int targetKeyCount,
                                    const LayoutWeights& weights) {
     LaneUseContext context;
+    context.sourceKeyCount = std::max(0, std::min(kMaxKeyCount, sourceKeyCount));
     context.targetKeyCount = std::max(0, std::min(kMaxKeyCount, targetKeyCount));
     context.weights = weights;
-    const int split = context.targetKeyCount / 2;
+    const auto targetLayout = buildKeyLayoutProfile(context.targetKeyCount, weights);
     for (int lane = 0; lane < context.targetKeyCount; ++lane) {
         const int count = lane < static_cast<int>(laneUse.size()) ? laneUse[static_cast<std::size_t>(lane)] : 0;
         context.use[static_cast<std::size_t>(lane)] = count;
         context.desiredShare[static_cast<std::size_t>(lane)] = desiredLaneShare(lane, targetKeyCount, weights);
         context.total += count;
-        if (targetKeyCount >= 8 && targetKeyCount % 2 == 0) {
-            if (lane < split) {
-                context.leftPanelTotal += count;
-            } else {
-                context.rightPanelTotal += count;
-            }
+        const auto side = laneSideFor(targetLayout, lane);
+        if (side == LaneSide::Left) {
+            context.leftPanelTotal += count;
+        } else if (side == LaneSide::Right) {
+            context.rightPanelTotal += count;
         }
     }
     return context;
@@ -663,8 +594,9 @@ double laneCoveragePreferenceFast(const LaneUseContext& context, int lane) {
 
 double remixScoreForLaneFast(int sourceLane, int lane, const LaneUseContext& context) {
     const double coverageScore = laneCoveragePreferenceFast(context, lane);
-    const double panelScore = laneInSourcePanel(sourceLane, lane) ? 1.0 : 0.0;
-    const double bridgeScore = laneInBridge(lane) ? 1.0 : 0.0;
+    const double panelScore = laneInSourcePanel(
+        sourceLane, lane, context.sourceKeyCount, context.targetKeyCount) ? 1.0 : 0.0;
+    const double bridgeScore = laneInBridge(lane, context.targetKeyCount) ? 1.0 : 0.0;
     const double totalWeight = std::max(1, context.weights.panel + context.weights.bridge + context.weights.fullField);
     return (static_cast<double>(context.weights.panel) * panelScore +
             static_cast<double>(context.weights.bridge) * bridgeScore +
@@ -982,7 +914,8 @@ double motifScoreAdjustment(MotifKind motif,
                     }
                 }
             }
-            if (laneInSourcePanel(sourceLane, lane)) {
+            if (laneInSourcePanel(
+                    sourceLane, lane, options.sourceKeyCount, options.targetKeyCount)) {
                 score += 0.10;
             }
             break;
@@ -1022,8 +955,10 @@ double motifScoreAdjustment(MotifKind motif,
             score += 0.35 * laneCoverageNeedScoreFast(laneContext, lane);
             break;
         case MotifKind::Chord:
-            score += laneInSourcePanel(sourceLane, lane) ? 0.35 : -0.35;
-            if (laneInBridge(lane) && sourceLane == options.sourceKeyCount / 2) {
+            score += laneInSourcePanel(
+                         sourceLane, lane, options.sourceKeyCount, options.targetKeyCount) ? 0.35 : -0.35;
+            if (laneInBridge(lane, options.targetKeyCount) &&
+                laneSideFor(buildKeyLayoutProfile(options.sourceKeyCount), sourceLane) == LaneSide::Center) {
                 score += 0.20;
             }
             break;
@@ -1031,17 +966,19 @@ double motifScoreAdjustment(MotifKind motif,
             score += lane == direct ? 0.05 * genericTargetAnchorLockMultiplier(options.targetKeyCount) : 0.0;
             score += 0.45 * longHoldSpreadScale * laneCoverageNeedScoreFast(laneContext, lane);
             score += 0.20 * longHoldSpreadScale * panelLaneNeedScoreFast(laneContext, lane);
-            if (!laneInSourcePanel(sourceLane, lane)) {
+            if (!laneInSourcePanel(
+                    sourceLane, lane, options.sourceKeyCount, options.targetKeyCount)) {
                 score += 0.10 * longHoldSpreadScale * laneCoverageNeedScoreFast(laneContext, lane);
             }
-            if (laneInBridge(lane)) {
+            if (laneInBridge(lane, options.targetKeyCount)) {
                 score += 0.05;
             }
             break;
         case MotifKind::Neutral:
             score += lane == direct ? 0.02 * genericTargetAnchorLockMultiplier(options.targetKeyCount) : 0.0;
             score += 0.45 * laneCoverageNeedScoreFast(laneContext, lane);
-            if (!laneInSourcePanel(sourceLane, lane)) {
+            if (!laneInSourcePanel(
+                    sourceLane, lane, options.sourceKeyCount, options.targetKeyCount)) {
                 score += 0.10 * laneCoverageNeedScoreFast(laneContext, lane);
             }
             break;
@@ -1065,13 +1002,18 @@ CandidateList rankedCandidates(const Note& note,
     const int sourceLane = sourceLaneOf(note);
     CandidateList ranked;
     const auto pool = candidatePoolFor(sourceLane, options.sourceKeyCount, options.targetKeyCount);
-    const auto laneContext = buildLaneUseContext(laneUse, options.targetKeyCount, options.layoutWeights);
+    const auto laneContext = buildLaneUseContext(laneUse,
+                                                 options.sourceKeyCount,
+                                                 options.targetKeyCount,
+                                                 options.layoutWeights);
     const int direct = directLane(sourceLane, options.sourceKeyCount, options.targetKeyCount);
     const double totalBlend = std::max(0.001, options.nativeWeight + options.remixWeight);
     const double freedomMultiplier = genericTargetFreedomMultiplier(options.targetKeyCount);
     const double freedomBoost = freedomMultiplier - 1.0;
     const double anchorLockScale =
         genericTargetAnchorLockMultiplier(options.targetKeyCount) / freedomMultiplier;
+    const bool sameKeyTransform = options.mode == Mode::Transform &&
+                                  options.sourceKeyCount == options.targetKeyCount;
     const bool longHoldCopy = isLongHoldForAdjacentCopy(note);
     const double longHoldSpreadScale = longHoldCopy ? 0.25 : 1.0;
     LanePool adjacentCopyLanes;
@@ -1092,7 +1034,9 @@ CandidateList rankedCandidates(const Note& note,
         const bool freeOriginalTap =
             note.type == NoteType::Tap && (motif == MotifKind::Neutral || motif == MotifKind::Stream);
         const double distance = std::abs(lane - direct);
-        const double nativeDistance = (freeOriginalTap ? 7.0 : 4.0) * freedomMultiplier;
+        const double fieldScale = std::max(1.0, static_cast<double>(options.targetKeyCount) / 10.0);
+        const double nativeDistance =
+            (freeOriginalTap ? 7.0 : 4.0) * fieldScale * freedomMultiplier;
         const double rawNativeScore = std::max(0.0, 1.0 - distance / nativeDistance);
         const double nativeAnchorContrast = options.targetKeyCount == 8 ? 0.55 : 1.0;
         const double nativeScore = 0.5 + (rawNativeScore - 0.5) * nativeAnchorContrast;
@@ -1107,7 +1051,14 @@ CandidateList rankedCandidates(const Note& note,
         if (longHoldCopy) {
             score += adjacentCopyPreferenceScore(lane, adjacentCopyLanes);
         }
-        if (laneInSourcePanel(sourceLane, lane)) {
+        if (sameKeyTransform && !sourceJackContinuation) {
+            const int mirror = options.targetKeyCount - 1 - direct;
+            score += lane == direct ? -0.90 : 0.0;
+            score += lane == mirror ? 0.55 : 0.0;
+            score += distance == 1.0 ? 0.20 : 0.0;
+        }
+        if (laneInSourcePanel(
+                sourceLane, lane, options.sourceKeyCount, options.targetKeyCount)) {
             score += (options.nativeWeight / totalBlend) * (freeOriginalTap ? 0.10 : 0.35) *
                      panelNeed * anchorLockScale;
             score += (options.remixWeight / totalBlend) * (freeOriginalTap ? 0.35 : 0.70) *
@@ -1126,10 +1077,11 @@ CandidateList rankedCandidates(const Note& note,
                 score -= freerAnchor ? 0.16 : 0.09;
             }
         }
-        if (laneInSourcePanel(sourceLane, lane)) {
+        if (laneInSourcePanel(
+                sourceLane, lane, options.sourceKeyCount, options.targetKeyCount)) {
             score += (freerAnchor ? 0.03 : 0.15) * anchorLockScale;
         }
-        if (note.type == NoteType::Hold && laneInBridge(lane)) {
+        if (note.type == NoteType::Hold && laneInBridge(lane, options.targetKeyCount)) {
             score += freeLnAnchor ? 0.03 : 0.08;
         }
         if (sourceJackLane.has_value()) {
@@ -1176,52 +1128,6 @@ CandidateList rankedCandidates(const Note& note,
 
     sortCandidates(ranked);
     return ranked;
-}
-
-int chooseLane(const Note& note,
-               const NK2Options& options,
-               LaneMask occupiedLanes,
-               const std::vector<int>& laneUse,
-               const LastBySource& lastBySource,
-               const std::vector<PlacedNote>& placed,
-               const std::optional<int>& previousSingleSourceLane,
-               const std::optional<int>& previousSingleTargetLane,
-               MotifKind motif) {
-    const int sourceLane = sourceLaneOf(note);
-    const bool sourceJackContinuation =
-        isImmediateSourceJackContinuation(placed, sourceLane, note.time, 500);
-    const auto ranked = rankedCandidates(note,
-                                         options,
-                                         laneUse,
-                                         lastBySource,
-                                         placed,
-                                         previousSingleSourceLane,
-                                         previousSingleTargetLane,
-                                         sourceJackContinuation,
-                                         sourceJackContinuation ? MotifKind::Jack : motif);
-
-    for (const auto& candidate : ranked) {
-        if (hasSameTimeCollision(occupiedLanes, candidate.lane)) {
-            continue;
-        }
-        if (hasLongNoteConflict(placed, note, candidate.lane)) {
-            continue;
-        }
-        if (!sourceJackContinuation &&
-            wouldCreateNewJack(placed, sourceLane, note.time, candidate.lane, 500)) {
-            continue;
-        }
-        return candidate.lane;
-    }
-
-    for (const auto& candidate : ranked) {
-        if (!hasSameTimeCollision(occupiedLanes, candidate.lane) &&
-            !hasLongNoteConflict(placed, note, candidate.lane)) {
-            return candidate.lane;
-        }
-    }
-
-    return directLane(sourceLane, options.sourceKeyCount, options.targetKeyCount);
 }
 
 std::optional<int> chooseLaneStrict(const Note& note,
@@ -1299,7 +1205,7 @@ std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart&
                                                                     const LastBySource& lastBySource,
                                                                     const std::vector<PlacedNote>& placed,
                                                                     NK2Report& report) {
-    if (slice.noteIndices.size() <= 1 || slice.noteIndices.size() > 12) {
+    if (slice.noteIndices.size() <= 1 || slice.noteIndices.size() > kMaxKeyCount) {
         return std::nullopt;
     }
 
@@ -1524,17 +1430,22 @@ double handPanelBalanceScore(const std::vector<int>& distribution) {
     if (total <= 0 || distribution.empty()) {
         return 0.0;
     }
-    const int split = static_cast<int>(distribution.size()) / 2;
+    const auto layout = buildKeyLayoutProfile(static_cast<int>(distribution.size()));
     int left = 0;
     int right = 0;
     for (int lane = 0; lane < static_cast<int>(distribution.size()); ++lane) {
-        if (lane < split) {
+        const auto side = laneSideFor(layout, lane);
+        if (side == LaneSide::Left) {
             left += distribution[static_cast<std::size_t>(lane)];
-        } else {
+        } else if (side == LaneSide::Right) {
             right += distribution[static_cast<std::size_t>(lane)];
         }
     }
-    return clamp01(1.0 - static_cast<double>(std::abs(left - right)) / static_cast<double>(total));
+    const int sideTotal = left + right;
+    return sideTotal <= 0
+               ? 0.0
+               : clamp01(1.0 - static_cast<double>(std::abs(left - right)) /
+                                   static_cast<double>(sideTotal));
 }
 
 double panelSpreadFitScore(const std::vector<int>& distribution, int start, int end) {
@@ -1569,11 +1480,14 @@ double bridgeFitScore(const std::vector<int>& distribution, const LayoutWeights&
         return 0.0;
     }
 
-    const auto [bridgeStart, bridgeEnd] = bridgeRangeForTarget(targetKeyCount);
+    const auto layout = buildKeyLayoutProfile(targetKeyCount, weights);
+    if (!layout.hasBridge) {
+        return 0.0;
+    }
     double desiredBridge = 0.0;
     int actualBridge = 0;
     for (int lane = 0; lane < targetKeyCount; ++lane) {
-        if (lane >= bridgeStart && lane <= bridgeEnd) {
+        if (laneIsInBridge(layout, lane)) {
             desiredBridge += desiredLaneShare(lane, targetKeyCount, weights);
             actualBridge += distribution[static_cast<std::size_t>(lane)];
         }
@@ -1605,11 +1519,13 @@ double layoutCoverageFitScore(const std::vector<int>& distribution, const Layout
 
 void fillLayoutScores(NK2Report& report) {
     report.panelScore = handPanelBalanceScore(report.laneDistribution);
-    if (report.laneDistribution.size() >= 2 && report.laneDistribution.size() % 2 == 0) {
-        const int split = static_cast<int>(report.laneDistribution.size()) / 2;
-        report.leftPanelScore = panelSpreadFitScore(report.laneDistribution, 0, split - 1);
+    const auto layout = buildKeyLayoutProfile(
+        static_cast<int>(report.laneDistribution.size()), report.options.layoutWeights);
+    if (layout.hasPanels) {
+        report.leftPanelScore = panelSpreadFitScore(
+            report.laneDistribution, layout.leftStart, layout.leftEnd);
         report.rightPanelScore = panelSpreadFitScore(
-            report.laneDistribution, split, static_cast<int>(report.laneDistribution.size()) - 1);
+            report.laneDistribution, layout.rightStart, layout.rightEnd);
     }
     report.bridgeScore = bridgeFitScore(report.laneDistribution, report.options.layoutWeights);
     report.fullFieldScore = laneEntropyScore(report.laneDistribution);
@@ -1760,21 +1676,29 @@ std::map<int, int> sourceNoteCountsBySupportPhrase(const Chart& chart) {
     return counts;
 }
 
-bool oppositePanelSupport(int sourceLane, int lane) {
-    if (sourceLane <= 2) {
-        return lane >= 5 && lane <= 9;
+bool oppositePanelSupport(int sourceLane,
+                          int lane,
+                          int sourceKeyCount,
+                          int targetKeyCount) {
+    const auto sourceLayout = buildKeyLayoutProfile(sourceKeyCount);
+    const auto targetLayout = buildKeyLayoutProfile(targetKeyCount);
+    const auto sourceSide = laneSideFor(sourceLayout, sourceLane);
+    const auto targetSide = laneSideFor(targetLayout, lane);
+    if (sourceSide == LaneSide::Center) {
+        return targetSide == LaneSide::Center || laneIsInBridge(targetLayout, lane);
     }
-    if (sourceLane >= 4) {
-        return lane >= 0 && lane <= 4;
-    }
-    return lane >= 3 && lane <= 6;
+    return (sourceSide == LaneSide::Left && targetSide == LaneSide::Right) ||
+           (sourceSide == LaneSide::Right && targetSide == LaneSide::Left);
 }
 
 CandidateList rankedSupportLanes(const SupportEvent& event,
                                  const std::vector<int>& laneUse,
                                  const NK2Options& options) {
     CandidateList ranked;
-    const auto laneContext = buildLaneUseContext(laneUse, options.targetKeyCount, options.layoutWeights);
+    const auto laneContext = buildLaneUseContext(laneUse,
+                                                 options.sourceKeyCount,
+                                                 options.targetKeyCount,
+                                                 options.layoutWeights);
     const int mirrorLane = options.targetKeyCount - 1 - event.anchorLane;
     auto pool = candidatePoolFor(event.sourceLane, options.sourceKeyCount, options.targetKeyCount);
     if (event.kind == SupportKind::Mirror) {
@@ -1793,18 +1717,31 @@ CandidateList rankedSupportLanes(const SupportEvent& event,
         if (lane == mirrorLane) {
             score += 0.55;
         }
-        if (oppositePanelSupport(event.sourceLane, lane)) {
+        if (oppositePanelSupport(event.sourceLane,
+                                 lane,
+                                 options.sourceKeyCount,
+                                 options.targetKeyCount)) {
             score += 0.30;
         }
         if (event.kind == SupportKind::Mirror) {
             score += lane == mirrorLane ? 1.25 : 0.0;
-            score += oppositePanelSupport(event.sourceLane, lane) ? 0.60 : -0.20;
-            score += laneInSourcePanel(event.sourceLane, lane) ? -0.30 : 0.0;
+            score += oppositePanelSupport(event.sourceLane,
+                                          lane,
+                                          options.sourceKeyCount,
+                                          options.targetKeyCount) ? 0.60 : -0.20;
+            score += laneInSourcePanel(event.sourceLane,
+                                       lane,
+                                       options.sourceKeyCount,
+                                       options.targetKeyCount) ? -0.30 : 0.0;
         }
-        if (event.kind == SupportKind::Ln && laneInBridge(lane)) {
+        if (event.kind == SupportKind::Ln && laneInBridge(lane, options.targetKeyCount)) {
             score += 0.20;
         }
-        if (event.kind == SupportKind::StrongBeat && laneInSourcePanel(event.sourceLane, lane)) {
+        if (event.kind == SupportKind::StrongBeat &&
+            laneInSourcePanel(event.sourceLane,
+                              lane,
+                              options.sourceKeyCount,
+                              options.targetKeyCount)) {
             score += 0.10;
         }
         addCandidate(ranked, lane, score);
@@ -1872,7 +1809,9 @@ bool shouldEmitMirrorSupportEvent(const Note& note,
         return false;
     }
     const int sourceLane = sourceLaneOf(note);
-    return sourceLane >= 0 && sourceLane < sourceKeyCount && sourceLane != sourceKeyCount / 2;
+    const auto sourceLayout = buildKeyLayoutProfile(sourceKeyCount);
+    return sourceLane >= 0 && sourceLane < sourceKeyCount &&
+           laneSideFor(sourceLayout, sourceLane) != LaneSide::Center;
 }
 
 std::vector<SupportEvent> buildSupportEvents(const Chart& placed, const NK2Options& options) {
@@ -1946,7 +1885,7 @@ bool supportCandidateIsSafe(const SupportSafetyIndex& index,
                             int jackWindowMs,
                             int sameSourceGapMs) {
     if (candidate.lane < 0 || candidate.lane >= kMaxKeyCount) {
-        return true;
+        return false;
     }
     const auto& laneNotes = index.lanes[static_cast<std::size_t>(candidate.lane)];
     for (const auto& note : laneNotes) {
@@ -2127,9 +2066,9 @@ bool supportsSevenToTenPrototype(const NK2Options& options) {
 }
 
 bool supportsGenericPrototype(const NK2Options& options) {
-    return options.sourceKeyCount > 0 && options.sourceKeyCount <= 10 &&
-           options.targetKeyCount > 0 && options.targetKeyCount <= 10 &&
-           options.sourceKeyCount != options.targetKeyCount &&
+    return options.sourceKeyCount > 0 && options.sourceKeyCount <= kMaxKeyCount &&
+           options.targetKeyCount > 0 && options.targetKeyCount <= kMaxKeyCount &&
+           (options.sourceKeyCount != options.targetKeyCount || options.mode == Mode::Transform) &&
            options.mode != Mode::Report;
 }
 
@@ -2147,7 +2086,7 @@ bool supportsSupportNotes(const NK2Options& options) {
     if (options.targetKeyCount <= options.sourceKeyCount) {
         return false;
     }
-    if (options.sourceKeyCount > 10 || options.targetKeyCount > 10) {
+    if (options.sourceKeyCount > kMaxKeyCount || options.targetKeyCount > kMaxKeyCount) {
         return false;
     }
     return options.mode != Mode::Faithful || isFourToFiveFillOptions(options);
@@ -2182,7 +2121,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     const bool genericPrototype = supportsGenericPrototype(options);
     if (!sevenToTenPrototype && !genericPrototype) {
         result.report.noOp = true;
-        result.report.noOpReason = "NK2 conversion currently supports 1K..10K experimental prototypes";
+        result.report.noOpReason = "NK2 conversion currently supports 1K..18K experimental prototypes";
         result.report.warnings.push_back(
             "Use --nk2-mode report for analysis-only on unsupported key-count pairs.");
         fillDistributionAndSafety(result.report, result.chart);
@@ -2264,27 +2203,15 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
             auto placedMotif = motif;
 
             std::optional<int> chosenLane;
-            if (sevenToTenPrototype) {
-                chosenLane = chooseLane(note,
-                                        options,
-                                        occupiedLanes,
-                                        laneUse,
-                                        lastBySource,
-                                        placed,
-                                        fastSingleContinuation ? previousSingleSourceLane : std::nullopt,
-                                        fastSingleContinuation ? previousSingleTargetLane : std::nullopt,
-                                        motif);
-            } else {
-                chosenLane = chooseLaneStrict(note,
-                                              options,
-                                              occupiedLanes,
-                                              laneUse,
-                                              lastBySource,
-                                              placed,
-                                              fastSingleContinuation ? previousSingleSourceLane : std::nullopt,
-                                              fastSingleContinuation ? previousSingleTargetLane : std::nullopt,
-                                              motif);
-            }
+            chosenLane = chooseLaneStrict(note,
+                                          options,
+                                          occupiedLanes,
+                                          laneUse,
+                                          lastBySource,
+                                          placed,
+                                          fastSingleContinuation ? previousSingleSourceLane : std::nullopt,
+                                          fastSingleContinuation ? previousSingleTargetLane : std::nullopt,
+                                          motif);
             if (!chosenLane.has_value()) {
                 const auto rolled = tryRollLowerKeyOverflowTap(note,
                                                                options,

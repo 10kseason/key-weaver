@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(KeyWeaver VERSION 1.1.1 LANGUAGES CXX)
+project(KeyWeaver VERSION 1.2.0 LANGUAGES CXX)
 
 option(KEYWEAVER_WITH_ONNXRUNTIME "Enable experimental ONNX Runtime lane policy support" OFF)
 set(ONNXRUNTIME_ROOT "" CACHE PATH "ONNX Runtime package root")

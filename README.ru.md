@@ -1,25 +1,25 @@
-# KeyWeaver v1.1.1 End Stable
+# KeyWeaver v1.2.0
 
 Языки: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
-KeyWeaver - это инструмент на C++20/CMake для конвертации количества клавиш в osu!mania `.osu` и BMS-семействах. Он рассчитан на локальную детерминированную работу с 4K-10K SP-чартами и включает CLI, Windows GUI, batch-конвертацию, отчеты и экспериментальный движок NK2.
+KeyWeaver - это инструмент на C++20/CMake для конвертации количества клавиш в osu!mania `.osu` и BMS-семействах. Он работает локально и детерминированно, включает CLI, Windows GUI, batch/отчеты и экспериментальный NK2 для повышения, понижения и same-key преобразований до 18K.
 
 ## Что представляет этот релиз
 
-`v1.1.1 End Stable` - финальная локальная стабильная линия пакетов для текущего состояния проекта. Она сохраняет GUI на базе v1.1, добавляет текущее поведение Source selector/filter и включает текущие изменения CLI/core. GitHub-публикация и автоматический деплой не выполняются.
+`v1.2.0` расширяет экспериментальный NK2 на все пары source/target от 1K до 18K, включая понижение числа клавиш и преобразования с тем же числом клавиш, и поставляется с проверенным Windows-пакетом, полным архивом исходников и отдельным архивом NK2.
 
 Основные возможности:
 
 - Ввод/вывод osu!mania `.osu`.
 - Базовый ввод/вывод BMS/BME/BML/PMS; BMS-вход всегда остается BMS-выходом.
 - Автоопределение source key и ручной Source override.
-- GUI Source ограничен `auto` и `1`-`10`.
+- GUI Source поддерживает `auto` и `1`-`18`.
 - В batch-режиме числовой Source конвертирует только совпадающие source-key чарты, остальные пропускаются.
-- GUI Target поддерживает 4K-10K.
+- GUI Target поддерживает 4K-18K. NK2 CLI/core поддерживает все пары source/target 1K-18K, включая конвертацию из большего числа клавиш в меньшее.
 - Если `--out` / `--out-dir` не указаны, результат пишется рядом с исходным чартом.
 - Параллельный CLI batch через `--batch`, `--input-list`, `--jobs`, с прогрессом и итоговой сводкой.
 - Classic-конвертация с проверками collision, LN, distance и jack safety.
-- Экспериментальные режимы NK2: `native`, `faithful`, `harder`, `transform`; `report` только для анализа одного входа.
+- Экспериментальные режимы NK2: `native`, `faithful`, `harder`, `transform`; same-key конвертация выполняется только в `transform`, а `report` предназначен только для анализа одного входа.
 - GUI 10K по умолчанию использует Full-Field Mirror-Remix.
 - JSON/CSV отчеты для качества конвертации, сравнения политик и диагностики.
 - Опциональный batch-only ONNX Runtime lane-policy hook для CUDA-сборок.
@@ -31,7 +31,7 @@ KeyWeaver - это инструмент на C++20/CMake для конверта
 Если нужно только запустить инструмент, используйте Windows release zip:
 
 ```text
-KeyWeaver-v1.1.1-win64-<timestamp>.zip
+KeyWeaver-v1.2.0-win64-<timestamp>.zip
 ```
 
 Внутри пакета:
@@ -49,8 +49,8 @@ KeyWeaver-v1.1.1-win64-<timestamp>.zip
 2. Запустите `keyconv_gui.exe`.
 3. Если GUI не нашел его автоматически, выберите `KeyWeaver.exe`.
 4. Выберите или перетащите osu!mania/BMS-family чарт.
-5. Установите Source в `auto` или значение `1`-`10`.
-6. Установите Target от `4` до `10`.
+5. Установите Source в `auto` или значение `1`-`18`.
+6. Установите Target от `4` до `18`.
 7. Выберите Classic или NK2.
 8. Нажмите Convert или Batch Folder.
 
@@ -114,7 +114,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.1.1
+.\scripts\package_release.ps1 -Version 1.2.0
 ```
 
 Package script выполняет Release CMake build, unit tests, public-header smoke, GUI smoke, CLI dry-run smokes, sample conversions, reconversion guard, BMS guard и пишет zip плюс `.sha256` в `dist/release/`.
@@ -149,10 +149,12 @@ ONNX notes:
 Source package имеет имя:
 
 ```text
-KeyWeaver-v1.1.1-end-stable-source-<timestamp>.zip
+KeyWeaver-v1.2.0-source-<timestamp>.zip
 ```
 
 Он содержит source, docs, models, scripts и release diff artifacts. Он намеренно исключает `.git`, локальные agent instructions, build folders и старые release zips.
+
+В релиз также входит KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip, содержащий только восемь файлов из src/nk2/.
 
 ## Важные документы
 
@@ -166,7 +168,8 @@ KeyWeaver-v1.1.1-end-stable-source-<timestamp>.zip
 
 ## Ограничения и риски
 
-- BMS support является MVP и не реализует все расширения BMS.
+- BMS support остается MVP. Безопасные выходные раскладки: 1K-10K, 12K, 14K, 16K и 18K; остальные BMS target отклоняются с ошибкой вместо тихой потери дорожек.
+- Для BMS-family 9K и 18K расширение по умолчанию — `.pms`; принудительный разбор 18K сохраняет все 18 позиций каналов.
 - DP conversion не реализован.
 - Beam search зарезервирован и сейчас fallback to greedy.
 - Сильное key-count compression может drop или roll overflow notes в зависимости от policy.

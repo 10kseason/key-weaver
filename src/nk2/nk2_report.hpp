@@ -8,6 +8,8 @@
 
 namespace keyconv::nk2 {
 
+inline constexpr int kMaxSupportedKeyCount = 18;
+
 enum class Engine {
     Classic,
     NK2,

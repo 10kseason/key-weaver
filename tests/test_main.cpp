@@ -13,6 +13,7 @@
 #include "core/slice.hpp"
 #include "exporter/bms.hpp"
 #include "exporter/osu.hpp"
+#include "nk2/layout_model.hpp"
 #include "nk2/nk2_convert.hpp"
 #include "nk2/nk2_report.hpp"
 #include "parser/bms.hpp"
@@ -319,6 +320,48 @@ void testBmsExporterKeyModeHeaders() {
     require(tenKey.find("#00016:") == std::string::npos, "10K BMS output should not use 1P scratch");
     require(tenKey.find("#00026:") == std::string::npos, "10K BMS output should not use 2P scratch");
     require(tenKey.find("#00021:") != std::string::npos, "10K BMS output should use 2P key channels");
+}
+
+void testBmsEighteenKeyRoundtripAndUnsupportedGuard() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int lane = 0; lane < 18; ++lane) {
+        notes.push_back({1000, lane, keyconv::NoteType::Tap, std::nullopt});
+    }
+    auto chart = makeChart(18, notes);
+    addTimingPoint(chart);
+
+    const auto text = keyconv::exportBms(chart, 18);
+    require(text.find("#PLAYER 3\n") != std::string::npos,
+            "18K PMS-style output should use double-play player mode");
+    require(text.find("#00017:") != std::string::npos,
+            "18K PMS-style output should use the final 1P channel");
+    require(text.find("#00027:") != std::string::npos,
+            "18K PMS-style output should use the final 2P channel");
+
+    keyconv::ParseOptions parseOptions;
+    parseOptions.sourceKeyCount = 18;
+    const auto reparsed = keyconv::parseBms(text, parseOptions);
+    require(reparsed.meta.sourceKeyCount == 18,
+            "forced 18K BMS parsing should preserve the full lane field");
+    require(reparsed.notes.size() == 18,
+            "18K BMS roundtrip should preserve every playable note");
+    std::vector<bool> seen(18, false);
+    for (const auto& note : reparsed.notes) {
+        require(note.lane >= 0 && note.lane < 18,
+                "18K BMS roundtrip lane should remain inside the field");
+        seen[static_cast<std::size_t>(note.lane)] = true;
+    }
+    require(std::all_of(seen.begin(), seen.end(), [](bool value) { return value; }),
+            "18K BMS roundtrip should preserve every lane position");
+
+    bool rejectedUnsupportedKeyCount = false;
+    try {
+        (void)keyconv::exportBms(chart, 11);
+    } catch (const std::invalid_argument&) {
+        rejectedUnsupportedKeyCount = true;
+    }
+    require(rejectedUnsupportedKeyCount,
+            "BMS export should reject unsupported key counts instead of dropping lanes");
 }
 
 void testConvert() {
@@ -4242,6 +4285,106 @@ void testNk2SameKeyNoOpUnlessTransform() {
     const auto transformReport = keyconv::nk2::analyzeReportOnly(chart, options);
     require(!transformReport.noOp, "same-K NK2 transform should not be treated as no-op");
     require(!transformReport.chartMutated, "NK2 analysis-only transform report should not mutate charts");
+    const auto first = keyconv::nk2::convertChart(chart, options);
+    const auto second = keyconv::nk2::convertChart(chart, options);
+    require(first.report.chartMutated,
+            "same-K NK2 transform should run the converter");
+    require(first.chart.notes.size() == chart.notes.size(),
+            "same-K NK2 transform should preserve source note count");
+    require(lanesOf(first.chart) != lanesOf(chart),
+            "same-K NK2 transform should produce an actual lane remix");
+    require(keyconv::exportOsu(first.chart, 7) == keyconv::exportOsu(second.chart, 7),
+            "same-K NK2 transform should be deterministic");
+    require(first.report.sameTimeCollisions == 0 &&
+                first.report.longNoteConflicts == 0 &&
+                first.report.createdJacks == 0,
+            "same-K NK2 transform should preserve hard safety gates");
+}
+
+void testNk2LayoutProfilesThroughEighteenKeys() {
+    const auto eighteen = keyconv::nk2::buildKeyLayoutProfile(18);
+    require(eighteen.hasPanels && eighteen.leftStart == 0 && eighteen.leftEnd == 8,
+            "18K layout should expose a nine-lane left panel");
+    require(eighteen.rightStart == 9 && eighteen.rightEnd == 17,
+            "18K layout should expose a nine-lane right panel");
+    require(eighteen.hasBridge && eighteen.bridgeStart == 7 && eighteen.bridgeEnd == 10,
+            "18K layout should expose a symmetric four-lane bridge");
+    require(keyconv::nk2::mirroredLaneFor(eighteen, 0) == 17 &&
+                keyconv::nk2::mirroredLaneFor(eighteen, 8) == 9,
+            "18K mirror mapping should be symmetric");
+
+    const auto seventeen = keyconv::nk2::buildKeyLayoutProfile(17);
+    require(seventeen.hasCenter && seventeen.centerLane == 8,
+            "17K layout should expose its center lane");
+    require(keyconv::nk2::laneSideFor(seventeen, 8) == keyconv::nk2::LaneSide::Center,
+            "17K center lane should not belong to either hand panel");
+
+    for (int keyCount = 1; keyCount <= keyconv::nk2::kMaxSupportedKeyCount; ++keyCount) {
+        const auto layout = keyconv::nk2::buildKeyLayoutProfile(keyCount);
+        double shareSum = 0.0;
+        for (int lane = 0; lane < keyCount; ++lane) {
+            const double position = keyconv::nk2::normalizedLanePosition(layout, lane);
+            require(keyconv::nk2::laneForNormalizedPosition(layout, position) == lane,
+                    "NK2 normalized lane projection should roundtrip through 18K");
+            shareSum += keyconv::nk2::desiredLaneShareFor(layout, lane);
+        }
+        require(std::abs(shareSum - 1.0) < 1e-9,
+                "NK2 layout lane shares should sum to one");
+    }
+}
+
+void testNk2AllKeyPairsThroughEighteenAreSafeAndDeterministic() {
+    for (int sourceKeyCount = 1;
+         sourceKeyCount <= keyconv::nk2::kMaxSupportedKeyCount;
+         ++sourceKeyCount) {
+        auto chart = makeChart(sourceKeyCount,
+                               {
+                                   {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+                                   {1600, sourceKeyCount - 1, keyconv::NoteType::Tap, std::nullopt},
+                                   {2200, sourceKeyCount / 2, keyconv::NoteType::Tap, std::nullopt},
+                                   {2800, (sourceKeyCount * 2) / 3, keyconv::NoteType::Hold, 3300},
+                               });
+        addTimingPoint(chart);
+
+        for (int targetKeyCount = 1;
+             targetKeyCount <= keyconv::nk2::kMaxSupportedKeyCount;
+             ++targetKeyCount) {
+            keyconv::nk2::NK2Options options;
+            options.sourceKeyCount = sourceKeyCount;
+            options.targetKeyCount = targetKeyCount;
+            options.mode = sourceKeyCount == targetKeyCount
+                               ? keyconv::nk2::Mode::Transform
+                               : keyconv::nk2::Mode::Faithful;
+
+            const auto first = keyconv::nk2::convertChart(chart, options);
+            const auto second = keyconv::nk2::convertChart(chart, options);
+            const std::string pair = std::to_string(sourceKeyCount) + "K->" +
+                                     std::to_string(targetKeyCount) + "K";
+            require(first.report.chartMutated && !first.report.noOp,
+                    "NK2 should execute every supported key pair: " + pair);
+            require(first.chart.meta.targetKeyCount == targetKeyCount,
+                    "NK2 should report the requested target field: " + pair);
+            require(first.report.sameTimeCollisions == 0 &&
+                        first.report.longNoteConflicts == 0 &&
+                        first.report.createdJacks == 0,
+                    "NK2 hard safety gates should hold for " + pair);
+            require(first.chart.notes.size() >= chart.notes.size(),
+                    "isolated NK2 fixture should not lose notes for " + pair);
+            for (const auto& note : first.chart.notes) {
+                require(note.lane >= 0 && note.lane < targetKeyCount,
+                        "NK2 output lane should stay inside target field for " + pair);
+            }
+            const auto hold = std::find_if(first.chart.notes.begin(), first.chart.notes.end(),
+                                           [](const auto& note) { return note.id == "n3"; });
+            require(hold != first.chart.notes.end() && hold->endTime == 3300,
+                    "NK2 should preserve LN duration for " + pair);
+            require(keyconv::exportOsu(first.chart, targetKeyCount) ==
+                        keyconv::exportOsu(second.chart, targetKeyCount) &&
+                        keyconv::nk2::reportToJson(first.report) ==
+                            keyconv::nk2::reportToJson(second.report),
+                    "NK2 conversion and report should be deterministic for " + pair);
+        }
+    }
 }
 
 void testNk2FourToFiveGenericPrototypeConversion() {
@@ -5171,6 +5314,7 @@ int main() {
         {"exporter roundtrip", testExporterRoundtrip},
         {"BMS parser exporter roundtrip", testBmsParserExporterRoundtrip},
         {"BMS exporter key mode headers", testBmsExporterKeyModeHeaders},
+        {"BMS 18K roundtrip and unsupported guard", testBmsEighteenKeyRoundtripAndUnsupportedGuard},
         {"convert", testConvert},
         {"compression keeps holds", testCompressionKeepsHolds},
         {"collision policies", testCollisionPolicies},
@@ -5317,6 +5461,9 @@ int main() {
         {"converted chart marker guard", testConvertedChartMarkerGuard},
         {"NK2 report-only intent graph", testNk2ReportOnlyIntentGraph},
         {"NK2 same-key no-op unless transform", testNk2SameKeyNoOpUnlessTransform},
+        {"NK2 layout profiles through 18K", testNk2LayoutProfilesThroughEighteenKeys},
+        {"NK2 all key pairs through 18K are safe and deterministic",
+         testNk2AllKeyPairsThroughEighteenAreSafeAndDeterministic},
         {"NK2 4K to 5K generic prototype conversion",
          testNk2FourToFiveGenericPrototypeConversion},
         {"NK2 4K to 5K generic uses whole-field spread",

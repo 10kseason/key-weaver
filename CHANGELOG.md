@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+## 1.2.0 - 2026-08-01
+
+- Extended experimental NK2 to every 1K-18K source/target pair, including
+  higher-to-lower conversion and real same-K `transform` relaning, using shared
+  profile-derived panel/center/bridge geometry and strict collision/LN/jack gates.
+- Expanded the GUI Source selector to `auto`/1K-18K and Target to 4K-18K, added
+  NK2-specific CLI 18K validation, and covered all 324 key-count pairs with
+  deterministic safety regression tests.
+- Added explicit 18K BMS/PMS channel mapping and roundtrip coverage; unsupported
+  BMS target layouts now fail instead of silently dropping out-of-range lanes.
+
 ## 1.1.1 End Stable - 2026-06-19
 
 - Added experimental batch-only ONNX Runtime CUDA lane-policy support via `--onnx-policy` / `--onnx-provider cuda`; model output is advisory and still passes through existing assignment safety checks.

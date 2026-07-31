@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.1.1",
+    [string]$Version = "1.2.0",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -127,16 +127,17 @@ try {
     }
 
     @"
-KeyWeaver v$Version End Stable Windows x64 package
+KeyWeaver v$Version Windows x64 package
 
 Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keyconv_gui.exe when both files are in this folder.
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
 Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
-The GUI Target selector supports 4K through 10K; 10K GUI conversions use Full-Field Mirror-Remix by default.
+The GUI Target selector supports 4K through 18K; 10K GUI Classic conversions use Full-Field Mirror-Remix by default.
 Localized README files are included: README.md, README.en.md, README.ko.md, README.ja.md, README.zh-CN.md, README.zh-TW.md, README.ru.md.
 GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
-Source can be auto or 1K-10K in the GUI; numeric Source filters batch inputs to matching source-key charts.
+Source can be auto or 1K-18K in the GUI; numeric Source filters batch inputs to matching source-key charts.
+Experimental NK2 supports every 1K-18K source/target pair, including downward conversion and same-K transform relaning.
 Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
 CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart and auto-detects CPU worker count.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
@@ -162,7 +163,7 @@ $BundledModels
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, NK2 4K-to-18K and 7K-to-4K dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -242,6 +243,12 @@ $($RuntimeDlls -join "`n")
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --expansion-policy preserve-tap-plus --dry-run --report (Join-Path $SmokeDir "profile_4k_to_10k.report.json") *> (Join-Path $SmokeDir "profile_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "auto-profile sample smoke failed" }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 18 --engine nk2 --nk2-mode native --dry-run *> (Join-Path $SmokeDir "nk2_4k_to_18k.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "NK2 4K-to-18K dry-run smoke failed" }
+
+    & $Exe (Join-Path $PackageDir "samples\simple_7k_ln.osu") --source 7 --target 4 --engine nk2 --nk2-mode native --dry-run *> (Join-Path $SmokeDir "nk2_7k_to_4k.console.txt")
+    if ($LASTEXITCODE -ne 0) { throw "NK2 7K-to-4K dry-run smoke failed" }
 
     & $Exe (Join-Path $PackageDir "samples\simple_bms_4k.bms") --source 4 --target 10 --dry-run --report (Join-Path $SmokeDir "sample_bms_4k.report.json") *> (Join-Path $SmokeDir "sample_bms_4k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "BMS sample smoke failed" }

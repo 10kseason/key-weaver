@@ -44,7 +44,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v1.1.1";
+constexpr const char* kToolVersion = "v1.2.0";
 constexpr const char* kDefaultBatchOnnxPolicyModel = "lane_policy_student_mlp_u_e_circusgalop.onnx";
 constexpr const char* kLegacyBatchOnnxPolicyModel = "u_e_circusgalop_chart_dataset_lane_policy.onnx";
 using SteadyClock = std::chrono::steady_clock;
@@ -380,13 +380,13 @@ void printHelp(std::ostream& out) {
     out << "  --report <path>         Write conversion report JSON.\n";
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
-    out << "  --engine <engine>       classic | nk2. Default: classic. NK2 prototype converts 7K->10K.\n";
+    out << "  --engine <engine>       classic | nk2. Default: classic. NK2 supports experimental 1K..18K conversion.\n";
     out << "  --nk2-mode <mode>       native | faithful | harder | transform | report. Report is analysis-only.\n";
     out << "  --nk2-native-weight <n> Native authorship weight. Default: 0.5.\n";
     out << "  --nk2-remix-weight <n>  Remix expansion weight. Default: 0.5.\n";
-    out << "  --nk2-layout-weight-panel <n> 10K panel-model weight. Default: 3.\n";
-    out << "  --nk2-layout-weight-bridge <n> 10K bridge-model weight. Default: 2.\n";
-    out << "  --nk2-layout-weight-fullfield <n> 10K full-field weight. Default: 6.\n";
+    out << "  --nk2-layout-weight-panel <n> target-layout panel weight. Default: 3.\n";
+    out << "  --nk2-layout-weight-bridge <n> target-layout bridge weight. Default: 2.\n";
+    out << "  --nk2-layout-weight-fullfield <n> target full-field weight. Default: 6.\n";
     out << "  --compare-policies <list> Compare comma-separated policies without writing chart output.\n";
     out << "  --emit-feel-report      Include feel metrics in policy comparison console output.\n";
     out << "  --emit-diff-report      Include before/after diff metrics in policy comparison console output.\n";
@@ -534,7 +534,7 @@ void throwIfConvertedInput(const std::filesystem::path& input, const keyconv::Ch
 }
 
 std::filesystem::path defaultChartExtension(const std::filesystem::path& input, int targetKeys) {
-    if (isBmsPath(input) && targetKeys == 9) {
+    if (isBmsPath(input) && (targetKeys == 9 || targetKeys == 18)) {
         return std::filesystem::path(".pms");
     }
     return input.has_extension() ? input.extension() : std::filesystem::path(".osu");
@@ -1418,6 +1418,14 @@ void validateOptions(const CliOptions& options) {
     }
     if (options.source.has_value() && (*options.source < 1 || *options.source > 32)) {
         throw std::runtime_error("--source must be between 1 and 32");
+    }
+    if (options.engine == keyconv::nk2::Engine::NK2 &&
+        *options.target > keyconv::nk2::kMaxSupportedKeyCount) {
+        throw std::runtime_error("NK2 --target must be between 1 and 18");
+    }
+    if (options.engine == keyconv::nk2::Engine::NK2 && options.source.has_value() &&
+        *options.source > keyconv::nk2::kMaxSupportedKeyCount) {
+        throw std::runtime_error("NK2 --source must be between 1 and 18");
     }
     if (options.tenKFullFieldRemix && *options.target != 10) {
         throw std::runtime_error("--ten-k-fullfield-remix requires --target 10");

@@ -465,16 +465,32 @@ void drawLogo(HDC dc, const AppState& state) {
     RECT version{96, 60, kSidebarWidth - 18, 80};
     RECT ready{96, 82, kSidebarWidth - 18, 104};
     drawUiText(dc, state.titleFont, RGB(246, 250, 250), L"KeyWeaver", title);
-    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.1.1", version);
+    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.2.0", version);
     drawUiText(dc, state.smallFont, RGB(116, 232, 172), L"Ready", ready);
 }
 
 void drawLanePreview(HDC dc, const AppState& state) {
+    int targetKeyCount = 10;
+    if (state.targetEdit != nullptr) {
+        try {
+            const int selected = std::stoi(getWindowText(state.targetEdit));
+            if (selected >= 4 && selected <= 18) {
+                targetKeyCount = selected;
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    const bool hasBridge = targetKeyCount >= 7;
+    const int bridgeWidth = targetKeyCount % 2 == 0 ? 4 : 3;
+    const int bridgeStart = hasBridge ? (targetKeyCount - bridgeWidth) / 2 : 0;
+    const int bridgeEnd = hasBridge ? bridgeStart + bridgeWidth - 1 : -1;
+
     RECT title{kMainRight - 320, 250, kMainRight - 18, 274};
-    drawUiText(dc, state.sectionFont, kColorText, L"Lane Preview (Target 10K)", title);
+    drawUiText(dc, state.sectionFont, kColorText,
+               L"Lane Preview (Target " + std::to_wstring(targetKeyCount) + L"K)", title);
     const int x = kMainRight - 306;
     const int y = 306;
-    const int laneW = 26;
+    const int laneW = std::clamp(270 / targetKeyCount, 14, 26);
     const int laneH = 76;
     HBRUSH dark = CreateSolidBrush(RGB(21, 28, 31));
     HBRUSH teal = CreateSolidBrush(kColorAccent);
@@ -483,8 +499,8 @@ void drawLanePreview(HDC dc, const AppState& state) {
     HPEN centerPen = CreatePen(PS_SOLID, 2, kColorAmber);
     HGDIOBJ oldPen = SelectObject(dc, gridPen);
     HGDIOBJ oldBrush = SelectObject(dc, dark);
-    Rectangle(dc, x, y, x + laneW * 10, y + laneH);
-    for (int lane = 0; lane < 10; ++lane) {
+    Rectangle(dc, x, y, x + laneW * targetKeyCount, y + laneH);
+    for (int lane = 0; lane < targetKeyCount; ++lane) {
         const int left = x + lane * laneW;
         RECT number{left, y - 22, left + laneW, y - 3};
         drawUiText(dc, state.smallFont, kColorText, std::to_wstring(lane + 1), number,
@@ -495,15 +511,18 @@ void drawLanePreview(HDC dc, const AppState& state) {
         for (int i = 0; i < barCount; ++i) {
             const int barTop = y + 14 + ((lane * 19 + i * 23) % 54);
             RECT bar{left + 6, barTop, left + laneW - 6, barTop + 7};
-            SelectObject(dc, (lane == 3 || lane == 4 || lane == 5) ? teal : dimTeal);
+            SelectObject(dc, hasBridge && lane >= bridgeStart && lane <= bridgeEnd ? teal : dimTeal);
             Rectangle(dc, bar.left, bar.top, bar.right, bar.bottom);
         }
     }
-    SelectObject(dc, centerPen);
-    for (int lane : {4, 5}) {
-        const int lx = x + lane * laneW;
-        MoveToEx(dc, lx, y, nullptr);
-        LineTo(dc, lx, y + laneH);
+    if (hasBridge) {
+        SelectObject(dc, centerPen);
+        const int bridgeBoundaries[] = {bridgeStart, bridgeEnd + 1};
+        for (const int lane : bridgeBoundaries) {
+            const int lx = x + lane * laneW;
+            MoveToEx(dc, lx, y, nullptr);
+            LineTo(dc, lx, y + laneH);
+        }
     }
     SelectObject(dc, oldPen);
     SelectObject(dc, oldBrush);
@@ -520,7 +539,11 @@ void drawLanePreview(HDC dc, const AppState& state) {
     RECT legend2{x + 130, y + laneH + 8, x + 270, y + laneH + 28};
     RECT dot2{x + 130, y + laneH + 16, x + 136, y + laneH + 22};
     fillRect(dc, dot2, kColorAmber);
-    drawUiText(dc, state.smallFont, kColorMutedText, L"Center bridge (3-6)", legend2);
+    const std::wstring bridgeLabel = hasBridge
+                                         ? L"Center bridge (" + std::to_wstring(bridgeStart + 1) +
+                                               L"-" + std::to_wstring(bridgeEnd + 1) + L")"
+                                         : L"Whole field";
+    drawUiText(dc, state.smallFont, kColorMutedText, bridgeLabel, legend2);
 }
 
 void drawTimelinePreview(HDC dc, const AppState& state, const RECT& rect) {
@@ -555,7 +578,7 @@ void paintUiChrome(AppState& state, HDC dc) {
     roundRect(dc, header, RGB(23, 34, 45), RGB(23, 34, 45), 8);
     fillRect(dc, RECT{header.left, header.bottom - 4, header.right, header.bottom}, kColorAccent);
     drawUiText(dc, state.titleFont, RGB(247, 250, 252), L"KeyWeaver", RECT{56, 38, 260, 66});
-    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.1.1 conversion console",
+    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.2.0 conversion console",
                RECT{56, 66, 320, 88});
     drawUiText(dc, state.smallFont, RGB(207, 219, 229), L"Classic / NK2  |  Single / Batch  |  Reports",
                RECT{1020, 52, 1386, 76}, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
@@ -782,7 +805,8 @@ std::optional<std::wstring> convertedInputMarkerReason(const std::filesystem::pa
 }
 
 std::wstring chartOutputExtension(const ToolOptions& options) {
-    if (isBmsFamilyPath(options.inputFile) && trim(options.targetKeys) == L"9") {
+    const auto target = trim(options.targetKeys);
+    if (isBmsFamilyPath(options.inputFile) && (target == L"9" || target == L"18")) {
         return L".pms";
     }
     if (isBmsFamilyPath(options.inputFile) && options.inputFile.has_extension()) {
@@ -1415,7 +1439,7 @@ std::optional<int> parseSourceOverrideKeyCount(const std::wstring& value) {
     }
     wchar_t* end = nullptr;
     const long parsed = std::wcstol(text.c_str(), &end, 10);
-    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 10) {
+    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 18) {
         return -1;
     }
     return static_cast<int>(parsed);
@@ -1428,7 +1452,7 @@ std::optional<int> parseGuiTargetKeyCount(const std::wstring& value) {
     }
     wchar_t* end = nullptr;
     const long parsed = std::wcstol(text.c_str(), &end, 10);
-    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 4 || parsed > 10) {
+    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 4 || parsed > 18) {
         return -1;
     }
     return static_cast<int>(parsed);
@@ -1796,12 +1820,12 @@ bool validateToolOptions(const ToolOptions& options, HWND owner, bool batchMode 
     }
     const auto targetKeyCount = parseGuiTargetKeyCount(options.targetKeys);
     if (targetKeyCount.has_value() && *targetKeyCount < 0) {
-        MessageBoxW(owner, L"GUI Target must be a key count from 4 to 10.", L"KeyWeaver GUI", MB_ICONERROR);
+        MessageBoxW(owner, L"GUI Target must be a key count from 4 to 18.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     const auto sourceOverride = parseSourceOverrideKeyCount(options.sourceOverride);
     if (sourceOverride.has_value() && *sourceOverride < 0) {
-        MessageBoxW(owner, L"Source must be auto or a key count from 1 to 10.", L"KeyWeaver GUI", MB_ICONERROR);
+        MessageBoxW(owner, L"Source must be auto or a key count from 1 to 18.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     if (nk2EngineActive(options) && nk2ModeCliValue(options.nk2Mode).empty()) {
@@ -2577,8 +2601,10 @@ void createUi(AppState& state) {
     makeControl(state, L"STATIC", L"Source", 0, 714, 178, 80, 22, -1);
     state.sourceEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
                                    714, 202, 110, 180, kEditSource);
-    for (const auto* item : {L"auto", L"1", L"2", L"3", L"4", L"5", L"6", L"7", L"8", L"9", L"10"}) {
-        addComboItem(state.sourceEdit, item);
+    addComboItem(state.sourceEdit, L"auto");
+    for (int keyCount = 1; keyCount <= 18; ++keyCount) {
+        const auto item = std::to_wstring(keyCount);
+        addComboItem(state.sourceEdit, item.c_str());
     }
     setComboSelection(state.sourceEdit, L"auto");
     state.detectedLabel = makeControl(state, L"STATIC", L"Detected: auto", 0, 852, 206, 138, 22,
@@ -2586,8 +2612,9 @@ void createUi(AppState& state) {
     makeControl(state, L"STATIC", L"Target", 0, 1014, 178, 80, 22, -1);
     state.targetEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
                                    1014, 202, 88, 180, kEditTarget);
-    for (const auto* item : {L"4", L"5", L"6", L"7", L"8", L"9", L"10"}) {
-        addComboItem(state.targetEdit, item);
+    for (int keyCount = 4; keyCount <= 18; ++keyCount) {
+        const auto item = std::to_wstring(keyCount);
+        addComboItem(state.targetEdit, item.c_str());
     }
     setComboSelection(state.targetEdit, L"10");
 
@@ -2763,6 +2790,9 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (controlId == kComboAlgorithm && notification == CBN_SELCHANGE) {
                 updateAlgorithmControlState(*state);
             }
+            if (controlId == kEditTarget && notification == CBN_SELCHANGE) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             switch (controlId) {
                 case kButtonBrowseKeyconv: {
                     const auto path = browseOpenFile(hwnd, L"Select KeyWeaver.exe",
@@ -2911,6 +2941,15 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 }
 
 int runSmoke(const std::filesystem::path& input, const std::filesystem::path& outputDir) {
+    if (parseSourceOverrideKeyCount(L"18") != std::optional<int>{18} ||
+        parseSourceOverrideKeyCount(L"19") != std::optional<int>{-1} ||
+        parseGuiTargetKeyCount(L"4") != std::optional<int>{4} ||
+        parseGuiTargetKeyCount(L"18") != std::optional<int>{18} ||
+        parseGuiTargetKeyCount(L"19") != std::optional<int>{-1}) {
+        std::cerr << "GUI smoke expected Source 1..18 and Target 4..18 validation\n";
+        return 1;
+    }
+
     ToolOptions options;
     options.keyconvExe = preferredKeyWeaverExe();
     options.inputFile = absolutePath(input);

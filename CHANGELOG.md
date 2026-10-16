@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Cached NK2 per-note placement safety masks instead of rescanning placed notes
+  for each candidate lane, while preserving deterministic ranking and jack rules.
+- Fixed NK2 parallel batches overwriting same-named inputs in a shared output
+  directory, and lower-key rolled taps colliding with later source slices.
+- Fixed automatic 18K BMS parsing to preserve lane positions when all eighteen
+  playable channels are present; sparse charts still require `--source 18`.
+- Added serial/parallel CLI batch and cross-slice/BMS lane regression coverage.
+
 ## 1.2.0 - 2026-08-01
 
 - Extended experimental NK2 to every 1K-18K source/target pair, including

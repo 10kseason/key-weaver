@@ -124,3 +124,10 @@ add_test(NAME keyconv_tests COMMAND keyconv_tests)
 add_executable(keyconv_public_header_smoke tests/public_header_smoke.cpp)
 target_link_libraries(keyconv_public_header_smoke PRIVATE keyconv_core)
 add_test(NAME keyconv_public_header_smoke COMMAND keyconv_public_header_smoke)
+
+add_test(NAME keyconv_nk2_batch_regression
+    COMMAND ${CMAKE_COMMAND}
+        "-DKEYWEAVER_EXE=$<TARGET_FILE:KeyWeaver>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_nk2_batch.cmake")
+set_tests_properties(keyconv_nk2_batch_regression PROPERTIES TIMEOUT 100)

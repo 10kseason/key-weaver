@@ -675,6 +675,13 @@ no LN conflict
 no created target jack unless continuing a source jack
 ```
 
+The converter computes collision/LN and recent-jack lane masks once for each
+note and placement history. Candidate ranking reuses the jack mask, and strict
+placement, local-beam states, and roll attempts share the same mask-based gates.
+This removes candidate-by-candidate scans without changing score order or the
+source-jack exception. Same-time checks cover all placed notes, including taps
+rolled from an earlier slice onto a later source timestamp.
+
 If no candidate passes, it returns no lane. For lower-key tap overflow, NK2 then
 tries short safe roll offsets before the source tap is dropped.
 

@@ -2214,7 +2214,8 @@ int runSingleConversion(const CliOptions& cli,
         const auto nk2Result = keyconv::nk2::convertChart(chart, nk2Options);
         convertTimeMs = elapsedMs(nk2Start, SteadyClock::now());
         auto outputPath = cli.out;
-        if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value()) {
+        if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value() &&
+            outputMutex == nullptr) {
             outputPath = defaultNk2OutputPath(input,
                                               convertOptions.targetKeyCount,
                                               cli.streamTransformPolicy,
@@ -2236,7 +2237,18 @@ int runSingleConversion(const CliOptions& cli,
                                              : keyconv::exportOsu(nk2Result.chart, convertOptions.targetKeyCount);
             exportTimeMs = elapsedMs(exportStart, SteadyClock::now());
             const auto writeStart = SteadyClock::now();
-            writeFile(*outputPath, outputText);
+            if (!outputPath.has_value() && outputMutex != nullptr) {
+                // Reserve the suffix and write under one lock, just as Classic does.
+                // Different input folders can contain the same chart filename.
+                std::lock_guard<std::mutex> lock(*outputMutex);
+                outputPath = defaultNk2OutputPath(input,
+                                                 convertOptions.targetKeyCount,
+                                                 cli.streamTransformPolicy,
+                                                 cli.outDir);
+                writeFile(*outputPath, outputText);
+            } else {
+                writeFile(*outputPath, outputText);
+            }
             writeTimeMs = elapsedMs(writeStart, SteadyClock::now());
             if (!cli.batchQuiet) {
                 out << "Output written: " << displayPath(*outputPath) << "\n";

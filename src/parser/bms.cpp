@@ -161,7 +161,9 @@ bool isPlayableChannel(int channel) {
 std::vector<int> laneOrderForChannels(const std::set<int>& usedChannels,
                                       bool doublePlay,
                                       std::optional<int> forcedKeyCount) {
-    if (forcedKeyCount == 18) {
+    // With all eighteen playable channels present, auto detection is unambiguous.
+    // Sparse charts still need an explicit source override to retain empty lanes.
+    if (forcedKeyCount == 18 || (!forcedKeyCount.has_value() && usedChannels.size() == 18)) {
         return {11, 12, 13, 14, 15, 18, 19, 16, 17,
                 21, 22, 23, 24, 25, 28, 29, 26, 27};
     }

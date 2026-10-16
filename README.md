@@ -169,6 +169,8 @@ The release also provides KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip, co
 
 - BMS support is an MVP and does not implement every BMS extension. Safe output layouts are 1K-10K, 12K, 14K, 16K, and 18K; other BMS target counts are rejected instead of silently dropping lanes.
 - 9K and 18K BMS-family output defaults to `.pms`; forced 18K parsing preserves all 18 playable channel positions.
+- 18K auto detection preserves lane positions when all eighteen channels are used; use `--source 18` for sparse charts with unused lanes.
+- NK2 parallel batches preserve same-named inputs in a shared `--out-dir` by assigning unique output suffixes.
 - DP conversion is not implemented.
 - Beam search is reserved and falls back to greedy behavior.
 - Strong key-count compression may drop or roll overflow notes according to the selected compression policy.

@@ -364,6 +364,33 @@ void testBmsEighteenKeyRoundtripAndUnsupportedGuard() {
             "BMS export should reject unsupported key counts instead of dropping lanes");
 }
 
+void testBmsAutoEighteenKeyLanePositions() {
+    std::vector<std::tuple<int, int, keyconv::NoteType, std::optional<int>>> notes;
+    for (int lane = 0; lane < 18; ++lane) {
+        notes.push_back({1000 + lane * 500, lane, keyconv::NoteType::Tap, std::nullopt});
+    }
+    auto chart = makeChart(18, notes);
+    addTimingPoint(chart);
+    const auto reparsed = keyconv::parseBms(keyconv::exportBms(chart, 18));
+    require(reparsed.meta.sourceKeyCount == 18 && reparsed.notes.size() == notes.size(),
+            "auto 18K BMS parsing should preserve the full field and all notes");
+    for (int lane = 0; lane < 18; ++lane) {
+        const auto found = std::find_if(reparsed.notes.begin(), reparsed.notes.end(),
+                                        [lane](const auto& note) {
+                                            return note.time == 1000 + lane * 500 && note.lane == lane;
+                                        });
+        require(found != reparsed.notes.end(),
+                "auto 18K BMS parsing must preserve each note's lane, not only lane coverage");
+    }
+
+    auto sparse = makeChart(18, {{1000, 17, keyconv::NoteType::Tap, std::nullopt}});
+    keyconv::ParseOptions forced;
+    forced.sourceKeyCount = 18;
+    const auto sparseParsed = keyconv::parseBms(keyconv::exportBms(sparse, 18), forced);
+    require(sparseParsed.notes.size() == 1 && sparseParsed.notes.front().lane == 17,
+            "explicit 18K parsing must retain empty lanes in sparse charts");
+}
+
 void testConvert() {
     const auto chart = keyconv::parseOsu(simple4k);
     keyconv::ConvertOptions options;
@@ -4681,6 +4708,37 @@ void testNk2SevenToFourGenericPrototypeCompression() {
             "NK2 JSON should include lower-key roll diagnostics");
 }
 
+void testNk2RolledNotesCannotCollideWithLaterSlices() {
+    const auto chart = makeChart(6, {
+        {1080, 5, keyconv::NoteType::Tap, std::nullopt},
+        {1192, 0, keyconv::NoteType::Tap, std::nullopt},
+        {1304, 0, keyconv::NoteType::Tap, std::nullopt},
+        {1304, 5, keyconv::NoteType::Tap, std::nullopt},
+        {1352, 0, keyconv::NoteType::Tap, std::nullopt},
+        {1432, 2, keyconv::NoteType::Tap, std::nullopt},
+        {1512, 5, keyconv::NoteType::Tap, std::nullopt},
+        {1720, 3, keyconv::NoteType::Tap, std::nullopt},
+        {1800, 0, keyconv::NoteType::Tap, std::nullopt},
+        {1800, 4, keyconv::NoteType::Tap, std::nullopt},
+        {1848, 4, keyconv::NoteType::Tap, std::nullopt},
+    });
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 6;
+    options.targetKeyCount = 4;
+    options.mode = keyconv::nk2::Mode::Faithful;
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    const auto scan = keyconv::detectCollisions(result.chart.notes);
+    require(result.report.lowerKeyRolledNotes > 0,
+            "cross-slice regression must exercise lower-key roll placement");
+    require(scan.sameTimeCollisions == 0 && scan.longNoteConflicts == 0,
+            "later slices must reject lanes already occupied by a rolled note");
+    require(result.report.sameTimeCollisions == 0 && result.report.longNoteConflicts == 0,
+            "NK2 safety report should agree with independent collision detection");
+    require(keyconv::exportOsu(result.chart, 4) ==
+                keyconv::exportOsu(keyconv::nk2::convertChart(chart, options).chart, 4),
+            "cross-slice roll repair should remain deterministic");
+}
+
 void testNk2SevenToEightNativeSupportNotesAreGeneralized() {
     auto chart = makeChart(7, {
                                   {1000, 0, keyconv::NoteType::Tap, std::nullopt},
@@ -5315,6 +5373,7 @@ int main() {
         {"BMS parser exporter roundtrip", testBmsParserExporterRoundtrip},
         {"BMS exporter key mode headers", testBmsExporterKeyModeHeaders},
         {"BMS 18K roundtrip and unsupported guard", testBmsEighteenKeyRoundtripAndUnsupportedGuard},
+        {"BMS auto 18K lane positions", testBmsAutoEighteenKeyLanePositions},
         {"convert", testConvert},
         {"compression keeps holds", testCompressionKeepsHolds},
         {"collision policies", testCollisionPolicies},
@@ -5477,6 +5536,8 @@ int main() {
         {"NK2 local solver handles same-time chord", testNk2LocalSolverHandlesSameTimeChord},
         {"NK2 7K to 4K generic prototype compression",
          testNk2SevenToFourGenericPrototypeCompression},
+        {"NK2 rolled notes cannot collide with later slices",
+         testNk2RolledNotesCannotCollideWithLaterSlices},
         {"NK2 7K to 8K native support notes are generalized",
          testNk2SevenToEightNativeSupportNotesAreGeneralized},
         {"NK2 LN-adjacent support adds head and tail taps",

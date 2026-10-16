@@ -679,15 +679,6 @@ void occupyLane(LaneMask& occupiedLanes, int lane) {
     occupiedLanes = static_cast<LaneMask>(occupiedLanes | (LaneMask{1} << lane));
 }
 
-bool hasPlacedSameTimeCollision(const std::vector<PlacedNote>& placed, int time, int lane) {
-    for (const auto& existing : placed) {
-        if (existing.time == time && existing.lane == lane) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool hasLongNoteConflictWithPlaced(const PlacedNote& existing, const Note& note, int lane) {
     if (existing.lane != lane) {
         return false;
@@ -701,15 +692,6 @@ bool hasLongNoteConflictWithPlaced(const PlacedNote& existing, const Note& note,
         const bool holdOverlap = existing.type == NoteType::Hold && existing.endTime.has_value() &&
                                  note.time <= *existing.endTime && *note.endTime >= existing.time;
         return existingStartsInside || holdOverlap;
-    }
-    return false;
-}
-
-bool hasLongNoteConflict(const std::vector<PlacedNote>& placed, const Note& note, int lane) {
-    for (const auto& existing : placed) {
-        if (hasLongNoteConflictWithPlaced(existing, note, lane)) {
-            return true;
-        }
     }
     return false;
 }
@@ -745,24 +727,43 @@ bool isImmediateSourceJackContinuation(const std::vector<PlacedNote>& placed,
     return false;
 }
 
-bool wouldCreateNewJack(const std::vector<PlacedNote>& placed,
-                        int sourceLane,
-                        int time,
-                        int lane,
-                        int jackWindowMs) {
+struct PlacementSafety {
+    LaneMask conflicts = 0;
+    LaneMask createdJacks = 0;
+
+    LaneMask blockedLanes(LaneMask occupiedLanes, bool sourceJackContinuation) const {
+        return occupiedLanes | conflicts | (sourceJackContinuation ? LaneMask{0} : createdJacks);
+    }
+};
+
+PlacementSafety buildPlacementSafety(const std::vector<PlacedNote>& placed,
+                                     const Note& note,
+                                     int sourceLane,
+                                     int jackWindowMs) {
+    PlacementSafety safety;
+    // All candidates share the same history. Scan it once instead of once per
+    // candidate; include earlier slices whose roll offsets reach this timestamp.
+    for (const auto& existing : placed) {
+        if (existing.time == note.time ||
+            hasLongNoteConflictWithPlaced(existing, note, existing.lane)) {
+            occupyLane(safety.conflicts, existing.lane);
+        }
+    }
+
+    // Keep the existing recent-jack scoring and source-jack exemption intact.
     for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
-        const int dt = time - it->time;
+        const int dt = note.time - it->time;
         if (dt <= 0) {
             continue;
         }
         if (dt > jackWindowMs) {
             break;
         }
-        if (it->lane == lane && it->sourceLane != sourceLane) {
-            return true;
+        if (it->sourceLane != sourceLane) {
+            occupyLane(safety.createdJacks, it->lane);
         }
     }
-    return false;
+    return safety;
 }
 
 MotifKind classifyMotif(const Note& note,
@@ -998,7 +999,8 @@ CandidateList rankedCandidates(const Note& note,
                                 const std::optional<int>& previousSingleSourceLane,
                                 const std::optional<int>& previousSingleTargetLane,
                                 bool sourceJackContinuation,
-                                MotifKind motif) {
+                                MotifKind motif,
+                                LaneMask createdJackLanes) {
     const int sourceLane = sourceLaneOf(note);
     CandidateList ranked;
     const auto pool = candidatePoolFor(sourceLane, options.sourceKeyCount, options.targetKeyCount);
@@ -1099,7 +1101,7 @@ CandidateList rankedCandidates(const Note& note,
                 score -= 0.50;
             }
         }
-        if (wouldCreateNewJack(placed, sourceLane, note.time, lane, 500)) {
+        if (hasSameTimeCollision(createdJackLanes, lane)) {
             score -= 1.5;
         }
         score += motifScoreAdjustment(motif,
@@ -1142,6 +1144,8 @@ std::optional<int> chooseLaneStrict(const Note& note,
     const int sourceLane = sourceLaneOf(note);
     const bool sourceJackContinuation =
         isImmediateSourceJackContinuation(placed, sourceLane, note.time, 500);
+    const auto safety = buildPlacementSafety(placed, note, sourceLane, 500);
+    const auto blockedLanes = safety.blockedLanes(occupiedLanes, sourceJackContinuation);
     const auto ranked = rankedCandidates(note,
                                          options,
                                          laneUse,
@@ -1150,16 +1154,10 @@ std::optional<int> chooseLaneStrict(const Note& note,
                                          previousSingleSourceLane,
                                          previousSingleTargetLane,
                                          sourceJackContinuation,
-                                         sourceJackContinuation ? MotifKind::Jack : motif);
+                                         sourceJackContinuation ? MotifKind::Jack : motif,
+                                         safety.createdJacks);
     for (const auto& candidate : ranked) {
-        if (hasSameTimeCollision(occupiedLanes, candidate.lane)) {
-            continue;
-        }
-        if (hasLongNoteConflict(placed, note, candidate.lane)) {
-            continue;
-        }
-        if (!sourceJackContinuation &&
-            wouldCreateNewJack(placed, sourceLane, note.time, candidate.lane, 500)) {
+        if (hasSameTimeCollision(blockedLanes, candidate.lane)) {
             continue;
         }
         return candidate.lane;
@@ -1175,28 +1173,6 @@ struct SliceBeamState {
     LastBySource lastBySource;
     double score = 0.0;
 };
-
-bool candidatePassesHardGates(const std::vector<PlacedNote>& placed,
-                              LaneMask occupiedLanes,
-                              const Note& note,
-                              int lane,
-                              int sourceLane,
-                              bool sourceJackContinuation,
-                              int jackWindowMs) {
-    if (hasSameTimeCollision(occupiedLanes, lane)) {
-        return false;
-    }
-    if (hasPlacedSameTimeCollision(placed, note.time, lane)) {
-        return false;
-    }
-    if (hasLongNoteConflict(placed, note, lane)) {
-        return false;
-    }
-    if (!sourceJackContinuation && wouldCreateNewJack(placed, sourceLane, note.time, lane, jackWindowMs)) {
-        return false;
-    }
-    return true;
-}
 
 std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart& chart,
                                                                     const SliceInfo& slice,
@@ -1230,6 +1206,8 @@ std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart&
             const bool sourceJackContinuation =
                 isImmediateSourceJackContinuation(state.placed, sourceLane, note.time, 500);
             const auto motif = classifyMotif(note, false, false, sourceJackContinuation, {});
+            const auto safety = buildPlacementSafety(state.placed, note, sourceLane, 500);
+            const auto blockedLanes = safety.blockedLanes(state.occupiedLanes, sourceJackContinuation);
             const auto ranked = rankedCandidates(note,
                                                  options,
                                                  state.laneUse,
@@ -1238,17 +1216,12 @@ std::optional<std::vector<SolvedPlacement>> solveSliceWithLocalBeam(const Chart&
                                                  std::nullopt,
                                                  std::nullopt,
                                                  sourceJackContinuation,
-                                                 sourceJackContinuation ? MotifKind::Jack : motif);
+                                                 sourceJackContinuation ? MotifKind::Jack : motif,
+                                                 safety.createdJacks);
 
             int acceptedCandidates = 0;
             for (const auto& candidate : ranked) {
-                if (!candidatePassesHardGates(state.placed,
-                                              state.occupiedLanes,
-                                              note,
-                                              candidate.lane,
-                                              sourceLane,
-                                              sourceJackContinuation,
-                                              500)) {
+                if (hasSameTimeCollision(blockedLanes, candidate.lane)) {
                     continue;
                 }
 
@@ -1315,6 +1288,8 @@ std::optional<SolvedPlacement> tryRollLowerKeyOverflowTap(const Note& original,
         rolled.time = std::max(0, original.time + offset);
         const bool sourceJackContinuation =
             isImmediateSourceJackContinuation(placed, sourceLane, rolled.time, 500);
+        const auto safety = buildPlacementSafety(placed, rolled, sourceLane, 500);
+        const auto blockedLanes = safety.blockedLanes(0, sourceJackContinuation);
         const auto ranked = rankedCandidates(rolled,
                                              options,
                                              laneUse,
@@ -1323,16 +1298,10 @@ std::optional<SolvedPlacement> tryRollLowerKeyOverflowTap(const Note& original,
                                              std::nullopt,
                                              std::nullopt,
                                              sourceJackContinuation,
-                                             sourceJackContinuation ? MotifKind::Jack : motif);
-        LaneMask emptyOccupied = 0;
+                                             sourceJackContinuation ? MotifKind::Jack : motif,
+                                             safety.createdJacks);
         for (const auto& candidate : ranked) {
-            if (!candidatePassesHardGates(placed,
-                                          emptyOccupied,
-                                          rolled,
-                                          candidate.lane,
-                                          sourceLane,
-                                          sourceJackContinuation,
-                                          500)) {
+            if (hasSameTimeCollision(blockedLanes, candidate.lane)) {
                 continue;
             }
             rolled.sourceLane = sourceLane;

@@ -1,4 +1,4 @@
-# KeyWeaver v1.3.0
+# KeyWeaver v1.3.1
 
 Languages: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,7 @@ KeyWeaver is a C++20/CMake key-count converter for osu!mania `.osu` charts and B
 
 ## What This Release Is
 
-`v1.3.0` adds clear A–F GUI presets, adopts B phrase search for 7K-to-4K/5K and E Source LN for 7K-to-8K/10K, and strengthens independent safety checks. Manual 4K-to-5K/7K experiments remain optional. The release includes a Windows package, full project source, and a separate ten-file NK2 source archive.
+`v1.3.1` extends every manual NK2 preset A–F to all 1K–18K source/target pairs for expansion and compression, and adds 1K–3K to the GUI Target selector. Automatic 7K presets and existing safety checks remain unchanged. The release includes a Windows package, full project source, and a separate ten-file NK2 source archive.
 
 Main capabilities:
 
@@ -14,18 +14,18 @@ Main capabilities:
 - Basic BMS/BME/BML/PMS input/output; BMS-family input stays BMS-family output.
 - Source key detection with optional Source override.
 - GUI Source selector supports `auto` and `1`-`18`; numeric Source in batch skips non-matching source-key charts.
-- GUI Target supports 4K through 18K. NK2 CLI/core supports every source/target pair from 1K through 18K, including higher-to-lower conversion.
+- GUI Target supports 1K through 18K. NK2 CLI/core supports every source/target pair from 1K through 18K, including higher-to-lower conversion.
 - Default output beside each input chart when `--out` / `--out-dir` is omitted.
 - Parallel CLI batch conversion with `--batch`, `--input-list`, `--jobs`, progress, and summary output.
 - Classic conversion with collision/LN/distance/jack safety checks.
 - Experimental NK2 conversion modes: `native`, `faithful`, `harder`, `transform`; same-K conversion runs only in `transform`, while `report` remains single-input analysis only.
 - With `--engine nk2` and no explicit mode/search/note options, detected 7K inputs now use B phrase search for 4K/5K and E Source LN for 8K/10K. Other pairs keep the CLI's native fallback. The GUI defaults to `Auto (7K presets)`, sent as `--nk2-mode auto`, whose other-key fallback is faithful. Explicit mode/search/note options and stream transforms bypass automatic adoption. Classic remains the default engine, and the core `Mode` default is unchanged.
-- `--nk2-search phrase` compares bounded two-beat placements for faithful 7K-to-4K/5K/8K/10K or opt-in 4K-to-5K/7K conversion. Explicit `--nk2-mode faithful --nk2-search off` selects the legacy faithful path; `--nk2-audit` independently checks its output. See [phrase search and local OSZ comparisons](docs/nk2-phrase-search.md).
-- `--nk2-phrase-support` adds conservative support taps to 7K-to-8K/10K or opt-in 4K-to-5K/7K phrase output while preserving every retained source placement. Compare B Phrase and C Phrase Notes at 10K with the packager's `--comparison phrase-notes` option.
+- `--nk2-search phrase` compares bounded two-beat placements for faithful conversion between any source and target from 1K through 18K, with stream transforms off. Explicit `--nk2-mode faithful --nk2-search off` selects the legacy faithful path; `--nk2-audit` independently checks its output. See [phrase search and local OSZ comparisons](docs/nk2-phrase-search.md).
+- `--nk2-phrase-support` adds conservative support taps to upward or downward phrase output while preserving every retained source placement. Compare B Phrase and C Phrase Notes at 10K with the packager's `--comparison phrase-notes` option.
 - Add `--nk2-phrase-dense-ln` to preserve C and append more taps plus long notes. The packager's `--comparison phrase-dense-ln` includes B/C/D 10K and the source 7K for comparison.
 - Add `--nk2-phrase-source-ln` alongside the dense option for E: vary generated LN lengths and lanes while keeping each whole LN inside one source LN interval. D remains unchanged. `--comparison phrase-source-ln` packages source 7K and C/D/E 10K.
 - Add `--nk2-phrase-source-ln-boost` alongside E for F: preserve all E notes and append only source-covered LNs with higher addition budgets. `--comparison phrase-source-ln-boost` packages source 7K and D/E/F 10K; `--comparison phrase-key-tests` packages source 7K, A/B 5K, and D/E/F 8K. Existing D/E 10K behavior is retained.
-- Manual 4K-to-5K/7K supports B/C/D/E, with no legacy 4K-to-5K fill in B and no F support. `--comparison phrase-four-key-tests` includes source 4K plus B/E at 5K and 7K. `--comparison adopted-repair` includes source 7K, A Fixed 5K, B Adopted 4K/5K, and E Adopted 8K/10K. Existing comparison modes remain available.
+- Manual A–F supports all 1K–18K pairs. B adds no notes or timing shifts, including 4K-to-5K; C–F append safe notes without rearranging their base output. Additions can be zero when no safe room remains. `--comparison phrase-four-key-tests` includes source 4K plus B/E at 5K and 7K. `--comparison adopted-repair` includes source 7K, A Fixed 5K, B Adopted 4K/5K, and E Adopted 8K/10K. Existing comparison modes remain available.
 - Fixed the legacy source-jack exception to allow only the immediately preceding target lane for that same source lane; continuing a source jack no longer clears the recent-jack mask for every target lane.
 - Classic GUI 10K conversions use Full-Field Mirror-Remix by default.
 - JSON/CSV reports for conversion quality, policy comparison, and diagnostics.
@@ -38,7 +38,7 @@ Not included: full chart editing, audio playback, waveform view, DP split conver
 Use the Windows release zip when you only want to run the tool:
 
 ```text
-KeyWeaver-v1.3.0-win64-<timestamp>.zip
+KeyWeaver-v1.3.1-win64-<timestamp>.zip
 ```
 
 Inside the package:
@@ -57,7 +57,7 @@ Inside the package:
 3. Select `KeyWeaver.exe` if the GUI did not auto-detect it.
 4. Select or drop an osu!mania/BMS-family chart.
 5. Set Source to `auto` or a fixed key count from `1` to `18`.
-6. Set Target from `4` to `18`.
+6. Set Target from `1` to `18`.
 7. Choose Classic or NK2.
 8. Press Convert or Batch Folder.
 
@@ -81,8 +81,17 @@ NK2 GUI choices:
 | `F - Source LN+` | Preserve E and append only additional source-covered LNs. |
 
 `native`, `harder`, and `transform` remain available. Auto selection is resolved
-per input, including mixed-source batches. Manual 4K-to-5K/7K permits B/C/D/E;
-F is limited to 7K-to-8K/10K. Invalid manual combinations produce an error.
+per input, including mixed-source batches. Every manual A–F preset supports
+expansion and compression across 1K–18K. Same-key A–F is a no-op; use `transform`
+for same-key relaning. Phrase presets require faithful mode with stream transforms
+off. BMS output remains limited to its supported layouts.
+
+```powershell
+# E expansion: 5K to 12K
+build/KeyWeaver.exe input5k.osu --target 12 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln
+# F compression: 8K to 6K; safe additions may be zero
+build/KeyWeaver.exe input8k.osu --target 6 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln --nk2-phrase-source-ln-boost
+```
 
 ## CLI Examples
 
@@ -137,7 +146,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.3.0
+.\scripts\package_release.ps1 -Version 1.3.1
 ```
 
 The package script runs a Release CMake build, the complete registered CTest suite (including NK2 safety, phrase and CLI regressions), public-header smoke, GUI smoke, CLI dry-run smokes, sample conversions, reconversion guard checks, and BMS guard checks. It writes archives and `.sha256` files under `dist/release/`. Automated checks cover structural safety and deterministic output; in-game play quality still requires manual comparison.
@@ -172,12 +181,12 @@ ONNX notes:
 The source package is named like:
 
 ```text
-KeyWeaver-v1.3.0-source-<timestamp>.zip
+KeyWeaver-v1.3.1-source-<timestamp>.zip
 ```
 
 It contains explicitly selected tracked project files plus the current NK2 source, tests, and documentation. Private audio/training experiments, local MP3/chart/OSZ assets, `AGENTS.md` and other local agent instructions, `.git`, build folders, and old release archives are excluded. It does not include working-tree diff artifacts.
 
-The release also provides `KeyWeaver-NK2-source-1K-18K-v1.3.0-<timestamp>.zip`, containing the ten files under `src/nk2/`, including the independent safety auditor. This focused archive is for inspection and integration; use the full source archive to build the application.
+The release also provides `KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip`, containing the ten files under `src/nk2/`, including the independent safety auditor. This focused archive is for inspection and integration; use the full source archive to build the application.
 
 ## Important Docs
 

@@ -1,4 +1,4 @@
-# KeyWeaver v1.3.0
+# KeyWeaver v1.3.1
 
 언어: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,7 @@ KeyWeaver는 osu!mania `.osu` 차트와 BMS 계열 차트를 키 수 기준으�
 
 ## 이 릴리즈의 기준
 
-`v1.3.0`은 GUI의 A–F 선택지를 정리하고, 7K→4K/5K에는 B 탐색, 7K→8K/10K에는 E Source LN을 기본 채택하며 독립 안전성 검사를 강화한다. 4K→5K/7K 수동 실험은 선택형으로 유지한다. Windows 패키지, 전체 프로젝트 소스, 10개 파일로 구성된 NK2 전용 소스 압축 파일을 제공한다.
+`v1.3.1`은 NK2 수동 프리셋 A–F 모두를 1K–18K의 모든 원본/목표 조합에서 상향·하향 변환하도록 확장하고, GUI Target에 1K–3K를 추가한다. 기존 7K 자동 채택과 안전성 검사는 유지한다. Windows 패키지, 전체 프로젝트 소스, 10개 파일로 구성된 NK2 전용 소스 압축 파일을 제공한다.
 
 주요 기능:
 
@@ -15,18 +15,18 @@ KeyWeaver는 osu!mania `.osu` 차트와 BMS 계열 차트를 키 수 기준으�
 - Source key 자동 감지와 수동 Source override.
 - GUI Source 선택은 `auto`, `1`-`18`을 지원.
 - 배치에서 숫자 Source를 선택하면 해당 source-key 차트만 변환하고 나머지는 skip한다.
-- GUI Target은 4K-18K. NK2 CLI/core는 1K-18K의 모든 source/target 조합과 높은 키에서 낮은 키로의 변환을 지원한다.
+- GUI Target은 1K-18K. NK2 CLI/core는 1K-18K의 모든 source/target 조합과 높은 키에서 낮은 키로의 변환을 지원한다.
 - `--out` / `--out-dir`가 없으면 입력 차트 옆에 출력한다.
 - `--batch`, `--input-list`, `--jobs` 기반 병렬 CLI 배치와 진행률/요약 출력.
 - Classic 변환의 collision, LN, distance, jack 안전 검사.
 - 실험적 NK2 모드: `native`, `faithful`, `harder`, `transform`. 동일 키 변환은 `transform`에서만 실행하며, `report`는 단일 입력 분석 전용이다.
 - `--engine nk2`에서 모드·탐색·노트 추가 옵션을 명시하지 않으면 원본 7K의 4/5K 변환은 B 탐색, 8/10K 변환은 E Source LN을 기본 채택한다. 다른 조합은 CLI의 기존 native 기본을 유지한다. GUI 기본은 `Auto (7K presets)`이며 `--nk2-mode auto`로 전달하고, 그 밖의 키 조합은 기존 GUI처럼 faithful로 처리한다. 명시한 모드·탐색·추가 옵션과 stream 변환은 자동 채택보다 우선한다. 전체 기본 엔진 Classic과 코어 `Mode` 기본값은 그대로다.
-- `--nk2-search phrase`는 faithful 7K→4K/5K/8K/10K와 선택형 4K→5K/7K에서 두 박 구간의 배치 후보를 비교한다. `--nk2-mode faithful --nk2-search off`로 기존 faithful 경로를 명시하고 `--nk2-audit`로 독립 검사할 수 있다. [구간 탐색·OSZ 비교 안내](docs/nk2-phrase-search.md).
-- `--nk2-phrase-support`는 7K→8K/10K 또는 선택형 4K→5K/7K 탐색 결과의 원본 배치를 유지하면서 보조 탭을 추가한다. 패키저의 `--comparison phrase-notes`로 B Phrase와 C Phrase Notes의 10K를 비교할 수 있다.
+- `--nk2-search phrase`는 1K–18K의 모든 원본/목표 조합에서 faithful, stream off 조건으로 두 박 구간의 배치 후보를 비교한다. `--nk2-mode faithful --nk2-search off`로 기존 faithful 경로를 명시하고 `--nk2-audit`로 독립 검사할 수 있다. [구간 탐색·OSZ 비교 안내](docs/nk2-phrase-search.md).
+- `--nk2-phrase-support`는 상향·하향 탐색 결과의 원본 배치를 유지하면서 보조 탭을 추가한다. 패키저의 `--comparison phrase-notes`로 B Phrase와 C Phrase Notes의 10K를 비교할 수 있다.
 - 여기에 `--nk2-phrase-dense-ln`을 켜면 C를 유지한 채 탭과 롱놋을 더 추가한다. `--comparison phrase-dense-ln` 패키지는 원본 7K와 B/C/D 10K를 담는다.
 - D 옵션과 함께 `--nk2-phrase-source-ln`을 켜면 E를 만든다. 생성 LN 전체가 원본 LN 하나의 구간 안에 있도록 제한하면서 길이·레인 선호를 다양화한다. 기존 D는 유지하며 `--comparison phrase-source-ln`으로 원본 7K와 C/D/E 10K를 비교한다.
 - E에 `--nk2-phrase-source-ln-boost`를 더하면 E의 모든 노트를 유지하면서 같은 원본 LN 제한 아래 LN만 더하는 F를 만든다. `--comparison phrase-source-ln-boost`는 원본 7K+D/E/F 10K, `--comparison phrase-key-tests`는 원본 7K+A/B 5K+D/E/F 8K를 담는다. 기존 D/E 10K 결과는 유지한다.
-- 4K→5K/7K는 B/C/D/E 수동 실험이며 B에는 기존 4K→5K fill을 적용하지 않아 추가 노트가 0개다. F는 7K→8K/10K 전용이다. `--comparison phrase-four-key-tests`는 원본 4K와 B/E 5K·7K 총 5난이도, `--comparison adopted-repair`는 원본 7K와 A Fixed 5K, B Adopted 4K·5K, E Adopted 8K·10K 총 6난이도를 담는다. 기존 비교판도 유지한다.
+- A–F 수동 선택은 1K–18K의 모든 조합을 지원한다. B는 4K→5K에서도 노트 추가·시각 이동을 하지 않으며, C–F는 기반 결과를 재배치하지 않고 안전한 노트만 더한다. 안전한 자리가 없으면 추가량은 0일 수 있다. `--comparison phrase-four-key-tests`는 원본 4K와 B/E 5K·7K 총 5난이도, `--comparison adopted-repair`는 원본 7K와 A Fixed 5K, B Adopted 4K·5K, E Adopted 8K·10K 총 6난이도를 담는다. 기존 비교판도 유지한다.
 - 기존 배치의 원본 연타 예외가 모든 레인의 연타 금지 마스크를 해제하던 문제를 수정했다. 이제 실제 같은 원본 레인의 직전 배치 레인에만 예외를 허용한다.
 - Classic GUI의 10K 변환은 기본으로 Full-Field Mirror-Remix를 사용한다.
 - 변환 품질, 정책 비교, 진단용 JSON/CSV 리포트.
@@ -39,7 +39,7 @@ KeyWeaver는 osu!mania `.osu` 차트와 BMS 계열 차트를 키 수 기준으�
 실행만 하려면 Windows 릴리즈 zip을 사용한다.
 
 ```text
-KeyWeaver-v1.3.0-win64-<timestamp>.zip
+KeyWeaver-v1.3.1-win64-<timestamp>.zip
 ```
 
 패키지 구성:
@@ -58,7 +58,7 @@ KeyWeaver-v1.3.0-win64-<timestamp>.zip
 3. GUI가 자동 감지하지 못하면 `KeyWeaver.exe`를 선택한다.
 4. osu!mania/BMS 계열 차트를 선택하거나 드롭한다.
 5. Source를 `auto` 또는 `1`-`18` 중 하나로 선택한다.
-6. Target을 `4`-`18`로 선택한다.
+6. Target을 `1`-`18`로 선택한다.
 7. Classic 또는 NK2를 선택한다.
 8. Convert 또는 Batch Folder를 누른다.
 
@@ -82,8 +82,16 @@ NK2 GUI 선택지:
 | `F - Source LN+` | E를 보존하고 원본 LN 안에 LN만 더 추가. |
 
 `native`, `harder`, `transform`도 유지한다. Auto는 혼합 키 배치에서도 입력별로
-결정한다. 4K→5K/7K 수동 실험은 B/C/D/E를 지원하고 F는 7K→8K/10K 전용이다.
-잘못된 수동 조합은 오류로 거부한다.
+결정한다. A–F 수동 선택 모두 1K–18K 상향·하향 변환을 지원한다. 동일 키 A–F는
+기존처럼 변환하지 않으며 같은 키 재배치는 `transform`을 사용한다. 구간 탐색은
+faithful, stream off 조건을 유지한다. BMS 출력은 지원하는 레이아웃만 허용한다.
+
+```powershell
+# E 상향: 5K → 12K
+build/KeyWeaver.exe input5k.osu --target 12 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln
+# F 하향: 8K → 6K, 안전한 자리가 없으면 추가량은 0
+build/KeyWeaver.exe input8k.osu --target 6 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln --nk2-phrase-source-ln-boost
+```
 
 ## CLI 예시
 
@@ -138,7 +146,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 릴리즈 패키지:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.3.0
+.\scripts\package_release.ps1 -Version 1.3.1
 ```
 
 package script는 Release 빌드, 등록된 전체 CTest(NK2 안전성·구간 탐색·CLI 회귀 포함), public header smoke, GUI smoke, CLI dry-run smoke, 샘플 변환, reconversion guard, BMS guard를 실행하고 `dist/release/`에 압축 파일과 `.sha256`을 만든다. 자동 검사는 구조적 안전성과 결정성을 확인하며, 실제 플레이 감각은 직접 비교해야 한다.
@@ -173,12 +181,12 @@ ONNX 참고:
 소스 패키지 이름은 다음 형식이다.
 
 ```text
-KeyWeaver-v1.3.0-source-<timestamp>.zip
+KeyWeaver-v1.3.1-source-<timestamp>.zip
 ```
 
 명시적으로 선택한 추적 프로젝트 파일과 최신 NK2 소스·테스트·문서를 포함한다. 개인 음원·학습 실험, 로컬 MP3·채보·OSZ, `AGENTS.md` 등 로컬 agent 지침, `.git`, 빌드 폴더, 기존 릴리즈 압축 파일은 제외한다. 작업 폴더의 diff 산출물도 포함하지 않는다.
 
-릴리즈에는 독립 안전성 검사기를 포함한 `src/nk2/`의 10개 파일을 담은 `KeyWeaver-NK2-source-1K-18K-v1.3.0-<timestamp>.zip`도 제공한다. 검토·통합용 소스이며 애플리케이션 빌드에는 전체 소스 압축 파일을 사용한다.
+릴리즈에는 독립 안전성 검사기를 포함한 `src/nk2/`의 10개 파일을 담은 `KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip`도 제공한다. 검토·통합용 소스이며 애플리케이션 빌드에는 전체 소스 압축 파일을 사용한다.
 
 ## 주요 문서
 

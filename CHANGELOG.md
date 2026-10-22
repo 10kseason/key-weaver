@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.1 - 2026-10-22
+
+- Enabled every manual NK2 preset A-F for all 1K-18K source/target pairs,
+  including expansion and compression. B keeps source timestamps and surviving
+  LN lengths and adds no notes. C-F append safe notes without moving their base
+  output; safety constraints can leave zero additions.
+- Retained phrase addition budgets, the 500ms guard, independent safety checks,
+  and full single-source-LN containment for E/F. Same-key A-F remains a no-op.
+- Expanded the GUI Target selector to 1K-18K and updated preset hints/help.
+  Automatic 7K-to-4K/5K B and 7K-to-8K/10K E choices remain unchanged.
+- Kept existing named comparison OSZ bundles and prior releases unchanged.
+
 ## 1.3.0 - 2026-10-22
 
 - Updated the NK2 GUI choices to `Auto (7K presets)`, `A - Legacy faithful`,

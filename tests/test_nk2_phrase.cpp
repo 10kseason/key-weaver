@@ -199,11 +199,12 @@ void unsupportedConfigurationsFailExplicitly() {
     const auto source = mixedFixture();
     std::vector<NK2Options> unsupported;
     auto options = faithfulOptions(4);
-    options.phraseSearch = true;
-    options.sourceKeyCount = 6;
-    unsupported.push_back(options);
-    for (const int target : {3, 6, 7, 9, 12}) {
-        options = faithfulOptions(target);
+    for (const int keyCount : {0, 19}) {
+        options = faithfulOptions(4);
+        options.phraseSearch = true;
+        options.sourceKeyCount = keyCount;
+        unsupported.push_back(options);
+        options = faithfulOptions(keyCount);
         options.phraseSearch = true;
         unsupported.push_back(options);
     }
@@ -221,8 +222,8 @@ void unsupportedConfigurationsFailExplicitly() {
         bool rejected = false;
         try {
             (void)keyconv::nk2::convertChart(source, invalid);
-        } catch (const std::runtime_error& error) {
-            rejected = std::string(error.what()).find("phrase search requires") != std::string::npos;
+        } catch (const std::runtime_error&) {
+            rejected = true;
         }
         require(rejected, "an unsupported search combination must fail rather than quietly change engines");
     }
@@ -461,12 +462,12 @@ void unsupportedPhraseSupportConfigurationsFail() {
     auto invalid = valid;
     invalid.phraseSearch = false;
     unsupported.push_back(invalid);
-    invalid = valid;
-    invalid.sourceKeyCount = 6;
-    unsupported.push_back(invalid);
-    for (const int target : {4, 5, 6, 7, 9, 12}) {
+    for (const int keyCount : {0, 19}) {
         invalid = valid;
-        invalid.targetKeyCount = target;
+        invalid.sourceKeyCount = keyCount;
+        unsupported.push_back(invalid);
+        invalid = valid;
+        invalid.targetKeyCount = keyCount;
         unsupported.push_back(invalid);
     }
     for (const auto mode : {Mode::Native, Mode::Harder, Mode::Transform, Mode::Report}) {
@@ -484,7 +485,7 @@ void unsupportedPhraseSupportConfigurationsFail() {
         } catch (const std::runtime_error&) {
             rejected = true;
         }
-        require(rejected, "support must reject configurations outside faithful phrase 7K to 8K/10K");
+        require(rejected, "support must reject invalid key counts, modes and incomplete phrase options");
     }
 }
 
@@ -740,12 +741,12 @@ void unsupportedPhraseDenseLnConfigurationsFail() {
     invalid = valid;
     invalid.phraseSupport = false;
     unsupported.push_back(invalid);
-    invalid = valid;
-    invalid.sourceKeyCount = 6;
-    unsupported.push_back(invalid);
-    for (const int target : {4, 5, 6, 7, 9, 12}) {
+    for (const int keyCount : {0, 19}) {
         invalid = valid;
-        invalid.targetKeyCount = target;
+        invalid.sourceKeyCount = keyCount;
+        unsupported.push_back(invalid);
+        invalid = valid;
+        invalid.targetKeyCount = keyCount;
         unsupported.push_back(invalid);
     }
     for (const auto mode : {Mode::Native, Mode::Harder, Mode::Transform, Mode::Report}) {
@@ -763,7 +764,7 @@ void unsupportedPhraseDenseLnConfigurationsFail() {
         } catch (const std::runtime_error&) {
             rejected = true;
         }
-        require(rejected, "dense LN must reject configurations outside faithful 7K to 8K/10K phrase support");
+        require(rejected, "dense LN must reject invalid key counts, modes and incomplete phrase support");
     }
 }
 
@@ -925,12 +926,12 @@ void unsupportedPhraseSourceLnConfigurationsFail() {
     invalid = valid;
     invalid.phraseDenseLn = false;
     unsupported.push_back(invalid);
-    invalid = valid;
-    invalid.sourceKeyCount = 6;
-    unsupported.push_back(invalid);
-    for (const int target : {4, 5, 6, 7, 9, 12}) {
+    for (const int keyCount : {0, 19}) {
         invalid = valid;
-        invalid.targetKeyCount = target;
+        invalid.sourceKeyCount = keyCount;
+        unsupported.push_back(invalid);
+        invalid = valid;
+        invalid.targetKeyCount = keyCount;
         unsupported.push_back(invalid);
     }
     for (const auto mode : {Mode::Native, Mode::Harder, Mode::Transform, Mode::Report}) {
@@ -949,7 +950,7 @@ void unsupportedPhraseSourceLnConfigurationsFail() {
             rejected = true;
         }
         require(rejected,
-                "E must reject configurations outside faithful 7K to 8K/10K dense phrase support");
+                "E must reject invalid key counts, modes and incomplete dense phrase support");
     }
 }
 
@@ -1138,11 +1139,12 @@ void unsupportedPhraseSourceLnBoostConfigurationsFail() {
         unsupported.push_back(invalid);
     }
     auto invalid = valid;
-    invalid.sourceKeyCount = 6;
-    unsupported.push_back(invalid);
-    for (const int target : {4, 5, 6, 7, 9, 12}) {
+    for (const int keyCount : {0, 19}) {
         invalid = valid;
-        invalid.targetKeyCount = target;
+        invalid.sourceKeyCount = keyCount;
+        unsupported.push_back(invalid);
+        invalid = valid;
+        invalid.targetKeyCount = keyCount;
         unsupported.push_back(invalid);
     }
     for (const auto mode : {Mode::Native, Mode::Harder, Mode::Transform, Mode::Report}) {
@@ -1160,7 +1162,7 @@ void unsupportedPhraseSourceLnBoostConfigurationsFail() {
         } catch (const std::runtime_error&) {
             rejected = true;
         }
-        require(rejected, "F must reject configurations outside faithful 7K to 8K/10K with complete E support");
+        require(rejected, "F must reject invalid key counts, modes and incomplete E support");
     }
 }
 
@@ -1251,19 +1253,137 @@ void fourKeyExpansionHonorsTapOnlyAndConservativeBudgets() {
     }
 }
 
-void fourKeyExpansionRejectsUnsupportedTargetsAndBoost() {
-    const auto source = fourKeyExpansionFixture();
-    for (const int target : {4, 5, 7, 8, 10}) {
-        auto options = sourceLnOptions(target);
-        options.sourceKeyCount = 4;
-        options.phraseSourceLnBoost = target == 5 || target == 7;
-        bool rejected = false;
-        try {
-            (void)keyconv::nk2::convertChart(source, options);
-        } catch (const std::runtime_error&) {
-            rejected = true;
+NK2Options presetOptions(int sourceKeys, int targetKeys, char preset) {
+    auto options = faithfulOptions(targetKeys);
+    options.sourceKeyCount = sourceKeys;
+    options.phraseSearch = true;
+    options.phraseSupport = preset >= 'C';
+    options.phraseDenseLn = preset >= 'D';
+    options.phraseSourceLn = preset >= 'E';
+    options.phraseSourceLnBoost = preset >= 'F';
+    return options;
+}
+
+Chart keyPairFixture(int sourceKeys) {
+    // Keep the full 18x18 sweep cheap, but exercise both ends of every source
+    // layout, a future head inside a hold, and a close pair after the hold.
+    // The 1K source stays valid by moving its second head beyond the LN tail.
+    auto source = chart({hold("matrix-ln-0", 1000, 0, 1800),
+                         tap("matrix-tap-1", sourceKeys == 1 ? 2000 : 1250, sourceKeys - 1),
+                         tap("matrix-tap-2", 2250, sourceKeys / 2),
+                         hold("matrix-ln-3", 3500, sourceKeys - 1, 4500),
+                         tap("matrix-tap-4", 5000, 0),
+                         tap("matrix-tap-5", 5500, sourceKeys / 2)});
+    source.meta.sourceKeyCount = sourceKeys;
+    return source;
+}
+
+void everyDistinctKeyPairSupportsAllPhrasePresets() {
+    int checkedPairs = 0;
+    for (int sourceKeys = 1; sourceKeys <= 18; ++sourceKeys) {
+        const auto source = keyPairFixture(sourceKeys);
+        const auto before = keyconv::exportOsu(source, sourceKeys);
+        for (int targetKeys = 1; targetKeys <= 18; ++targetKeys) {
+            if (sourceKeys == targetKeys) continue;
+            try {
+                std::map<char, NK2ConversionResult> results;
+                for (const char preset : {'B', 'C', 'D', 'E', 'F'}) {
+                    const auto options = presetOptions(sourceKeys, targetKeys, preset);
+                    auto first = keyconv::nk2::convertChart(source, options);
+                    const auto repeated = keyconv::nk2::convertChart(source, options);
+                    require(!first.report.noOp && first.report.independentSafety.has_value() &&
+                                first.report.independentSafety->passed(),
+                            "every distinct pair must run the requested preset and pass its safety audit");
+                    require(keyconv::exportOsu(first.chart, targetKeys) ==
+                                keyconv::exportOsu(repeated.chart, targetKeys) &&
+                                keyconv::nk2::reportToJson(first.report) ==
+                                keyconv::nk2::reportToJson(repeated.report),
+                            std::string("preset ") + preset + " must remain byte- and report-deterministic");
+                    require(keyconv::nk2::auditSafety(source, first.chart, targetKeys, 500,
+                                preset >= 'E').passed(),
+                            "a fresh independent audit must agree for every key pair and preset");
+                    results.emplace(preset, std::move(first));
+                }
+                checkSearchContract(source, results.at('B'), targetKeys);
+                checkPhraseSupportContract(source, results.at('B'), results.at('C'));
+                checkPhraseDenseLnContract(source, results.at('C'), results.at('D'));
+                checkPhraseSourceLnContract(source, results.at('C'), results.at('E'));
+                checkPhraseSourceLnBoostContract(source, results.at('E'), results.at('F'));
+                require(keyconv::exportOsu(source, sourceKeys) == before,
+                        "every preset must preserve the original input chart");
+                ++checkedPairs;
+            } catch (const std::exception& error) {
+                throw std::runtime_error(std::to_string(sourceKeys) + "K to " +
+                    std::to_string(targetKeys) + "K: " + error.what());
+            }
         }
-        require(rejected, "4K experiments allow E only for 5K/7K and do not enable F");
+    }
+    require(checkedPairs == 306, "the matrix must cover all distinct 1K through 18K pairs");
+}
+
+void everySameKeyPresetRemainsAnExactNoOp() {
+    for (int keys = 1; keys <= 18; ++keys) {
+        const auto source = keyPairFixture(keys);
+        const auto before = keyconv::exportOsu(source, keys);
+        for (const char preset : {'B', 'C', 'D', 'E', 'F'}) {
+            const auto result = keyconv::nk2::convertChart(source, presetOptions(keys, keys, preset));
+            require(result.report.noOp && !result.report.chartMutated &&
+                        result.report.phraseSearchWindows == 0 && result.report.addedNotes == 0 &&
+                        result.report.droppedNotes == 0,
+                    "same-key presets must preserve the existing no-op behavior");
+            require(keyconv::exportOsu(result.chart, keys) == before &&
+                        keyconv::exportOsu(source, keys) == before,
+                    "same-key presets must preserve original chart bytes and input");
+            require(result.report.independentSafety.has_value() &&
+                        result.report.independentSafety->passed(),
+                    "same-key no-op output must still receive its requested safety audit");
+        }
+    }
+}
+
+void newlySupportedExpansionAndCompressionProduceRealOverlays() {
+    for (const auto& [sourceKeys, targetKeys] : {std::pair{3, 12}, std::pair{18, 12}}) {
+        auto source = phraseSourceLnFixture();
+        source.meta.sourceKeyCount = sourceKeys;
+        for (std::size_t index = 0; index < source.notes.size(); ++index) {
+            source.notes[index].lane = static_cast<int>(index % sourceKeys);
+        }
+        // Three lanes repeat every 1500ms, so avoid a self-overlapping source
+        // hold in this expansion fixture while retaining varied LN intervals.
+        if (sourceKeys == 3) {
+            for (auto& note : source.notes) {
+                if (note.endTime) note.endTime = std::min(*note.endTime, note.time + 1250);
+            }
+        }
+        const auto before = keyconv::exportOsu(source, sourceKeys);
+        std::map<char, NK2ConversionResult> results;
+        for (const char preset : {'B', 'C', 'D', 'E', 'F'}) {
+            results.emplace(preset, keyconv::nk2::convertChart(source,
+                presetOptions(sourceKeys, targetKeys, preset)));
+        }
+        checkSearchContract(source, results.at('B'), targetKeys);
+        checkPhraseSupportContract(source, results.at('B'), results.at('C'));
+        checkPhraseDenseLnContract(source, results.at('C'), results.at('D'));
+        checkPhraseSourceLnContract(source, results.at('C'), results.at('E'));
+        checkPhraseSourceLnBoostContract(source, results.at('E'), results.at('F'));
+        require(results.at('C').report.addedTapNotes > 0 &&
+                    results.at('D').report.addedHoldNotes > 0 &&
+                    results.at('E').report.addedHoldNotes > 0 &&
+                    results.at('F').report.sourceLnBoostHoldAccepted > 0,
+                "new expansion and compression pairs must exercise real C taps, D/E holds and F boosts");
+        require(keyconv::exportOsu(source, sourceKeys) == before,
+                "new expansion and compression overlays must not mutate their input");
+
+        for (auto& note : source.notes) {
+            note.type = NoteType::Tap;
+            note.endTime.reset();
+        }
+        for (const char preset : {'E', 'F'}) {
+            const auto tapOnly = keyconv::nk2::convertChart(source,
+                presetOptions(sourceKeys, targetKeys, preset));
+            require(tapOnly.report.independentSafety->passed() && tapOnly.report.addedHoldNotes == 0,
+                    "new key pairs must not create E/F holds outside original LN material");
+        }
     }
 }
 
@@ -1310,7 +1430,9 @@ int main() {
         {"source LN boost empty input", emptyPhraseSourceLnBoostInputDoesNotFabricateNotes},
         {"native four-key B and covered E", fourKeyExpansionPreservesBAndAddsCoveredE},
         {"native four-key tap-only and budgets", fourKeyExpansionHonorsTapOnlyAndConservativeBudgets},
-        {"native four-key unsupported targets and F", fourKeyExpansionRejectsUnsupportedTargetsAndBoost},
+        {"all 306 distinct key pairs with B through F", everyDistinctKeyPairSupportsAllPhrasePresets},
+        {"all same-key presets preserve no-op", everySameKeyPresetRemainsAnExactNoOp},
+        {"new expansion and compression generate overlays", newlySupportedExpansionAndCompressionProduceRealOverlays},
     };
     try {
         for (const auto& [name, test] : tests) {

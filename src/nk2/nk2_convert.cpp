@@ -1613,7 +1613,7 @@ void fillDistributionAndSafety(NK2Report& report, const Chart& converted) {
 
 int supportBudgetFor(const NK2Options& options, int sourceNoteCount) {
     const bool fourToFiveFill = isFourToFiveFillOptions(options) && !options.phraseSupport;
-    if (options.targetKeyCount <= options.sourceKeyCount ||
+    if ((options.targetKeyCount <= options.sourceKeyCount && !options.phraseSupport) ||
         (!fourToFiveFill && options.mode == Mode::Faithful && !options.phraseSupport) ||
         options.mode == Mode::Report) {
         return 0;
@@ -1650,7 +1650,7 @@ int phraseSupportBudgetFor(const NK2Options& options, int sourceNoteCount) {
         return clampInt(static_cast<int>(std::ceil(std::max(1, sourceNoteCount) * 0.35)), 1, 10);
     }
     const bool fourToFiveFill = isFourToFiveFillOptions(options) && !options.phraseSupport;
-    if (options.targetKeyCount <= options.sourceKeyCount ||
+    if ((options.targetKeyCount <= options.sourceKeyCount && !options.phraseSupport) ||
         (!fourToFiveFill && options.mode == Mode::Faithful && !options.phraseSupport) ||
         options.mode == Mode::Report) {
         return 0;
@@ -2539,12 +2539,14 @@ bool supportsSupportNotes(const NK2Options& options) {
     if (options.superSymmetry) {
         return false;
     }
-    if (options.targetKeyCount <= options.sourceKeyCount) {
+    if (options.targetKeyCount <= options.sourceKeyCount && !options.phraseSupport) {
         return false;
     }
     if (options.sourceKeyCount > kMaxKeyCount || options.targetKeyCount > kMaxKeyCount) {
         return false;
     }
+    // Explicit C-F overlays can use safe space after compression as well as
+    // expansion. They never move B's notes or relax the generated-note guard.
     // B remains placement-only even in the legacy 4K-to-5K fill special case.
     if (options.phraseSearch) return options.phraseSupport;
     return options.mode != Mode::Faithful || isFourToFiveFillOptions(options) || options.phraseSupport;
@@ -2562,33 +2564,28 @@ NK2Report analyzeReportOnly(const Chart& chart, const NK2Options& options) {
 }
 
 NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) {
-    const bool sevenKeyExpansion = options.sourceKeyCount == 7 &&
-        (options.targetKeyCount == 8 || options.targetKeyCount == 10);
-    const bool fourKeyExperiment = options.sourceKeyCount == 4 &&
-        (options.targetKeyCount == 5 || options.targetKeyCount == 7);
-    const bool phraseExpansionPair = sevenKeyExpansion || fourKeyExperiment;
-    const bool phrasePair = phraseExpansionPair || (options.sourceKeyCount == 7 &&
-        (options.targetKeyCount == 4 || options.targetKeyCount == 5));
-    if (options.phraseSourceLnBoost && (!options.phraseSourceLn || !sevenKeyExpansion)) {
-        throw std::runtime_error("NK2 source LN boost requires 7K to 8K/10K source LN support");
+    const bool phrasePair = options.sourceKeyCount >= 1 && options.sourceKeyCount <= kMaxKeyCount &&
+        options.targetKeyCount >= 1 && options.targetKeyCount <= kMaxKeyCount;
+    if (options.phraseSourceLnBoost && (!options.phraseSourceLn || !phrasePair)) {
+        throw std::runtime_error("NK2 source LN boost requires 1K..18K source LN support");
     }
     if (options.phraseSourceLn && (!options.phraseDenseLn || !options.phraseSupport || !options.phraseSearch ||
-        !phraseExpansionPair ||
+        !phrasePair ||
         options.mode != Mode::Faithful || options.superSymmetry)) {
-        throw std::runtime_error("NK2 source LN support requires faithful 7K to 8K/10K or 4K to 5K/7K dense phrase support without super-symmetry");
+        throw std::runtime_error("NK2 source LN support requires faithful 1K..18K dense phrase support without super-symmetry");
     }
     if (options.phraseDenseLn && (!options.phraseSupport || !options.phraseSearch ||
-        !phraseExpansionPair ||
+        !phrasePair ||
         options.mode != Mode::Faithful || options.superSymmetry)) {
-        throw std::runtime_error("NK2 dense LN support requires faithful 7K to 8K/10K or 4K to 5K/7K phrase support without super-symmetry");
+        throw std::runtime_error("NK2 dense LN support requires faithful 1K..18K phrase support without super-symmetry");
     }
-    if (options.phraseSupport && (!options.phraseSearch || !phraseExpansionPair ||
+    if (options.phraseSupport && (!options.phraseSearch || !phrasePair ||
         options.mode != Mode::Faithful || options.superSymmetry)) {
-        throw std::runtime_error("NK2 phrase support requires faithful 7K to 8K/10K or 4K to 5K/7K phrase search without super-symmetry");
+        throw std::runtime_error("NK2 phrase support requires faithful 1K..18K phrase search without super-symmetry");
     }
     if (options.phraseSearch &&
         (!phrasePair || options.mode != Mode::Faithful || options.superSymmetry)) {
-        throw std::runtime_error("NK2 phrase search requires faithful 7K to 4K/5K/8K/10K or 4K to 5K/7K without super-symmetry");
+        throw std::runtime_error("NK2 phrase search requires faithful 1K..18K without super-symmetry");
     }
     NK2ConversionResult result;
     result.chart = chart;

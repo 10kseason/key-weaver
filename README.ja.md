@@ -1,4 +1,4 @@
-# KeyWeaver v1.3.0
+# KeyWeaver v1.3.1
 
 言語: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,11 +6,11 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 
 ## このリリース
 
-`v1.3.0` は GUI の A–F プリセット、7K 向けの B/E 既定選択、独立した安全性検査を追加します。Windows パッケージ、全ソース、および 10 ファイルの NK2 専用ソースを提供します。既存の 1K–18K 対応と Classic の既定動作は維持します。
+`v1.3.1` は手動 NK2 プリセット A–F を 1K–18K の全組み合わせの増加・減少変換に拡張し、GUI Target に 1K–3K を追加します。7K の既定選択、安全性検査、Classic の既定動作は維持します。Windows パッケージ、全ソース、および 10 ファイルの NK2 専用ソースを提供します。
 
 - GUI の `Auto (7K presets)` は、元譜面が 7K の場合、4K/5K に B、8K/10K に E を選び、その他は faithful を使います。CLI で `--engine nk2` だけを指定した場合も同じ 7K 設定を使い、その他は native です。明示的なモード・探索・追加ノート指定や stream 変換は自動選択より優先します。
 - GUI の手動選択は `A - Legacy faithful`、`B - Phrase only`、`C - Phrase + taps`、`D - Dense taps + LN`、`E - Source LN`、`F - Source LN+` です。`native`、`harder`、`transform` も維持します。
-- 4K→5K/7K は B/C/D/E の手動実験です。B は既存の 4K→5K fill を使わず追加ノートはゼロ、E の生成 LN は元 LN 一つの区間内に限定します。F は 7K→8K/10K のみです。phrase 出力は独立検査に合格してから保存します。詳細は [探索と比較ガイド](docs/nk2-phrase-search.md) を参照してください。
+- 手動 A–F はすべて 1K–18K の全組み合わせで増加・減少変換に対応します。B はノートを追加せず時刻を変えません。C–F は基になる配置を動かさず、安全な空きにだけ追加します。E/F の生成 LN は元 LN 一つの区間内に限定します。空きがなければ追加はゼロです。同じキー数の A–F は従来どおり変更せず、再配置には `transform` を使います。phrase は faithful、stream off を必要とし、独立検査に合格してから保存します。詳細は [探索と比較ガイド](docs/nk2-phrase-search.md) を参照してください。
 
 主な機能:
 
@@ -19,7 +19,7 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 - Source key の自動検出と手動 override。
 - GUI Source は `auto` と `1`-`18` に対応。
 - バッチで数値 Source を選ぶと、一致する source-key のチャートだけを変換し、それ以外は skip します。
-- GUI Target は 4K-18K。NK2 CLI/core は 1K-18K の全 source/target 組み合わせと高キーから低キーへの変換に対応します。
+- GUI Target は 1K-18K。NK2 CLI/core は 1K-18K の全 source/target 組み合わせと高キーから低キーへの変換に対応します。
 - `--out` / `--out-dir` を省略すると入力チャートの横に出力します。
 - `--batch`、`--input-list`、`--jobs` による並列 CLI バッチ、進捗、サマリー出力。
 - Classic 変換の collision、LN、distance、jack 安全チェック。
@@ -35,7 +35,7 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 実行だけなら Windows リリース zip を使います。
 
 ```text
-KeyWeaver-v1.3.0-win64-<timestamp>.zip
+KeyWeaver-v1.3.1-win64-<timestamp>.zip
 ```
 
 中身:
@@ -54,7 +54,7 @@ KeyWeaver-v1.3.0-win64-<timestamp>.zip
 3. 自動検出されない場合は `KeyWeaver.exe` を選択します。
 4. osu!mania/BMS 系チャートを選択またはドロップします。
 5. Source を `auto` または `1`-`18` から選びます。
-6. Target を `4`-`18` から選びます。
+6. Target を `1`-`18` から選びます。
 7. Classic または NK2 を選びます。
 8. Convert または Batch Folder を押します。
 
@@ -118,7 +118,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 リリースパッケージ:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.3.0
+.\scripts\package_release.ps1 -Version 1.3.1
 ```
 
 package script は Release ビルド、登録された全 CTest（NK2 安全性・phrase・CLI 回帰を含む）、public header smoke、GUI smoke、CLI dry-run smoke、サンプル変換、再変換ガード、BMS ガードを実行し、`dist/release/` にアーカイブと `.sha256` を作成します。自動検査は構造的安全性と決定性を確認するもので、プレイ感の評価には実際の比較が必要です。
@@ -153,12 +153,12 @@ ONNX メモ:
 ソースパッケージ名:
 
 ```text
-KeyWeaver-v1.3.0-source-<timestamp>.zip
+KeyWeaver-v1.3.1-source-<timestamp>.zip
 ```
 
 明示的に選択した追跡済みプロジェクトファイルと最新の NK2 ソース・テスト・文書を含みます。個人の音声・学習実験、ローカル MP3・譜面・OSZ、`AGENTS.md` などのローカル agent 指示、`.git`、ビルドフォルダ、古いリリース、作業ツリーの diff 成果物は除外します。
 
-`KeyWeaver-NK2-source-1K-18K-v1.3.0-<timestamp>.zip` は、独立安全性検査を含む `src/nk2/` の 10 ファイルを収録します。確認・統合用であり、アプリのビルドには全ソース版を使用してください。
+`KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip` は、独立安全性検査を含む `src/nk2/` の 10 ファイルを収録します。確認・統合用であり、アプリのビルドには全ソース版を使用してください。
 
 ## 重要文書
 

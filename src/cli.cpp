@@ -44,7 +44,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v1.3.0";
+constexpr const char* kToolVersion = "v1.3.1";
 constexpr const char* kDefaultBatchOnnxPolicyModel = "lane_policy_student_mlp_u_e_circusgalop.onnx";
 constexpr const char* kLegacyBatchOnnxPolicyModel = "u_e_circusgalop_chart_dataset_lane_policy.onnx";
 using SteadyClock = std::chrono::steady_clock;
@@ -394,11 +394,12 @@ void printHelp(std::ostream& out) {
     out << "                          With no NK2 mode/search/note options: 7K->4K/5K uses B, 7K->8K/10K uses E; otherwise native.\n";
     out << "                          auto selects the same B/E defaults per file, with faithful fallback for other keys.\n";
     out << "                          Explicit search/note options or Stream transforms disable automatic B/E selection.\n";
-    out << "  --nk2-search <method>   off | phrase. Phrase requires faithful 7K -> 4K/5K/8K/10K or 4K -> 5K/7K, Stream off.\n";
-    out << "  --nk2-phrase-support   Add safe taps; faithful phrase 7K -> 8K/10K or 4K -> 5K/7K, Stream off.\n";
+    out << "  --nk2-search <method>   off | phrase. Phrase supports any 1K..18K source/target, faithful mode, Stream off.\n";
+    out << "  --nk2-phrase-support   Add safe taps after phrase search, including key-count reductions; additions may be zero.\n";
     out << "  --nk2-phrase-dense-ln  Add more taps and LNs after phrase support; requires --nk2-phrase-support.\n";
     out << "  --nk2-phrase-source-ln Vary generated LNs only inside source LN spans; requires --nk2-phrase-dense-ln.\n";
-    out << "  --nk2-phrase-source-ln-boost Add only extra LNs after Source LN; requires source 7K, target 8K/10K and all Source LN flags.\n";
+    out << "  --nk2-phrase-source-ln-boost Add only extra LNs after Source LN; requires all Source LN flags.\n";
+    out << "                          Presets B-F support every 1K..18K pair; equal-key conversion stays a no-op.\n";
     out << "  --nk2-audit             Independently audit NK2 output without changing its placement. Phrase search always audits.\n";
     out << "  --nk2-native-weight <n> Native authorship weight. Default: 0.5.\n";
     out << "  --nk2-remix-weight <n>  Remix expansion weight. Default: 0.5.\n";
@@ -1491,50 +1492,34 @@ void validateOptions(const CliOptions& options) {
         options.engine != keyconv::nk2::Engine::NK2) {
         throw std::runtime_error("NK2 search, audit, and phrase note options require --engine nk2");
     }
-    if (options.nk2PhraseSourceLnBoost &&
-        (!options.nk2PhraseSourceLn || (options.source.has_value() && *options.source != 7) ||
-         (*options.target != 8 && *options.target != 10))) {
+    if (options.nk2PhraseSourceLnBoost && !options.nk2PhraseSourceLn) {
         throw std::runtime_error(
-            "--nk2-phrase-source-ln-boost requires 7K source, target 8 or 10, --nk2-phrase-source-ln and all its prerequisite phrase options");
+            "--nk2-phrase-source-ln-boost requires --nk2-phrase-source-ln and all its prerequisite phrase options");
     }
-    const bool sevenSupportTarget = *options.target == 8 || *options.target == 10;
-    const bool sevenSearchTarget = *options.target == 4 || *options.target == 5 || sevenSupportTarget;
-    const bool fourSearchTarget = *options.target == 5 || *options.target == 7;
-    // Unknown sources are checked by the core after parsing each chart.
-    const bool phraseSupportConversion = options.source.has_value()
-        ? (*options.source == 7 && sevenSupportTarget) || (*options.source == 4 && fourSearchTarget)
-        : sevenSupportTarget || fourSearchTarget;
-    const bool phraseSearchConversion = options.source.has_value()
-        ? (*options.source == 7 && sevenSearchTarget) || (*options.source == 4 && fourSearchTarget)
-        : sevenSearchTarget || fourSearchTarget;
     if (options.nk2PhraseSourceLn &&
         (!options.nk2PhraseDenseLn || !options.nk2PhraseSupport || !options.nk2PhraseSearch ||
          options.nk2Mode != keyconv::nk2::Mode::Faithful ||
-         !phraseSupportConversion ||
          options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
         throw std::runtime_error(
-            "--nk2-phrase-source-ln requires dense-ln/support/phrase flags, faithful 7K->8K/10K or 4K->5K/7K, and --stream-transform off");
+            "--nk2-phrase-source-ln requires dense-ln/support/phrase flags, faithful mode, and --stream-transform off");
     }
     if (options.nk2PhraseDenseLn &&
         (!options.nk2PhraseSupport || !options.nk2PhraseSearch || options.nk2Mode != keyconv::nk2::Mode::Faithful ||
-         !phraseSupportConversion ||
          options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
         throw std::runtime_error(
-            "--nk2-phrase-dense-ln requires support/phrase flags, faithful 7K->8K/10K or 4K->5K/7K, and --stream-transform off");
+            "--nk2-phrase-dense-ln requires support/phrase flags, faithful mode, and --stream-transform off");
     }
     if (options.nk2PhraseSupport &&
         (!options.nk2PhraseSearch || options.nk2Mode != keyconv::nk2::Mode::Faithful ||
-         !phraseSupportConversion ||
          options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
         throw std::runtime_error(
-            "--nk2-phrase-support requires --nk2-search phrase, faithful 7K->8K/10K or 4K->5K/7K, and --stream-transform off");
+            "--nk2-phrase-support requires --nk2-search phrase, faithful mode, and --stream-transform off");
     }
     if (options.nk2PhraseSearch &&
         (options.nk2Mode != keyconv::nk2::Mode::Faithful ||
-         !phraseSearchConversion ||
          options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
         throw std::runtime_error(
-            "--nk2-search phrase requires faithful 7K->4K/5K/8K/10K or 4K->5K/7K, and --stream-transform off");
+            "--nk2-search phrase requires faithful mode and --stream-transform off");
     }
     if (options.tenKFullFieldRemix && *options.target != 10) {
         throw std::runtime_error("--ten-k-fullfield-remix requires --target 10");

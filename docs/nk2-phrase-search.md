@@ -15,7 +15,9 @@ GUI 기본은 `Auto (7K presets)`이며 CLI에 `--nk2-mode auto`를 전달한다
 GUI의 수동 선택지는 `A - Legacy faithful`, `B - Phrase only`,
 `C - Phrase + taps`, `D - Dense taps + LN`, `E - Source LN`, `F - Source LN+`다.
 A는 기존 faithful 경로이며 `native`, `harder`, `transform`도 별도로 유지한다.
-모드 설명에는 지원하는 source/target 조합이 표시된다.
+A–F 모두 **1K–18K의 모든 원본/목표 조합에서 상향·하향 변환**을 지원한다.
+같은 키 수의 A–F는 기존처럼 no-op이며, 같은 키 재배치는 `transform`을 사용한다.
+BMS 계열 출력은 기존에 지원하는 키 레이아웃만 허용한다.
 
 ## 사용
 
@@ -31,20 +33,20 @@ A는 기존 faithful 경로이며 `native`, `harder`, `transform`도 별도로 �
 .\build\KeyWeaver.exe input7k.osu --target 4 --engine nk2 --nk2-mode faithful --nk2-search phrase --out phrase4.osu --report phrase4.json
 ```
 
-수동 phrase는 **7K→4K/5K/8K/10K 또는 4K→5K/7K, faithful, stream off**를 지원한다.
-다른 조합은 오류로 거부한다. source는 자동 감지하거나 `--source 7`/`--source 4`로
-지정할 수 있다. GUI에서 B를 직접 고르려면 `B - Phrase only`를 선택한다.
+수동 phrase는 **1K–18K의 모든 원본/목표 조합, faithful, stream off**를 지원한다.
+source는 자동 감지하거나 `--source 1`부터 `--source 18`까지 지정할 수 있다. GUI에서 B를 직접 고르려면 `B - Phrase only`를 선택한다.
 수동 탐색판에는 `-phrase`가 붙는다. GUI auto의 파일명은 `NK2-auto`로 구분하며
 차트 내부 난이도 표시는 실제로 선택된 B/E 옵션을 따른다. 혼합 키 배치의 auto는
-파일마다 적용 여부를 결정하고, 수동 phrase 배치에는 해당 source 필터를 권장한다.
+파일마다 적용 여부를 결정한다. 수동 phrase도 source를 자동 감지하는 혼합 키 배치를
+지원하며, 특정 원본 키만 변환하려면 source 필터를 지정한다.
 
-## 8K/10K 탐색 결과에 노트 추가하기
+## C: 상향·하향 탐색 결과에 탭 추가하기
 
 ```powershell
 .\build\KeyWeaver.exe input7k.osu --target 10 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --out phrase-notes10.osu --report phrase-notes10.json
 ```
 
-`--nk2-phrase-support`는 **faithful 7K→8K/10K 또는 4K→5K/7K phrase, stream off**에서 동작한다.
+`--nk2-phrase-support`는 **1K–18K 상향·하향 phrase, faithful, stream off**에서 동작한다.
 GUI의 `C - Phrase + taps`에 해당하며 자동 채택 E에도 포함된다. 출력에는
 `-phrase-notes` 표시가 붙는다. 기존 B의 원본 노트 레인·시각·종류·LN 길이를
 확정한 뒤 보조 탭만 추가하므로, 이 옵션을 꺼도 B 결과는 변하지 않는다.
@@ -132,7 +134,8 @@ D에서 추가된 노트의 위치·길이·개수를 보존하는 모드는 아
 GUI에서는 `F - Source LN+`를 선택한다. F는 **E를 먼저 그대로
 완성한 뒤 LN만 더한다**. E의 탭을 LN으로 바꾸거나 노트를 이동·삭제하지 않는다.
 따라서 10K D/E는 기존 결과를 유지하고, F에서도 모든 E 노트를 그대로 비교할 수 있다.
-파일명은 E 접미사 뒤에 `-boost`를 붙인다. 8K도 같은 옵션으로 사용할 수 있다.
+파일명은 E 접미사 뒤에 `-boost`를 붙인다. 모든 1K–18K 상향·하향 조합에서
+같은 옵션으로 사용할 수 있다.
 
 - 전체 생성 노트(C/E 포함) 상한을 원본 수의 50% 올림, 생성 LN 상한을 22% 올림으로
   높인다. 2000ms 구간에서는 유지된 원본 수의 50% 올림을 1~14개로 제한하며,
@@ -145,12 +148,21 @@ GUI에서는 `F - Source LN+`를 선택한다. F는 **E를 먼저 그대로
   `support.sourceLnBoostHoldAccepted`는 E 대비 더한 LN 개수다.
   `placement.addedHoldNotes`와 `support.denseHoldAccepted`는 E를 포함한 총 생성 LN이다.
 
-7K→5K는 감소 변환이므로 C/D/E/F 추가 옵션을 지원하지 않는다. `B - Phrase only`
-(B)로 원본 시각·남겨진 LN 길이를 보존하며, 배치 불가능한 원본 노트는 제외하고
-보고한다. 기존 A와 B를 비교해 제외량과 패턴을 확인한다. 7K→8K는 증가 변환이므로
-B/C/D/E/F를 지원한다. 자동 기본 채택과 별개로 각 비교판을 명시적으로 선택할 수 있다.
+하향 변환에서도 C/D/E/F를 선택할 수 있다. 먼저 B가 원본 시각·남겨진 LN 길이를
+보존하며 배치 불가능한 원본 노트를 제외하고 보고한다. 그 결과에 C의 탭, D/E의
+탭/LN, F의 LN을 안전한 공간에만 추가한다. 자리를 만들려고 B/C/E를 이동하거나
+삭제하지 않으며, 500ms 간격·LN 전체 구간 검사와 기존 예산을 그대로 적용한다.
+따라서 목표 키 수가 적거나 밀도가 높으면 추가 노트가 0개일 수 있다.
+`independentSafety.droppedSourceNotes`와 `independentSafety.addedNotes`를 별도로 보고 추가량과 원본 손실을 비교한다.
 
-## 4K→5K/7K 수동 실험
+```powershell
+# 5K → 12K E 상향
+.\build\KeyWeaver.exe input5k.osu --target 12 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln --out five-e12.osu
+# 8K → 6K F 하향
+.\build\KeyWeaver.exe input8k.osu --target 6 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln --nk2-phrase-source-ln-boost --out eight-f6.osu
+```
+
+## 기존 4K→5K/7K 비교와 호환
 
 4K 입력에는 자동 B/E 채택을 적용하지 않는다. CLI의 암묵적 기본은 native,
 GUI/CLI `auto`는 faithful로 남는다. 다음처럼 B 또는 E를 직접 선택한다.
@@ -160,9 +172,10 @@ GUI/CLI `auto`는 faithful로 남는다. 다음처럼 B 또는 E를 직접 선�
 .\build\KeyWeaver.exe input4k.osu --target 7 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln --out four-e7.osu
 ```
 
-B는 기존 4K→5K fill 예외를 끄므로 탭/LN을 추가하지 않는다. C/D/E도 수동 지원하며
-E는 C를 보존하고 생성 LN 전체가 원본 LN 하나에 포함되어야 한다. 원본 LN 또는
-안전한 공간이 없으면 생성 LN 0개도 정상 결과다. F는 7K→8K/10K 전용이다.
+B는 기존 4K→5K fill 예외를 끄므로 탭/LN을 추가하지 않는다. C/D/E/F도 수동 지원하며
+E는 C를 보존하고 생성 LN 전체가 원본 LN 하나에 포함되어야 한다. F는 E를 보존한다.
+원본 LN 또는 안전한 공간이 없으면 생성 LN 0개도 정상 결과다. 기존 B/E 비교 OSZ
+묶음의 구성은 유지하며, CLI/GUI의 일반 변환 지원 범위와는 별개다.
 
 ## 탐색 방식과 한계
 
@@ -178,7 +191,7 @@ E는 C를 보존하고 생성 LN 전체가 원본 LN 하나에 포함되어야 �
   점유 상태를 이어간다. 과거 모든 노트를 후보마다 복사하지 않는다.
 - 원본 시각과 살아남은 LN 길이를 바꾸지 않는다. 탐색 단계 자체는 탭/LN 추가,
   LN의 탭 변환, 고정 ms roll을 하지 않는다. 압축이 불가능하면 일부 원본 노트를 제외한다.
-  허용된 증가 변환에서 C/D/E/F를 선택하면 탐색 후 C의 탭, D/E의 탭/LN,
+  상향·하향 변환에서 C/D/E/F를 선택하면 탐색 후 C의 탭, D/E의 탭/LN,
   F의 추가 LN을 만든다. 7K→8K/10K의 자동 E에는 이 단계가 포함된다.
 - 레인별 마지막 노트와 500ms 이내에 다른 원본 레인의 노트를 이어 붙이지
   않는다. 원본에 존재하는 같은 레인 반복은 허용한다. LN 꼬리 시각도 점유로 본다.

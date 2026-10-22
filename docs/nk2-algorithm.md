@@ -44,8 +44,8 @@ selection, including `--nk2-mode faithful --nk2-search off`.
 
 The faithful phrase solver and separate output auditor are described in
 [`nk2-phrase-search.md`](nk2-phrase-search.md). Phrase search supports
-7K-to-4K/5K/8K/10K and manual 4K-to-5K/7K experiments without lower-key roll
-rescue. `--nk2-phrase-support` enables C for 7K-to-8K/10K or 4K-to-5K/7K;
+all 1K..18K source/target pairs, upward or downward, without lower-key roll
+rescue. `--nk2-phrase-support` enables C for all non-same pairs;
 automatic E includes this stage. The post-placement overlay preserves the B
 source placements, adds only taps, and applies a
 500ms guard without the legacy same-source exception. Its global budget is
@@ -76,10 +76,9 @@ requires zero when `sourceLnCoverageRequired` is true (E/F). Explicit B/C/D
 placements remain unchanged. Source material or lack of safe room can still
 limit diversity or result in zero generated LNs.
 
-`--nk2-phrase-source-ln-boost` requires the complete E option chain, is limited
-to 7K-to-8K/10K, and enables
-F. It first completes E unchanged, then reuses the same covered-LN candidate
-selection with higher budgets and no additional tap pass. All E notes survive
+`--nk2-phrase-source-ln-boost` requires the complete E option chain and enables
+F for upward and downward 1K..18K pairs. It first completes E unchanged, then
+reuses the same covered-LN candidate selection with higher budgets and no additional tap pass. All E notes survive
 with identical fields. The total generated-note budget (including C/E) is
 ceil(source notes * 0.50), and the generated-LN budget is ceil(source notes *
 0.22). Per 2000ms window, the total budget is ceil(retained source notes * 0.50)
@@ -91,10 +90,14 @@ head separation, and whole-interval collision checks remain unchanged.
 `support.sourceLnBoostHoldAccepted` counts only new F LNs beyond E;
 `placement.addedHoldNotes` and `support.denseHoldAccepted` include E's LNs.
 
-Phrase compression uses omission without retiming or generated notes. Manual
-4K-to-5K/7K supports B/C/D/E, but not F, and is never automatically adopted.
-B disables the legacy 4K-to-5K fill exception, so it adds no notes. C/D/E use
-their ordinary phrase budgets and 500ms support guard for these experiments.
+All manual A-F presets support upward and downward 1K..18K pairs. Phrase B
+compression uses omission without retiming or generated notes. C-F may append
+safe support notes after compression without moving or deleting their immutable
+B/C/E base to make room. Existing budgets, the 500ms guard, and whole-LN safety
+checks apply in both directions; no accepted candidates means zero additions.
+Dropped originals and additions remain separate report counts. B disables the
+legacy 4K-to-5K fill exception. Same-key A-F remains a no-op, while explicit
+transform mode retains same-key relaning. Automatic adoption is unchanged.
 Explicit legacy 4K-to-5K behavior remains available.
 
 Current source files:
@@ -130,8 +133,8 @@ Current supported behavior:
 - Outside phrase search, 4K -> 5K is a special generic branch that can add
   fill/support notes even in faithful mode.
 - Support-note generation runs for higher-key 1K..18K NK2 pairs in native and
-  harder modes; legacy 4K -> 5K also enables it in faithful mode. Phrase C/D/E
-  supports 7K -> 8K/10K and manual 4K -> 5K/7K.
+  harder modes; legacy 4K -> 5K also enables it in faithful mode. Phrase C-F
+  supports upward and downward conversion for all non-same 1K..18K pairs.
 - Support notes are tap-only except in the D/E/F layers; automatic 7K -> 8K/10K
   selects E.
 
@@ -203,8 +206,8 @@ Modes (`auto` is a front-end policy, not a core enum value):
   notes where enabled.
 - `faithful`: preservation-heavy mode. For normal NK2 paths it disables support
   notes; legacy 4K -> 5K fills the added lane. Phrase B has no additions,
-  including manual 4K -> 5K. Phrase C/D/E overlays preserve B placements before
-  adding notes for their supported expansion pairs.
+  including manual 4K -> 5K. Phrase C-F overlays preserve B placements before
+  adding safe notes for upward and downward pairs.
 - `harder`: allows a higher support-note budget.
 - `transform`: reserved for same-key transform behavior.
 - `report`: analysis-only; no chart mutation.
@@ -842,19 +845,20 @@ candidate ranking model, and strict lane acceptance.
 For higher-key generic conversions, native and harder modes can add the same
 tap-only LN, strong-beat, and mirror support events used by the 7K -> 10K path.
 Legacy faithful mode remains source-count-preserving except for the 4K -> 5K
-fill exception. Phrase B disables that exception, while C/D/E explicitly add
+fill exception. Phrase B disables that exception, while C-F explicitly add
 their separately budgeted layers.
 
-For lower-key conversions, dropped notes represent objects that could
+For legacy lower-key conversions, dropped notes represent objects that could
 not be placed or safely rolled without collision, LN conflict, or created-jack
-damage.
+damage. Phrase B drops unsafe originals without roll rescue; phrase C-F may
+append safe support notes afterward, and report these additions separately.
 
 ## 4K -> 5K Fill Exception
 
 Legacy 4K -> 5K is the first generic fill branch. It intentionally adds safe support
 notes even in faithful mode because the purpose of this branch is to occupy the
 new fifth lane without damaging the source chart. Phrase B does not use this
-branch, and manual phrase C/D/E use the general phrase budgets and 500ms guard
+branch, and manual phrase C-F use the general phrase budgets and 500ms guard
 instead of these special fill constants.
 
 Special constants:
@@ -884,10 +888,12 @@ Support generation currently runs when:
 ```text
 higher-key 1K..18K native/harder NK2 conversion
 or legacy 4K -> 5K faithful/native/harder NK2 conversion
-or faithful phrase C/D/E: 7K -> 8K/10K or manual 4K -> 5K/7K
+or faithful phrase C-F: any non-same 1K..18K source/target pair
 ```
 
-Lower-key and same-key NK2 conversions do not add support notes.
+Legacy lower-key and all same-key no-op conversions do not add support notes.
+Phrase C-F permits safe additions after compression without changing its base
+placements; no free safe lane means no addition.
 
 ### Support Event Types
 
@@ -1084,7 +1090,7 @@ same-lane notes inside the support jack window are counted as:
 - `createdJacks` when source lanes differ
 
 The support jack window is usually `500 ms`, but legacy 4K -> 5K uses `240 ms`.
-Manual 4K -> 5K/7K phrase support retains the strict `500 ms` guard.
+All upward and downward phrase support retains the strict `500 ms` guard.
 
 ## Layout Scores
 
@@ -1211,10 +1217,9 @@ but should be visible:
 
 - native/remix weights differ from the default 50/50 design target
 - unsupported key-count pair was requested outside report mode
-- generic higher-key conversion requested support generation that is not yet
-  enabled for that pair
-- faithful mode kept source note count because support notes were disabled
-- 7K -> 10K support generation found no accepted safe candidates
+- support generation is disabled by the selected mode or super-symmetry
+- faithful mode disables support notes, but unsafe originals may still be dropped
+- support generation found no accepted safe candidates
 - created target jacks remain in the output
 - same-time collisions or LN conflicts remain in the output
 
@@ -1293,7 +1298,9 @@ Stream modes: off / super-symmetry for NK2
 The GUI shells out to the CLI and reads the report, so NK2 GUI behavior should
 stay consistent with the CLI options above. Its default `auto` choice forwards
 `--nk2-mode auto`, including faithful fallback for non-7K inputs. Existing manual
-B/C/D/E/F choices and filenames remain available.
+B/C/D/E/F choices and filenames remain available. The Source selector offers
+`auto` and 1K..18K; Target offers 1K..18K. Manual A-F applies across that range,
+with unchanged same-key no-op behavior and BMS output-layout restrictions.
 
 ## Tests And Acceptance
 
@@ -1340,9 +1347,10 @@ lower-key tap overflow reports rolled-note rescue
 support accepted counters match added notes
 base support notes are tap-only; dense LN tests verify whole-interval safety
 source LN tests verify source coverage, unchanged C, duration/lane diversity and determinism
-source LN boost tests verify unchanged E, LN-only additions, coverage and expanded budgets at 8K/10K
-5K phrase compression tests verify omitted notes are counted, with no additions or retiming
-manual 4K-to-5K/7K tests verify B adds nothing, E preserves C and source coverage, and F is rejected
+source LN boost tests verify unchanged E, LN-only additions, coverage and expanded budgets
+phrase B compression tests verify omitted notes are counted, with no additions or retiming
+all-key phrase tests verify B/C/D/E/F support, base preservation and independent safety
+manual 4K-to-5K/7K tests verify B adds nothing and E/F preserve their bases and source coverage
 CLI adoption tests compare implicit/auto output bytes to explicit B/E and verify mixed-source batch fallback
 ```
 
@@ -1440,11 +1448,11 @@ design document. Known gaps:
 - Intent graph is still a summary, not a full object graph.
 - There is no full-song multi-candidate solver or beam search.
 - Phrase search is limited to two-beat chunks (48 notes, 24 states), faithful
-  7K-to-4K/5K/8K/10K or manual 4K-to-5K/7K, and has no full-song optimality guarantee.
+  mode with stream transforms off, and has no full-song optimality guarantee.
 - Profile-guided phrase scoring is report-only.
-- Generated LNs are limited to D/E for 7K -> 8K/10K and manual 4K -> 5K/7K,
-  plus F for 7K -> 8K/10K. Automatic 7K expansion selects E; manual playtesting
-  is still required to judge the generated patterns.
+- Generated LNs are limited to D/E/F for non-same 1K..18K pairs. Automatic
+  7K -> 8K/10K selects E; manual playtesting is still required to judge the
+  generated patterns. Compression can leave no safe room for additions.
 - Legacy lower-key conversion uses strict relaning and safe short-roll rescue, but still
   lacks phrase-aware merge ranking across full phrases for impossible overflow.
 - Strong-beat detection is intentionally simple.
@@ -1457,7 +1465,7 @@ Natural next steps:
 - Replace summary-only intent with a reusable `IntentGraph` object.
 - Add a candidate solver that can compare multiple local placements before
   committing.
-- Make support generation available for more higher-key pairs.
+- Tune support distribution across key-count pairs using real-chart comparisons.
 - Broaden generated-LN policies only after comparing the bounded dense overlay in play.
 - Use profile-guided phrase scores to choose among candidate variants.
 - Add stronger lower-key merge ranking before dropping source notes.

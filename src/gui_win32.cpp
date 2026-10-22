@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -473,7 +474,7 @@ void drawLogo(HDC dc, const AppState& state) {
     RECT version{96, 60, kSidebarWidth - 18, 80};
     RECT ready{96, 82, kSidebarWidth - 18, 104};
     drawUiText(dc, state.titleFont, RGB(246, 250, 250), L"KeyWeaver", title);
-    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.3.0", version);
+    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.3.1", version);
     drawUiText(dc, state.smallFont, RGB(116, 232, 172), L"Ready", ready);
 }
 
@@ -482,7 +483,7 @@ void drawLanePreview(HDC dc, const AppState& state) {
     if (state.targetEdit != nullptr) {
         try {
             const int selected = std::stoi(getWindowText(state.targetEdit));
-            if (selected >= 4 && selected <= 18) {
+            if (selected >= 1 && selected <= 18) {
                 targetKeyCount = selected;
             }
         } catch (const std::exception&) {
@@ -586,7 +587,7 @@ void paintUiChrome(AppState& state, HDC dc) {
     roundRect(dc, header, RGB(23, 34, 45), RGB(23, 34, 45), 8);
     fillRect(dc, RECT{header.left, header.bottom - 4, header.right, header.bottom}, kColorAccent);
     drawUiText(dc, state.titleFont, RGB(247, 250, 252), L"KeyWeaver", RECT{56, 38, 260, 66});
-    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.3.0 conversion console",
+    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.3.1 conversion console",
                RECT{56, 66, 320, 88});
     drawUiText(dc, state.smallFont, RGB(207, 219, 229), L"Classic / NK2  |  Single / Batch  |  Reports",
                RECT{1020, 52, 1386, 76}, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
@@ -1526,7 +1527,7 @@ std::optional<int> parseGuiTargetKeyCount(const std::wstring& value) {
     }
     wchar_t* end = nullptr;
     const long parsed = std::wcstol(text.c_str(), &end, 10);
-    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 4 || parsed > 18) {
+    if (end == text.c_str() || (end != nullptr && *end != L'\0') || parsed < 1 || parsed > 18) {
         return -1;
     }
     return static_cast<int>(parsed);
@@ -1765,10 +1766,11 @@ void updateAlgorithmControlState(AppState& state) {
         const wchar_t* hint = L"Engine, target key count, and conversion policy";
         if (nk2) {
             if (mode == kNk2AutoModeLabel) hint = L"7K: 4/5K B, 8/10K E; others: faithful";
-            else if (mode == kNk2PhraseModeLabel) hint = L"B: 7K to 4/5/8/10K; 4K to 5/7K";
-            else if (mode == kNk2NotesModeLabel || mode == kNk2DenseLnModeLabel ||
-                     mode == kNk2SourceLnModeLabel) hint = L"C/D/E: 7K to 8/10K; 4K to 5/7K";
-            else if (mode == kNk2BoostModeLabel) hint = L"F: 7K to 8/10K; extra source-covered LNs";
+            else if (mode == kNk2PhraseModeLabel) hint = L"B: any 1-18K pair; source notes only";
+            else if (mode == kNk2NotesModeLabel || mode == kNk2DenseLnModeLabel)
+                hint = L"C/D: any 1-18K pair; add notes where safe";
+            else if (mode == kNk2SourceLnModeLabel || mode == kNk2BoostModeLabel)
+                hint = L"E/F: any 1-18K pair; LNs inside source spans";
             else hint = L"Legacy NK2 mode; automatic B/E selection is off";
         }
         setWindowText(state.recipeHintLabel, hint);
@@ -1907,7 +1909,7 @@ bool validateToolOptions(const ToolOptions& options, HWND owner, bool batchMode 
     }
     const auto targetKeyCount = parseGuiTargetKeyCount(options.targetKeys);
     if (targetKeyCount.has_value() && *targetKeyCount < 0) {
-        MessageBoxW(owner, L"GUI Target must be a key count from 4 to 18.", L"KeyWeaver GUI", MB_ICONERROR);
+        MessageBoxW(owner, L"GUI Target must be a key count from 1 to 18.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     const auto sourceOverride = parseSourceOverrideKeyCount(options.sourceOverride);
@@ -1922,23 +1924,10 @@ bool validateToolOptions(const ToolOptions& options, HWND owner, bool batchMode 
     if (nk2PhraseSearchActive(options)) {
         auto sourceKeys = sourceOverride;
         if (!batchMode && !sourceKeys.has_value()) sourceKeys = detectCircleSize(options.inputFile);
-        const int targetKeys = targetKeyCount.value_or(0);
-        const bool sevenSupport = targetKeys == 8 || targetKeys == 10;
-        const bool sevenSearch = targetKeys == 4 || targetKeys == 5 || sevenSupport;
-        const bool fourSearch = targetKeys == 5 || targetKeys == 7;
-        const bool allowed = sourceKeys.has_value()
-            ? (*sourceKeys == 7 && (nk2PhraseSupportActive(options) ? sevenSupport : sevenSearch)) ||
-              (*sourceKeys == 4 && fourSearch)
-            : (nk2PhraseSupportActive(options) ? sevenSupport : sevenSearch) || fourSearch;
-        if (!allowed || options.streamTransform != L"off") {
+        if ((sourceKeys.has_value() && (*sourceKeys < 1 || *sourceKeys > 18)) ||
+            options.streamTransform != L"off") {
             MessageBoxW(owner,
-                        L"NK2 phrase requires 7K to 4/5/8/10K (note additions: 8/10K), or 4K to 5/7K, with Stream off.",
-                        L"KeyWeaver GUI", MB_ICONERROR);
-            return false;
-        }
-        if (nk2PhraseSourceLnBoostActive(options) &&
-            (!sevenSupport || (sourceKeys.has_value() && *sourceKeys != 7))) {
-            MessageBoxW(owner, L"Source LN+ requires 7K to 8/10K.",
+                        L"NK2 presets B-F require source/target 1K to 18K, with Stream off.",
                         L"KeyWeaver GUI", MB_ICONERROR);
             return false;
         }
@@ -2725,7 +2714,7 @@ void createUi(AppState& state) {
     makeControl(state, L"STATIC", L"Target", 0, 1014, 178, 80, 22, -1);
     state.targetEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
                                    1014, 202, 88, 180, kEditTarget);
-    for (int keyCount = 4; keyCount <= 18; ++keyCount) {
+    for (int keyCount = 1; keyCount <= 18; ++keyCount) {
         const auto item = std::to_wstring(keyCount);
         addComboItem(state.targetEdit, item.c_str());
     }
@@ -3060,10 +3049,12 @@ int runGui(const std::vector<std::filesystem::path>& initialInputs = {}) {
 int runSmoke(const std::filesystem::path& input, const std::filesystem::path& outputDir) {
     if (parseSourceOverrideKeyCount(L"18") != std::optional<int>{18} ||
         parseSourceOverrideKeyCount(L"19") != std::optional<int>{-1} ||
+        parseGuiTargetKeyCount(L"0") != std::optional<int>{-1} ||
+        parseGuiTargetKeyCount(L"1") != std::optional<int>{1} ||
         parseGuiTargetKeyCount(L"4") != std::optional<int>{4} ||
         parseGuiTargetKeyCount(L"18") != std::optional<int>{18} ||
         parseGuiTargetKeyCount(L"19") != std::optional<int>{-1}) {
-        std::cerr << "GUI smoke expected Source 1..18 and Target 4..18 validation\n";
+        std::cerr << "GUI smoke expected Source and Target 1..18 validation\n";
         return 1;
     }
 
@@ -3209,7 +3200,7 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         return 1;
     }
 
-    // Command-only check: the generic GUI smoke input need not be a 7K chart.
+    // Explicit preset flags must remain identical for single and fast batch.
     ToolOptions phraseOptions = nk2Options;
     phraseOptions.nk2Mode = kNk2PhraseModeLabel;
     phraseOptions.sourceOverride = L"7";
@@ -3313,7 +3304,7 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         return 1;
     }
 
-    for (const auto* target : {L"8", L"10"}) {
+    for (const auto* target : {L"1", L"3", L"8", L"10", L"18"}) {
         ToolOptions phraseSourceLnBoostOptions = phraseOptions;
         phraseSourceLnBoostOptions.nk2Mode = kNk2BoostModeLabel;
         phraseSourceLnBoostOptions.targetKeys = target;
@@ -3329,7 +3320,7 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
                 command->find(L"--nk2-phrase-dense-ln") == std::wstring::npos ||
                 command->find(L"--nk2-phrase-source-ln ") == std::wstring::npos ||
                 command->find(L"--nk2-phrase-source-ln-boost") == std::wstring::npos) {
-                std::cerr << "GUI smoke expected Source LN+ prerequisites for 8K/10K\n";
+                std::cerr << "GUI smoke expected Source LN+ prerequisites for any target\n";
                 return 1;
             }
         }
@@ -3357,6 +3348,34 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         phraseFiveCommand.find(L"--nk2-phrase-support") != std::wstring::npos) {
         std::cerr << "GUI smoke expected phrase-only 5K command\n";
         return 1;
+    }
+
+    // Exercise actual GUI-built preset commands at both ends of the supported
+    // range. The input's detected source count may expand or compress here.
+    for (const auto* preset : {kNk2PhraseModeLabel, kNk2NotesModeLabel, kNk2DenseLnModeLabel,
+                               kNk2SourceLnModeLabel, kNk2BoostModeLabel}) {
+        for (const auto* target : {L"1", L"18"}) {
+            ToolOptions anyPairOptions = nk2Options;
+            anyPairOptions.nk2Mode = preset;
+            anyPairOptions.targetKeys = target;
+            anyPairOptions.sourceOverride.clear();
+            anyPairOptions.streamTransform = L"off";
+            OutputPaths anyPairPaths;
+            const auto anyPairCommand = buildSingleCommand(anyPairOptions, anyPairPaths);
+            const auto anyPair = runProcess(anyPairCommand, anyPairOptions.keyconvExe.parent_path());
+            if (anyPair.exitCode != 0 || !std::filesystem::exists(anyPairPaths.outputChart)) {
+                std::cerr << "GUI smoke preset boundary conversion failed\n" << anyPair.output;
+                return 1;
+            }
+            std::ifstream reportStream(anyPairPaths.reportJson);
+            const std::string reportText((std::istreambuf_iterator<char>(reportStream)),
+                                         std::istreambuf_iterator<char>());
+            if (findJsonBool(reportText, "passed") != std::optional<bool>{true} ||
+                findJsonBool(reportText, "enabled") != std::optional<bool>{true}) {
+                std::cerr << "GUI smoke expected an independently audited phrase preset\n";
+                return 1;
+            }
+        }
     }
 
     ToolOptions nk2BatchOptions = nk2Options;

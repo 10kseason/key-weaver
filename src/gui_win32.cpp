@@ -58,6 +58,13 @@ constexpr int kComboNk2Mode = 124;
 constexpr int kComboModel = 125;
 
 constexpr const wchar_t* kModelOffLabel = L"off";
+constexpr const wchar_t* kNk2AutoModeLabel = L"Auto (7K presets)";
+constexpr const wchar_t* kNk2LegacyModeLabel = L"A - Legacy faithful";
+constexpr const wchar_t* kNk2PhraseModeLabel = L"B - Phrase only";
+constexpr const wchar_t* kNk2NotesModeLabel = L"C - Phrase + taps";
+constexpr const wchar_t* kNk2DenseLnModeLabel = L"D - Dense taps + LN";
+constexpr const wchar_t* kNk2SourceLnModeLabel = L"E - Source LN";
+constexpr const wchar_t* kNk2BoostModeLabel = L"F - Source LN+";
 constexpr const wchar_t* kTransformerUeCircusGalopModelLabel =
     L"Transformer model (u_e X CircusGalop Chart dataset model)";
 constexpr const wchar_t* kTransformerUeCircusGalopModelPath =
@@ -90,7 +97,7 @@ struct ToolOptions {
     std::wstring sourceOverride;
     std::wstring targetKeys = L"10";
     std::wstring algorithm = L"NK1 (Classic)";
-    std::wstring nk2Mode = L"faithful";
+    std::wstring nk2Mode = kNk2AutoModeLabel;
     std::wstring modelPreset = kModelOffLabel;
     std::wstring expansionPolicy = L"auto (normal)";
     std::wstring compressPolicy = L"auto";
@@ -132,6 +139,7 @@ struct AppState {
     HWND targetEdit = nullptr;
     HWND algorithmCombo = nullptr;
     HWND nk2ModeCombo = nullptr;
+    HWND recipeHintLabel = nullptr;
     HWND modelCombo = nullptr;
     HWND expansionCombo = nullptr;
     HWND compressCombo = nullptr;
@@ -465,7 +473,7 @@ void drawLogo(HDC dc, const AppState& state) {
     RECT version{96, 60, kSidebarWidth - 18, 80};
     RECT ready{96, 82, kSidebarWidth - 18, 104};
     drawUiText(dc, state.titleFont, RGB(246, 250, 250), L"KeyWeaver", title);
-    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.2.0", version);
+    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.3.0", version);
     drawUiText(dc, state.smallFont, RGB(116, 232, 172), L"Ready", ready);
 }
 
@@ -578,7 +586,7 @@ void paintUiChrome(AppState& state, HDC dc) {
     roundRect(dc, header, RGB(23, 34, 45), RGB(23, 34, 45), 8);
     fillRect(dc, RECT{header.left, header.bottom - 4, header.right, header.bottom}, kColorAccent);
     drawUiText(dc, state.titleFont, RGB(247, 250, 252), L"KeyWeaver", RECT{56, 38, 260, 66});
-    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.2.0 conversion console",
+    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.3.0 conversion console",
                RECT{56, 66, 320, 88});
     drawUiText(dc, state.smallFont, RGB(207, 219, 229), L"Classic / NK2  |  Single / Batch  |  Reports",
                RECT{1020, 52, 1386, 76}, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
@@ -594,8 +602,6 @@ void paintUiChrome(AppState& state, HDC dc) {
                RECT{54, 152, 430, 174});
 
     drawUiText(dc, state.sectionFont, kColorText, L"Recipe", RECT{714, 130, 900, 154});
-    drawUiText(dc, state.smallFont, kColorMutedText, L"Engine, target key count, and conversion policy",
-               RECT{714, 152, 1100, 174});
 
     drawUiText(dc, state.sectionFont, kColorText, L"Run", RECT{1170, 130, 1320, 154});
     drawUiText(dc, state.smallFont, kColorMutedText, L"Execute, open outputs, or copy CLI",
@@ -824,6 +830,30 @@ bool nk2EngineActive(const ToolOptions& options) {
     return options.algorithm == L"NK2 (Experimental)";
 }
 
+bool nk2PhraseSourceLnBoostActive(const ToolOptions& options) {
+    return nk2EngineActive(options) && options.nk2Mode == kNk2BoostModeLabel;
+}
+
+bool nk2PhraseSourceLnActive(const ToolOptions& options) {
+    return nk2EngineActive(options) &&
+           (options.nk2Mode == kNk2SourceLnModeLabel || nk2PhraseSourceLnBoostActive(options));
+}
+
+bool nk2PhraseDenseLnActive(const ToolOptions& options) {
+    return nk2EngineActive(options) &&
+           (options.nk2Mode == kNk2DenseLnModeLabel || nk2PhraseSourceLnActive(options));
+}
+
+bool nk2PhraseSupportActive(const ToolOptions& options) {
+    return nk2EngineActive(options) &&
+           (options.nk2Mode == kNk2NotesModeLabel || nk2PhraseDenseLnActive(options));
+}
+
+bool nk2PhraseSearchActive(const ToolOptions& options) {
+    return nk2EngineActive(options) &&
+           (options.nk2Mode == kNk2PhraseModeLabel || nk2PhraseSupportActive(options));
+}
+
 bool transformerModelPresetActive(const ToolOptions& options) {
     return options.modelPreset == kTransformerUeCircusGalopModelLabel;
 }
@@ -837,6 +867,9 @@ std::wstring normalizedSourceOverride(const std::wstring& value) {
 }
 
 std::wstring nk2ModeCliValue(const std::wstring& value) {
+    if (value == kNk2AutoModeLabel) {
+        return L"auto";
+    }
     if (value == L"native") {
         return L"native";
     }
@@ -851,7 +884,12 @@ std::wstring nk2ModeCliValue(const std::wstring& value) {
 
 std::wstring expansionDifficultyTag(const ToolOptions& options) {
     if (nk2EngineActive(options)) {
-        return L"NK2-" + nk2ModeCliValue(options.nk2Mode);
+        return L"NK2-" + nk2ModeCliValue(options.nk2Mode) +
+               (nk2PhraseSearchActive(options) ? L"-phrase" : L"") +
+               (nk2PhraseSupportActive(options) ? L"-notes" : L"") +
+               (nk2PhraseDenseLnActive(options) ? L"-dense-ln" : L"") +
+               (nk2PhraseSourceLnActive(options) ? L"-source-ln" : L"") +
+               (nk2PhraseSourceLnBoostActive(options) ? L"-boost" : L"");
     }
     if (options.preserveConvert) {
         return {};
@@ -987,6 +1025,22 @@ std::wstring buildSingleCommand(ToolOptions options,
         appendArg(command, L"nk2");
         appendArg(command, L"--nk2-mode");
         appendArg(command, nk2ModeCliValue(options.nk2Mode));
+        if (nk2PhraseSearchActive(options)) {
+            appendArg(command, L"--nk2-search phrase");
+            appendArg(command, L"--nk2-audit");
+        }
+        if (nk2PhraseSupportActive(options)) {
+            appendArg(command, L"--nk2-phrase-support");
+        }
+        if (nk2PhraseDenseLnActive(options)) {
+            appendArg(command, L"--nk2-phrase-dense-ln");
+        }
+        if (nk2PhraseSourceLnActive(options)) {
+            appendArg(command, L"--nk2-phrase-source-ln");
+        }
+        if (nk2PhraseSourceLnBoostActive(options)) {
+            appendArg(command, L"--nk2-phrase-source-ln-boost");
+        }
         if (options.streamTransform != L"off") {
             appendArg(command, L"--stream-transform");
             appendArg(command, options.streamTransform);
@@ -1075,6 +1129,22 @@ std::wstring buildBatchCommand(const ToolOptions& options,
         appendArg(command, L"nk2");
         appendArg(command, L"--nk2-mode");
         appendArg(command, nk2ModeCliValue(options.nk2Mode));
+        if (nk2PhraseSearchActive(options)) {
+            appendArg(command, L"--nk2-search phrase");
+            appendArg(command, L"--nk2-audit");
+        }
+        if (nk2PhraseSupportActive(options)) {
+            appendArg(command, L"--nk2-phrase-support");
+        }
+        if (nk2PhraseDenseLnActive(options)) {
+            appendArg(command, L"--nk2-phrase-dense-ln");
+        }
+        if (nk2PhraseSourceLnActive(options)) {
+            appendArg(command, L"--nk2-phrase-source-ln");
+        }
+        if (nk2PhraseSourceLnBoostActive(options)) {
+            appendArg(command, L"--nk2-phrase-source-ln-boost");
+        }
         if (options.streamTransform != L"off") {
             appendArg(command, L"--stream-transform");
             appendArg(command, options.streamTransform);
@@ -1312,17 +1382,11 @@ std::optional<double> findJsonNumberFallback(std::string_view text,
     return findJsonNumber(text, fallback);
 }
 
-ReportSummary parseReportSummary(const std::filesystem::path& reportPath) {
-    std::ifstream in(reportPath, std::ios::binary);
-    if (!in) {
-        return {};
-    }
-    std::ostringstream buffer;
-    buffer << in.rdbuf();
-    const std::string text = buffer.str();
-
+ReportSummary parseReportSummaryText(std::string_view text) {
     ReportSummary summary;
-    summary.totalNotes = static_cast<int>(findJsonNumber(text, "totalNotes").value_or(0.0));
+    // NK2 totalNotes describes source intent; outputNotes is the playable result.
+    summary.totalNotes =
+        static_cast<int>(findJsonNumberFallback(text, "outputNotes", "totalNotes").value_or(0.0));
     summary.addedNotes = static_cast<int>(findJsonNumber(text, "addedNotes").value_or(0.0));
     summary.createdJacksFromAddedNotes =
         static_cast<int>(findJsonNumberFallback(text, "createdJacksFromAddedNotes", "createdJacks")
@@ -1351,6 +1415,16 @@ ReportSummary parseReportSummary(const std::filesystem::path& reportPath) {
     summary.deterministic = findJsonBool(text, "deterministic").value_or(true);
     summary.valid = true;
     return summary;
+}
+
+ReportSummary parseReportSummary(const std::filesystem::path& reportPath) {
+    std::ifstream in(reportPath, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return parseReportSummaryText(buffer.str());
 }
 
 std::vector<std::string> splitCsvLine(const std::string& line) {
@@ -1686,6 +1760,19 @@ void updateAlgorithmControlState(AppState& state) {
     }
     const bool nk2 = comboText(state.algorithmCombo) == L"NK2 (Experimental)";
     EnableWindow(state.nk2ModeCombo, nk2 ? TRUE : FALSE);
+    if (state.recipeHintLabel != nullptr) {
+        const auto mode = comboText(state.nk2ModeCombo);
+        const wchar_t* hint = L"Engine, target key count, and conversion policy";
+        if (nk2) {
+            if (mode == kNk2AutoModeLabel) hint = L"7K: 4/5K B, 8/10K E; others: faithful";
+            else if (mode == kNk2PhraseModeLabel) hint = L"B: 7K to 4/5/8/10K; 4K to 5/7K";
+            else if (mode == kNk2NotesModeLabel || mode == kNk2DenseLnModeLabel ||
+                     mode == kNk2SourceLnModeLabel) hint = L"C/D/E: 7K to 8/10K; 4K to 5/7K";
+            else if (mode == kNk2BoostModeLabel) hint = L"F: 7K to 8/10K; extra source-covered LNs";
+            else hint = L"Legacy NK2 mode; automatic B/E selection is off";
+        }
+        setWindowText(state.recipeHintLabel, hint);
+    }
     if (state.modelCombo != nullptr) {
         if (nk2 && comboText(state.modelCombo) != kModelOffLabel) {
             setComboSelection(state.modelCombo, kModelOffLabel);
@@ -1831,6 +1918,30 @@ bool validateToolOptions(const ToolOptions& options, HWND owner, bool batchMode 
     if (nk2EngineActive(options) && nk2ModeCliValue(options.nk2Mode).empty()) {
         MessageBoxW(owner, L"NK2 mode is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
+    }
+    if (nk2PhraseSearchActive(options)) {
+        auto sourceKeys = sourceOverride;
+        if (!batchMode && !sourceKeys.has_value()) sourceKeys = detectCircleSize(options.inputFile);
+        const int targetKeys = targetKeyCount.value_or(0);
+        const bool sevenSupport = targetKeys == 8 || targetKeys == 10;
+        const bool sevenSearch = targetKeys == 4 || targetKeys == 5 || sevenSupport;
+        const bool fourSearch = targetKeys == 5 || targetKeys == 7;
+        const bool allowed = sourceKeys.has_value()
+            ? (*sourceKeys == 7 && (nk2PhraseSupportActive(options) ? sevenSupport : sevenSearch)) ||
+              (*sourceKeys == 4 && fourSearch)
+            : (nk2PhraseSupportActive(options) ? sevenSupport : sevenSearch) || fourSearch;
+        if (!allowed || options.streamTransform != L"off") {
+            MessageBoxW(owner,
+                        L"NK2 phrase requires 7K to 4/5/8/10K (note additions: 8/10K), or 4K to 5/7K, with Stream off.",
+                        L"KeyWeaver GUI", MB_ICONERROR);
+            return false;
+        }
+        if (nk2PhraseSourceLnBoostActive(options) &&
+            (!sevenSupport || (sourceKeys.has_value() && *sourceKeys != 7))) {
+            MessageBoxW(owner, L"Source LN+ requires 7K to 8/10K.",
+                        L"KeyWeaver GUI", MB_ICONERROR);
+            return false;
+        }
     }
     if (transformerModelPresetActive(options)) {
         if (!batchMode) {
@@ -2598,6 +2709,8 @@ void createUi(AppState& state) {
                                       WS_EX_CLIENTEDGE);
     makeControl(state, L"BUTTON", L"Browse", BS_PUSHBUTTON, 538, 322, 110, 28, kButtonBrowseOutputDir);
 
+    state.recipeHintLabel = makeControl(state, L"STATIC", L"", 0, 714, 152, 388, 22, -1);
+    if (state.smallFont != nullptr) setChildFont(state.recipeHintLabel, state.smallFont);
     makeControl(state, L"STATIC", L"Source", 0, 714, 178, 80, 22, -1);
     state.sourceEdit = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
                                    714, 202, 110, 180, kEditSource);
@@ -2628,11 +2741,15 @@ void createUi(AppState& state) {
 
     makeControl(state, L"STATIC", L"NK2 Mode", 0, 912, 238, 100, 22, -1);
     state.nk2ModeCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
-                                     912, 262, 116, 130, kComboNk2Mode);
-    for (const auto* item : {L"faithful", L"native", L"harder", L"transform"}) {
+                                     912, 262, 190, 310, kComboNk2Mode);
+    SendMessageW(state.nk2ModeCombo, CB_SETDROPPEDWIDTH, 260, 0);
+    for (const auto* item : {kNk2AutoModeLabel, kNk2LegacyModeLabel, kNk2PhraseModeLabel, kNk2NotesModeLabel,
+                             kNk2DenseLnModeLabel, kNk2SourceLnModeLabel,
+                             kNk2BoostModeLabel,
+                             L"native", L"harder", L"transform"}) {
         addComboItem(state.nk2ModeCombo, item);
     }
-    setComboSelection(state.nk2ModeCombo, L"faithful");
+    setComboSelection(state.nk2ModeCombo, kNk2AutoModeLabel);
 
     makeControl(state, L"STATIC", L"Expansion", 0, 714, 298, 100, 22, -1);
     state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
@@ -2787,7 +2904,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 state->batchInputs.clear();
                 state->batchInputsFromFolder = false;
             }
-            if (controlId == kComboAlgorithm && notification == CBN_SELCHANGE) {
+            if ((controlId == kComboAlgorithm || controlId == kComboNk2Mode) && notification == CBN_SELCHANGE) {
                 updateAlgorithmControlState(*state);
             }
             if (controlId == kEditTarget && notification == CBN_SELCHANGE) {
@@ -2950,6 +3067,14 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         return 1;
     }
 
+    const auto droppedSummary = parseReportSummaryText(
+        R"({"engine":"nk2","intent":{"totalNotes":7},"placement":{"outputNotes":4,"addedNotes":0,"droppedNotes":3}})");
+    const auto classicSummary = parseReportSummaryText(R"({"totalNotes":9,"addedNotes":2})");
+    if (!droppedSummary.valid || droppedSummary.totalNotes != 4 || classicSummary.totalNotes != 9) {
+        std::cerr << "GUI smoke expected NK2 output note counts and Classic total-note fallback\n";
+        return 1;
+    }
+
     ToolOptions options;
     options.keyconvExe = preferredKeyWeaverExe();
     options.inputFile = absolutePath(input);
@@ -3038,7 +3163,7 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
 
     ToolOptions nk2Options = options;
     nk2Options.algorithm = L"NK2 (Experimental)";
-    nk2Options.nk2Mode = L"faithful";
+    nk2Options.nk2Mode = kNk2LegacyModeLabel;
     nk2Options.targetKeys = L"5";
     nk2Options.outputDir = options.outputDir / L"nk2";
     nk2Options.debugReports = true;
@@ -3058,6 +3183,179 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
     const auto nk2Summary = parseReportSummary(nk2Paths.reportJson);
     if (!nk2Summary.valid || nk2Summary.totalNotes <= 0) {
         std::cerr << "GUI smoke failed to parse NK2 report\n";
+        return 1;
+    }
+
+    // The CLI resolves auto per file, including mixed-key batches. The GUI must
+    // not accidentally turn that selection into an explicit phrase request.
+    ToolOptions nk2AutoOptions = nk2Options;
+    nk2AutoOptions.nk2Mode = kNk2AutoModeLabel;
+    nk2AutoOptions.sourceOverride.clear();
+    OutputPaths nk2AutoPaths;
+    const auto nk2AutoCommand = buildSingleCommand(nk2AutoOptions, nk2AutoPaths);
+    const auto nk2AutoBatchCommand = buildBatchCommand(nk2AutoOptions, options.inputFile, std::nullopt);
+    for (const auto* command : {&nk2AutoCommand, &nk2AutoBatchCommand}) {
+        if (command->find(L"--nk2-mode auto") == std::wstring::npos ||
+            command->find(L"--nk2-search") != std::wstring::npos ||
+            command->find(L"--nk2-phrase-") != std::wstring::npos) {
+            std::cerr << "GUI smoke expected automatic per-file NK2 mode selection\n";
+            return 1;
+        }
+    }
+    if (ToolOptions{}.nk2Mode != kNk2AutoModeLabel ||
+        nk2AutoPaths.outputChart.filename().wstring().find(L"NK2-auto") == std::wstring::npos ||
+        nk2AutoPaths.outputChart == nk2Paths.outputChart) {
+        std::cerr << "GUI smoke expected default auto selection and separate output filenames\n";
+        return 1;
+    }
+
+    // Command-only check: the generic GUI smoke input need not be a 7K chart.
+    ToolOptions phraseOptions = nk2Options;
+    phraseOptions.nk2Mode = kNk2PhraseModeLabel;
+    phraseOptions.sourceOverride = L"7";
+    phraseOptions.targetKeys = L"10";
+    phraseOptions.streamTransform = L"off";
+    OutputPaths phrasePaths;
+    const auto phraseCommand = buildSingleCommand(phraseOptions, phrasePaths);
+    const auto phraseBatchCommand = buildBatchCommand(phraseOptions, options.inputFile, std::nullopt);
+    for (const auto* command : {&phraseCommand, &phraseBatchCommand}) {
+        if (command->find(L"--nk2-mode faithful") == std::wstring::npos ||
+            command->find(L"--nk2-search phrase") == std::wstring::npos ||
+            command->find(L"--nk2-audit") == std::wstring::npos) {
+            std::cerr << "GUI smoke expected opt-in NK2 phrase search and audit flags\n";
+            return 1;
+        }
+    }
+    if (phrasePaths.outputChart.filename().wstring().find(L"-phrase") == std::wstring::npos ||
+        nk2Command.find(L"--nk2-search") != std::wstring::npos ||
+        nk2Command.find(L"--nk2-phrase-support") != std::wstring::npos ||
+        phraseCommand.find(L"--nk2-phrase-support") != std::wstring::npos ||
+        phraseBatchCommand.find(L"--nk2-phrase-support") != std::wstring::npos) {
+        std::cerr << "GUI smoke expected separate phrase filenames and unchanged default flags\n";
+        return 1;
+    }
+
+    ToolOptions phraseSupportOptions = phraseOptions;
+    phraseSupportOptions.nk2Mode = kNk2NotesModeLabel;
+    OutputPaths phraseSupportPaths;
+    const auto phraseSupportCommand = buildSingleCommand(phraseSupportOptions, phraseSupportPaths);
+    const auto phraseSupportBatchCommand = buildBatchCommand(phraseSupportOptions, options.inputFile, std::nullopt);
+    for (const auto* command : {&phraseSupportCommand, &phraseSupportBatchCommand}) {
+        if (command->find(L"--nk2-mode faithful") == std::wstring::npos ||
+            command->find(L"--nk2-search phrase") == std::wstring::npos ||
+            command->find(L"--nk2-audit") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-support") == std::wstring::npos) {
+            std::cerr << "GUI smoke expected separate NK2 phrase support selection and flags\n";
+            return 1;
+        }
+    }
+    if (phraseSupportPaths.outputChart.filename().wstring().find(L"-phrase-notes") == std::wstring::npos ||
+        phraseSupportPaths.outputChart == phrasePaths.outputChart) {
+        std::cerr << "GUI smoke expected separate phrase support output filename\n";
+        return 1;
+    }
+
+    ToolOptions phraseDenseLnOptions = phraseOptions;
+    phraseDenseLnOptions.nk2Mode = kNk2DenseLnModeLabel;
+    OutputPaths phraseDenseLnPaths;
+    const auto phraseDenseLnCommand = buildSingleCommand(phraseDenseLnOptions, phraseDenseLnPaths);
+    const auto phraseDenseLnBatchCommand = buildBatchCommand(phraseDenseLnOptions, options.inputFile, std::nullopt);
+    for (const auto* command : {&phraseDenseLnCommand, &phraseDenseLnBatchCommand}) {
+        if (command->find(L"--nk2-mode faithful") == std::wstring::npos ||
+            command->find(L"--nk2-search phrase") == std::wstring::npos ||
+            command->find(L"--nk2-audit") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-support") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-dense-ln") == std::wstring::npos) {
+            std::cerr << "GUI smoke expected separate NK2 dense LN selection and flags\n";
+            return 1;
+        }
+    }
+    for (const auto* command : {&nk2Command, &phraseCommand, &phraseBatchCommand,
+                                &phraseSupportCommand, &phraseSupportBatchCommand}) {
+        if (command->find(L"--nk2-phrase-dense-ln") != std::wstring::npos) {
+            std::cerr << "GUI smoke expected dense LN to stay disabled for previous selections\n";
+            return 1;
+        }
+    }
+    if (phraseDenseLnPaths.outputChart.filename().wstring().find(L"-phrase-notes-dense-ln") == std::wstring::npos ||
+        phraseDenseLnPaths.outputChart == phraseSupportPaths.outputChart) {
+        std::cerr << "GUI smoke expected separate dense LN output filename\n";
+        return 1;
+    }
+
+    ToolOptions phraseSourceLnOptions = phraseOptions;
+    phraseSourceLnOptions.nk2Mode = kNk2SourceLnModeLabel;
+    OutputPaths phraseSourceLnPaths;
+    const auto phraseSourceLnCommand = buildSingleCommand(phraseSourceLnOptions, phraseSourceLnPaths);
+    const auto phraseSourceLnBatchCommand = buildBatchCommand(phraseSourceLnOptions, options.inputFile, std::nullopt);
+    for (const auto* command : {&phraseSourceLnCommand, &phraseSourceLnBatchCommand}) {
+        if (command->find(L"--nk2-mode faithful") == std::wstring::npos ||
+            command->find(L"--nk2-search phrase") == std::wstring::npos ||
+            command->find(L"--nk2-audit") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-support") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-dense-ln") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-source-ln") == std::wstring::npos) {
+            std::cerr << "GUI smoke expected separate NK2 source LN selection and flags\n";
+            return 1;
+        }
+    }
+    for (const auto* command : {&nk2Command, &phraseCommand, &phraseBatchCommand,
+                                &phraseSupportCommand, &phraseSupportBatchCommand,
+                                &phraseDenseLnCommand, &phraseDenseLnBatchCommand}) {
+        if (command->find(L"--nk2-phrase-source-ln") != std::wstring::npos) {
+            std::cerr << "GUI smoke expected source LN to stay disabled for previous selections\n";
+            return 1;
+        }
+    }
+    if (phraseSourceLnPaths.outputChart.filename().wstring().find(L"-phrase-notes-dense-ln-source-ln") == std::wstring::npos ||
+        phraseSourceLnPaths.outputChart == phraseDenseLnPaths.outputChart) {
+        std::cerr << "GUI smoke expected separate source LN output filename\n";
+        return 1;
+    }
+
+    for (const auto* target : {L"8", L"10"}) {
+        ToolOptions phraseSourceLnBoostOptions = phraseOptions;
+        phraseSourceLnBoostOptions.nk2Mode = kNk2BoostModeLabel;
+        phraseSourceLnBoostOptions.targetKeys = target;
+        OutputPaths phraseSourceLnBoostPaths;
+        const auto boostCommand = buildSingleCommand(phraseSourceLnBoostOptions, phraseSourceLnBoostPaths);
+        const auto boostBatchCommand = buildBatchCommand(phraseSourceLnBoostOptions, options.inputFile, std::nullopt);
+        for (const auto* command : {&boostCommand, &boostBatchCommand}) {
+            if (command->find(L"--target " + std::wstring(target)) == std::wstring::npos ||
+                command->find(L"--nk2-mode faithful") == std::wstring::npos ||
+                command->find(L"--nk2-search phrase") == std::wstring::npos ||
+                command->find(L"--nk2-audit") == std::wstring::npos ||
+                command->find(L"--nk2-phrase-support") == std::wstring::npos ||
+                command->find(L"--nk2-phrase-dense-ln") == std::wstring::npos ||
+                command->find(L"--nk2-phrase-source-ln ") == std::wstring::npos ||
+                command->find(L"--nk2-phrase-source-ln-boost") == std::wstring::npos) {
+                std::cerr << "GUI smoke expected Source LN+ prerequisites for 8K/10K\n";
+                return 1;
+            }
+        }
+        if (phraseSourceLnBoostPaths.outputChart.filename().wstring().find(L"-phrase-notes-dense-ln-source-ln-boost") == std::wstring::npos ||
+            phraseSourceLnBoostPaths.outputChart == phraseSourceLnPaths.outputChart) {
+            std::cerr << "GUI smoke expected separate Source LN+ output filename\n";
+            return 1;
+        }
+    }
+    for (const auto* command : {&nk2Command, &phraseCommand, &phraseBatchCommand,
+                                &phraseSupportCommand, &phraseSupportBatchCommand,
+                                &phraseDenseLnCommand, &phraseDenseLnBatchCommand,
+                                &phraseSourceLnCommand, &phraseSourceLnBatchCommand}) {
+        if (command->find(L"--nk2-phrase-source-ln-boost") != std::wstring::npos) {
+            std::cerr << "GUI smoke expected Source LN+ to stay disabled for previous selections\n";
+            return 1;
+        }
+    }
+    ToolOptions phraseFiveOptions = phraseOptions;
+    phraseFiveOptions.targetKeys = L"5";
+    OutputPaths phraseFivePaths;
+    const auto phraseFiveCommand = buildSingleCommand(phraseFiveOptions, phraseFivePaths);
+    if (phraseFiveCommand.find(L"--target 5") == std::wstring::npos ||
+        phraseFiveCommand.find(L"--nk2-search phrase") == std::wstring::npos ||
+        phraseFiveCommand.find(L"--nk2-phrase-support") != std::wstring::npos) {
+        std::cerr << "GUI smoke expected phrase-only 5K command\n";
         return 1;
     }
 

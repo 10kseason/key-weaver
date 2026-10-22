@@ -4674,10 +4674,11 @@ void testNk2SevenToFourGenericPrototypeCompression() {
     require(result.report.prototypeName == "nk2-generic-nk-relane-compress",
             "NK2 generic 7K to 4K should use the generic prototype");
     require(result.chart.meta.targetKeyCount == 4, "NK2 generic down output should set target key count");
-    require(result.report.lowerKeyRolledNotes > 0,
-            "NK2 generic 7K to 4K should roll safe overflow taps before dropping");
-    require(result.chart.notes.size() >= chart.notes.size() - 1,
-            "NK2 generic 7K to 4K should preserve most overflow notes through safe rolls");
+    require(result.chart.notes.size() + result.report.droppedNotes == chart.notes.size(),
+            "NK2 generic 7K to 4K must account for taps with no safe placement or roll");
+    require(std::count_if(result.chart.notes.begin(), result.chart.notes.end(),
+                          [](const auto& note) { return note.time == 1000; }) == 4,
+            "NK2 generic 7K to 4K should retain a full safe target chord");
     require(result.report.sameTimeCollisions == 0,
             "NK2 generic 7K to 4K should avoid collisions");
     require(result.report.longNoteConflicts == 0,
@@ -4706,6 +4707,78 @@ void testNk2SevenToFourGenericPrototypeCompression() {
     const auto json = keyconv::nk2::reportToJson(result.report);
     require(json.find("\"lowerKeyRolledNotes\"") != std::string::npos,
             "NK2 JSON should include lower-key roll diagnostics");
+}
+
+void testNk2BackwardRollCannotCreateJack() {
+    const auto chart = makeChart(2, {
+        {1000, 0, keyconv::NoteType::Tap, std::nullopt},
+        {1000, 1, keyconv::NoteType::Tap, std::nullopt},
+    });
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 2;
+    options.targetKeyCount = 1;
+    options.mode = keyconv::nk2::Mode::Faithful;
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.chart.notes.size() == 1 && result.report.droppedNotes == 1,
+            "1K overflow must drop a tap when every roll creates a source-different jack");
+    require(result.report.lowerKeyRolledNotes == 0 && result.report.createdJacks == 0,
+            "backward rolls must pass the same created-jack gate as forward rolls");
+}
+
+void testNk2SafeSourceJackRollIsPreserved() {
+    const auto chart = makeChart(2, {
+        {1000, 0, keyconv::NoteType::Hold, 1400},
+        {1400, 0, keyconv::NoteType::Tap, std::nullopt},
+    });
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 2;
+    options.targetKeyCount = 1;
+    options.mode = keyconv::nk2::Mode::Faithful;
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.chart.notes.size() == 2 && result.report.droppedNotes == 0 &&
+                result.report.lowerKeyRolledNotes == 1,
+            "safe same-source tap rolls past an LN tail must remain available");
+    require(result.chart.notes[0].endTime == 1400 && result.chart.notes[1].time > 1400,
+            "roll rescue should keep LN duration and move the tap beyond the tail");
+    require(result.report.createdJacks == 0 && result.report.longNoteConflicts == 0,
+            "preserving a source jack must not introduce a created jack or LN overlap");
+}
+
+void testNk2SourceJackExceptionCannotUnlockAnotherLane() {
+    // Reduced from ray's 7K -> 5K legacy output. The source-5 continuation
+    // must not unlock the output lane whose previous note came from source 1.
+    auto chart = makeChart(7, {
+        {62218, 5, keyconv::NoteType::Tap, std::nullopt},
+        {62218, 1, keyconv::NoteType::Tap, std::nullopt},
+        {62218, 3, keyconv::NoteType::Hold, 62673},
+        {62673, 2, keyconv::NoteType::Hold, 63127},
+        {62673, 5, keyconv::NoteType::Hold, 63127},
+        {62673, 0, keyconv::NoteType::Tap, std::nullopt},
+        {62673, 4, keyconv::NoteType::Tap, std::nullopt},
+    });
+    addTimingPoint(chart);
+    keyconv::nk2::NK2Options options;
+    options.sourceKeyCount = 7;
+    options.targetKeyCount = 5;
+    options.mode = keyconv::nk2::Mode::Faithful;
+    options.independentSafetyAudit = true;
+    const auto result = keyconv::nk2::convertChart(chart, options);
+    require(result.report.independentSafety.has_value() && result.report.independentSafety->passed(),
+            "a source-jack exception must remain specific to the candidate output lane");
+    const auto findNote = [&](const std::string& id) {
+        return std::find_if(result.chart.notes.begin(), result.chart.notes.end(),
+                            [&](const auto& note) { return note.id == id; });
+    };
+    const auto sourceJackHead = findNote("n0");
+    const auto otherSource = findNote("n1");
+    require(sourceJackHead != result.chart.notes.end() && otherSource != result.chart.notes.end(),
+            "lane-specific jack protection must retain the two preceding notes");
+    // Compression may drop the continuation when no safe lane remains; it
+    // must not preserve it by disabling a different source lane's protection.
+    const auto& audit = *result.report.independentSafety;
+    require(audit.retainedSourceNotes >= 6 && audit.retainedSourceNotes + audit.droppedSourceNotes == 7 &&
+                audit.addedNotes == 0 && audit.changedHoldDurations == 0,
+            "the safety fix may drop at most one source note without adding notes or changing hold duration");
 }
 
 void testNk2RolledNotesCannotCollideWithLaterSlices() {
@@ -5536,6 +5609,9 @@ int main() {
         {"NK2 local solver handles same-time chord", testNk2LocalSolverHandlesSameTimeChord},
         {"NK2 7K to 4K generic prototype compression",
          testNk2SevenToFourGenericPrototypeCompression},
+        {"NK2 backward roll cannot create jack", testNk2BackwardRollCannotCreateJack},
+        {"NK2 safe source jack roll is preserved", testNk2SafeSourceJackRollIsPreserved},
+        {"NK2 source jack exception stays on its lane", testNk2SourceJackExceptionCannotUnlockAnotherLane},
         {"NK2 rolled notes cannot collide with later slices",
          testNk2RolledNotesCannotCollideWithLaterSlices},
         {"NK2 7K to 8K native support notes are generalized",

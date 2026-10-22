@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -157,6 +158,7 @@ bool isFourToFiveFillOptions(const NK2Options& options) {
 }
 
 int supportJackWindowMsFor(const NK2Options& options) {
+    if (options.phraseSupport) return kDefaultSupportJackWindowMs;
     return isFourToFiveFillOptions(options) ? kFourToFiveSupportJackWindowMs
                                            : kDefaultSupportJackWindowMs;
 }
@@ -730,9 +732,12 @@ bool isImmediateSourceJackContinuation(const std::vector<PlacedNote>& placed,
 struct PlacementSafety {
     LaneMask conflicts = 0;
     LaneMask createdJacks = 0;
+    LaneMask futureCreatedJacks = 0;
+    LaneMask sourceJackLanes = 0;
 
     LaneMask blockedLanes(LaneMask occupiedLanes, bool sourceJackContinuation) const {
-        return occupiedLanes | conflicts | (sourceJackContinuation ? LaneMask{0} : createdJacks);
+        return occupiedLanes | conflicts | futureCreatedJacks |
+               (createdJacks & ~(sourceJackContinuation ? sourceJackLanes : LaneMask{0}));
     }
 };
 
@@ -741,26 +746,37 @@ PlacementSafety buildPlacementSafety(const std::vector<PlacedNote>& placed,
                                      int sourceLane,
                                      int jackWindowMs) {
     PlacementSafety safety;
+    std::array<const PlacedNote*, kMaxKeyCount> previousByLane{};
     // All candidates share the same history. Scan it once instead of once per
-    // candidate; include earlier slices whose roll offsets reach this timestamp.
+    // candidate. Rolls can put history on either side of this timestamp, so
+    // insertion order cannot bound the time window.
     for (const auto& existing : placed) {
+        if (existing.lane >= 0 && existing.lane < kMaxKeyCount && existing.time < note.time) {
+            auto& previous = previousByLane[static_cast<std::size_t>(existing.lane)];
+            if (previous == nullptr || previous->time < existing.time) previous = &existing;
+        }
         if (existing.time == note.time ||
             hasLongNoteConflictWithPlaced(existing, note, existing.lane)) {
             occupyLane(safety.conflicts, existing.lane);
         }
+        const auto dt = static_cast<long long>(note.time) - existing.time;
+        if (dt != 0 && dt >= -jackWindowMs && dt <= jackWindowMs &&
+            existing.sourceLane != sourceLane) {
+            occupyLane(safety.createdJacks, existing.lane);
+            // Continuing a past source jack never permits a new jack into an
+            // already placed future note from a different source lane.
+            if (dt < 0) {
+                occupyLane(safety.futureCreatedJacks, existing.lane);
+            }
+        }
     }
-
-    // Keep the existing recent-jack scoring and source-jack exemption intact.
-    for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
-        const int dt = note.time - it->time;
-        if (dt <= 0) {
-            continue;
-        }
-        if (dt > jackWindowMs) {
-            break;
-        }
-        if (it->sourceLane != sourceLane) {
-            occupyLane(safety.createdJacks, it->lane);
+    // A source jack can bypass an older different-source head only on the
+    // lane where its immediate predecessor actually belongs to that source.
+    // A matching note elsewhere in the chart must not unlock unrelated lanes.
+    for (int lane = 0; lane < kMaxKeyCount; ++lane) {
+        const auto* previous = previousByLane[static_cast<std::size_t>(lane)];
+        if (previous != nullptr && previous->sourceLane == sourceLane) {
+            occupyLane(safety.sourceJackLanes, lane);
         }
     }
     return safety;
@@ -1554,7 +1570,20 @@ void fillPhraseProfileScores(NK2Report& report, const Chart& converted) {
 
 void fillDistributionAndSafety(NK2Report& report, const Chart& converted) {
     report.outputNotes = static_cast<int>(converted.notes.size());
-    report.addedNotes = std::max(0, report.outputNotes - report.intent.totalNotes);
+    // The opt-in overlay reports actual additions even if the B placement had
+    // to drop a source note. Preserve the legacy report convention elsewhere.
+    report.addedNotes = report.options.phraseSupport
+        ? report.lnSupportAccepted + report.mirrorSupportAccepted + report.strongBeatSupportAccepted +
+              report.denseTapAccepted + report.denseHoldAccepted
+        : std::max(0, report.outputNotes - report.intent.totalNotes);
+    report.addedTapNotes = 0;
+    report.addedHoldNotes = 0;
+    for (const auto& note : converted.notes) {
+        if (isNk2GeneratedNote(note)) {
+            if (note.type == NoteType::Hold) ++report.addedHoldNotes;
+            else ++report.addedTapNotes;
+        }
+    }
     report.sameTimeCollisions = 0;
     report.longNoteConflicts = 0;
     report.createdJacks = 0;
@@ -1583,9 +1612,10 @@ void fillDistributionAndSafety(NK2Report& report, const Chart& converted) {
 }
 
 int supportBudgetFor(const NK2Options& options, int sourceNoteCount) {
-    const bool fourToFiveFill = isFourToFiveFillOptions(options);
+    const bool fourToFiveFill = isFourToFiveFillOptions(options) && !options.phraseSupport;
     if (options.targetKeyCount <= options.sourceKeyCount ||
-        (!fourToFiveFill && options.mode == Mode::Faithful) || options.mode == Mode::Report) {
+        (!fourToFiveFill && options.mode == Mode::Faithful && !options.phraseSupport) ||
+        options.mode == Mode::Report) {
         return 0;
     }
     if (sourceNoteCount <= 0) {
@@ -1613,9 +1643,16 @@ int supportPhraseWindowForTime(int time) {
 }
 
 int phraseSupportBudgetFor(const NK2Options& options, int sourceNoteCount) {
-    const bool fourToFiveFill = isFourToFiveFillOptions(options);
+    if (options.phraseSourceLnBoost) {
+        return clampInt(static_cast<int>(std::ceil(std::max(1, sourceNoteCount) * 0.50)), 1, 14);
+    }
+    if (options.phraseDenseLn) {
+        return clampInt(static_cast<int>(std::ceil(std::max(1, sourceNoteCount) * 0.35)), 1, 10);
+    }
+    const bool fourToFiveFill = isFourToFiveFillOptions(options) && !options.phraseSupport;
     if (options.targetKeyCount <= options.sourceKeyCount ||
-        (!fourToFiveFill && options.mode == Mode::Faithful) || options.mode == Mode::Report) {
+        (!fourToFiveFill && options.mode == Mode::Faithful && !options.phraseSupport) ||
+        options.mode == Mode::Report) {
         return 0;
     }
     const int safeSourceNoteCount = std::max(1, sourceNoteCount);
@@ -1865,7 +1902,7 @@ bool supportCandidateIsSafe(const SupportSafetyIndex& index,
             candidate.time > note.time && candidate.time <= *note.endTime) {
             return false;
         }
-        const int dt = std::abs(note.time - candidate.time);
+        const auto dt = std::abs(static_cast<long long>(note.time) - candidate.time);
         const int guardedGap = note.sourceLane == candidate.sourceLane ? sameSourceGapMs : jackWindowMs;
         if (dt > 0 && dt <= guardedGap) {
             return false;
@@ -1952,8 +1989,10 @@ bool tryAcceptSupportEvent(Chart& chart,
 
         const bool fourToFiveFill = isFourToFiveFillOptions(options);
         const int supportJackWindowMs = supportJackWindowMsFor(options);
-        const int sameSourceGapMs =
-            fourToFiveFill ? kFourToFiveSupportSameSourceGapMs : kDefaultSupportSameSourceGapMs;
+        // A generated tap has no original-repeat provenance. The phrase overlay
+        // therefore uses the full guard on both sides, even for its anchor lane.
+        const int sameSourceGapMs = options.phraseSupport ? supportJackWindowMs :
+            (fourToFiveFill ? kFourToFiveSupportSameSourceGapMs : kDefaultSupportSameSourceGapMs);
         if (!supportCandidateIsSafe(safetyIndex, candidate, supportJackWindowMs, sameSourceGapMs)) {
             continue;
         }
@@ -1982,8 +2021,17 @@ void applySupportNotes(Chart& chart, NK2Report& report, const NK2Options& option
     auto laneUse = laneDistributionFor(chart, options.targetKeyCount);
     auto safetyIndex = buildSupportSafetyIndex(chart);
     std::map<int, int> acceptedByPhrase;
+    std::set<int> acceptedTimes;
     int accepted = 0;
     for (const auto& event : events) {
+        // Keep the approved B pattern intact; add at most one accent per time.
+        // Legacy support generation retains its existing event handling.
+        if (options.phraseSupport && acceptedTimes.contains(event.time)) {
+            countSupportCandidate(report, event.kind);
+            countSupportRejected(report, event.kind);
+            ++report.supportRejectedBySafety;
+            continue;
+        }
         if (tryAcceptSupportEvent(chart,
                                   report,
                                   options,
@@ -1995,6 +2043,7 @@ void applySupportNotes(Chart& chart, NK2Report& report, const NK2Options& option
                                   budget,
                                   safetyIndex)) {
             ++accepted;
+            if (options.phraseSupport) acceptedTimes.insert(event.time);
         }
     }
     std::stable_sort(chart.notes.begin(), chart.notes.end(), [](const Note& lhs, const Note& rhs) {
@@ -2045,6 +2094,444 @@ bool supportsFourToFiveFill(const NK2Options& options) {
     return isFourToFiveFillOptions(options);
 }
 
+// The optional search uses chronological lane occupancy, independently of the
+// legacy placement history. A state keeps only the last object on each lane;
+// older holds cannot remain active after a legal successor on that lane.
+struct PhraseState {
+    std::array<std::optional<PlacedNote>, kMaxKeyCount> lastByTarget;
+    LastBySource lastBySource;
+    std::vector<int> laneUse;
+    std::vector<int> choices;
+    std::vector<MotifKind> motifs;
+    std::vector<RecentSingleNote> singles;
+    int dropped = 0;
+    int droppedHolds = 0;
+    double score = 0.0;
+};
+
+bool betterPhraseState(const PhraseState& lhs, const PhraseState& rhs) {
+    // Retention outranks style; preserve LNs when equal-sized solutions exist.
+    if (lhs.dropped != rhs.dropped) return lhs.dropped < rhs.dropped;
+    if (lhs.droppedHolds != rhs.droppedHolds) return lhs.droppedHolds < rhs.droppedHolds;
+    return lhs.score > rhs.score;
+}
+
+int phraseHorizonMs(const Chart& chart, int time) {
+    double beatLength = 500.0;
+    int latest = std::numeric_limits<int>::min();
+    for (const auto& point : chart.timingPoints) {
+        if (point.time <= time && point.time >= latest && std::isfinite(point.beatLength) &&
+            point.beatLength > 0.0 && point.uninherited.value_or(true)) {
+            beatLength = point.beatLength;
+            latest = point.time;
+        }
+    }
+    return static_cast<int>(std::clamp(beatLength * 2.0, 200.0, 2000.0));
+}
+
+LaneMask phraseBlockedLanes(const PhraseState& state, const Note& note, int targetKeys) {
+    LaneMask blocked = 0;
+    for (int lane = 0; lane < targetKeys; ++lane) {
+        const auto& last = state.lastByTarget[static_cast<std::size_t>(lane)];
+        if (!last) continue;
+        const auto gap = static_cast<long long>(note.time) - last->time;
+        if (gap <= 0 ||
+            (last->type == NoteType::Hold && last->endTime && note.time <= *last->endTime) ||
+            (gap <= 500 && last->sourceLane != sourceLaneOf(note))) {
+            occupyLane(blocked, lane);
+        }
+    }
+    return blocked;
+}
+
+void convertWithPhraseSearch(const Chart& source, const NK2Options& options,
+                             const std::vector<SliceInfo>& slices, NK2ConversionResult& result) {
+    constexpr std::size_t kPhraseBeamWidth = 24;
+    constexpr std::size_t kPhraseMaxNotes = 48;
+    PhraseState committed;
+    committed.laneUse.assign(static_cast<std::size_t>(options.targetKeyCount), 0);
+    for (std::size_t begin = 0; begin < slices.size();) {
+        std::size_t end = begin;
+        std::vector<std::pair<std::size_t, bool>> window;
+        const int horizon = phraseHorizonMs(source, slices[begin].time);
+        while (end < slices.size()) {
+            const auto& slice = slices[end];
+            if (end > begin &&
+                (static_cast<long long>(slice.time) - slices[begin].time >= horizon ||
+                 window.size() + slice.noteIndices.size() > kPhraseMaxNotes)) break;
+            if (slice.noteIndices.size() > kPhraseMaxNotes) {
+                throw std::runtime_error("NK2 phrase search cannot process a slice larger than 48 notes");
+            }
+            for (const auto index : slice.noteIndices) {
+                window.emplace_back(index, slice.noteIndices.size() == 1);
+            }
+            ++end;
+        }
+        ++result.report.phraseSearchWindows;
+        result.report.phraseSearchPeakNotes = std::max(result.report.phraseSearchPeakNotes,
+                                                       static_cast<int>(window.size()));
+        committed.choices.clear();
+        committed.motifs.clear();
+        committed.dropped = 0;
+        committed.droppedHolds = 0;
+        committed.score = 0.0;
+        std::vector<PhraseState> beam{committed};
+        for (const auto& [index, single] : window) {
+            const auto& note = source.notes[index];
+            const int sourceLane = sourceLaneOf(note);
+            std::vector<PhraseState> next;
+            next.reserve(beam.size() * static_cast<std::size_t>(options.targetKeyCount + 1));
+            for (const auto& state : beam) {
+                std::vector<PlacedNote> recent;
+                for (const auto& last : state.lastByTarget) {
+                    if (last) recent.push_back(*last);
+                }
+                std::stable_sort(recent.begin(), recent.end(), [](const auto& a, const auto& b) {
+                    return a.time < b.time;
+                });
+                const bool continuation = isImmediateSourceJackContinuation(recent, sourceLane, note.time, 500);
+                const bool fastSingle = single && !state.singles.empty() &&
+                    note.time > state.singles.back().time &&
+                    static_cast<long long>(note.time) - state.singles.back().time <= 280;
+                const auto motif = classifyMotif(note, single, fastSingle, continuation, state.singles);
+                const auto blocked = phraseBlockedLanes(state, note, options.targetKeyCount);
+                const auto ranked = rankedCandidates(note, options, state.laneUse, state.lastBySource, recent,
+                    fastSingle ? std::optional<int>(state.singles.back().sourceLane) : std::nullopt,
+                    fastSingle ? std::optional<int>(state.singles.back().targetLane) : std::nullopt,
+                    continuation, motif, blocked);
+                for (const auto& candidate : ranked) {
+                    if (hasSameTimeCollision(blocked, candidate.lane)) continue;
+                    auto branch = state;
+                    branch.choices.push_back(candidate.lane);
+                    branch.motifs.push_back(motif);
+                    branch.score += candidate.score;
+                    const auto lastSource = lastPlacedForSource(state.lastBySource, sourceLane);
+                    if (lastSource && static_cast<long long>(note.time) - lastSource->time <= 500) {
+                        branch.score += lastSource->lane == candidate.lane ? 1.0 : -0.5;
+                    }
+                    const PlacedNote placedNote{note.time, candidate.lane, sourceLane, note.type, note.endTime};
+                    branch.lastByTarget[static_cast<std::size_t>(candidate.lane)] = placedNote;
+                    rememberLastBySource(branch.lastBySource, sourceLane, placedNote);
+                    ++branch.laneUse[static_cast<std::size_t>(candidate.lane)];
+                    if (!fastSingle) branch.singles.clear();
+                    if (single) {
+                        branch.singles.push_back({note.time, sourceLane, candidate.lane});
+                        if (branch.singles.size() > 6) branch.singles.erase(branch.singles.begin());
+                    }
+                    next.push_back(std::move(branch));
+                    ++result.report.phraseSearchCandidates;
+                }
+                // Explicit omission is a candidate, never an unreported repair.
+                // No retiming is permitted in this first phrase-search mode.
+                auto dropped = state;
+                dropped.choices.push_back(-1);
+                dropped.motifs.push_back(motif);
+                dropped.singles.clear();
+                ++dropped.dropped;
+                if (note.type == NoteType::Hold) ++dropped.droppedHolds;
+                next.push_back(std::move(dropped));
+                ++result.report.phraseSearchCandidates;
+            }
+            std::stable_sort(next.begin(), next.end(), betterPhraseState);
+            if (next.size() > kPhraseBeamWidth) next.resize(kPhraseBeamWidth);
+            beam = std::move(next);
+        }
+        const auto& best = beam.front();
+        for (std::size_t offset = 0; offset < window.size(); ++offset) {
+            if (best.choices[offset] < 0) continue;
+            auto note = source.notes[window[offset].first];
+            note.sourceLane = sourceLaneOf(note);
+            note.lane = best.choices[offset];
+            result.chart.notes.push_back(std::move(note));
+            countMotifPlacement(result.report, best.motifs[offset]);
+        }
+        result.report.droppedNotes += best.dropped;
+        committed = best;
+        begin = end;
+    }
+}
+
+bool denseSupportCandidateIsSafe(const SupportSafetyIndex& index, const Note& candidate) {
+    const auto candidateEnd = candidate.endTime.value_or(candidate.time);
+    for (const auto& other : index.lanes[static_cast<std::size_t>(candidate.lane)]) {
+        // Generated holds must reserve their entire interval against future
+        // heads and tails, not just pass the tap insertion check at their head.
+        if (std::abs(static_cast<long long>(other.time) - candidate.time) <= 500) return false;
+        const auto otherEnd = other.endTime.value_or(other.time);
+        if (candidate.time <= otherEnd && other.time <= candidateEnd) return false;
+    }
+    return true;
+}
+
+void applyDensePhraseNotes(Chart& chart, NK2Report& report, const NK2Options& options,
+                          const Chart& source) {
+    // C is immutable input for D/E. The F pass receives the completed E chart
+    // and adds only holds, so raising its budget cannot displace any E note.
+    // Candidate rhythm anchors come only from retained original material.
+    Chart originals = chart;
+    std::erase_if(originals.notes, isNk2GeneratedNote);
+    if (originals.notes.empty()) return;
+    const bool boost = options.phraseSourceLnBoost;
+    const int totalBudget = static_cast<int>(std::ceil(report.intent.totalNotes * (boost ? 0.50 : 0.35)));
+    const int holdBudget = static_cast<int>(std::ceil(report.intent.totalNotes * (boost ? 0.22 : 0.12)));
+    const auto sourceByWindow = sourceNoteCountsBySupportPhrase(originals);
+    std::map<int, int> addedByWindow;
+    std::map<int, int> holdsByWindow;
+    std::map<int, int> addedByTime;
+    std::map<int, int> holdsByTime;
+    std::set<std::string> acceptedIds;
+    int addedTotal = 0;
+    for (const auto& note : chart.notes) {
+        if (isNk2GeneratedNote(note)) {
+            ++addedTotal;
+            ++addedByWindow[supportPhraseWindowForTime(note.time)];
+            ++addedByTime[note.time];
+            if (boost && note.type == NoteType::Hold) {
+                ++holdsByWindow[supportPhraseWindowForTime(note.time)];
+                ++holdsByTime[note.time];
+            }
+        }
+    }
+    auto laneUse = laneDistributionFor(chart, options.targetKeyCount);
+    auto safetyIndex = buildSupportSafetyIndex(chart);
+    std::vector<std::pair<int, int>> sourceHoldCoverage;
+    if (options.phraseSourceLn) {
+        for (const auto& note : source.notes) {
+            if (note.type == NoteType::Hold && note.endTime && *note.endTime > note.time) {
+                sourceHoldCoverage.emplace_back(note.time, *note.endTime);
+            }
+        }
+        // Each prefix maximum is the tail of one actual source LN. We never
+        // join touching/overlapping source LNs to grant a longer allowed span.
+        std::sort(sourceHoldCoverage.begin(), sourceHoldCoverage.end());
+        for (std::size_t i = 1; i < sourceHoldCoverage.size(); ++i) {
+            sourceHoldCoverage[i].second = std::max(sourceHoldCoverage[i].second,
+                                                    sourceHoldCoverage[i - 1].second);
+        }
+    }
+    const auto sourceHoldEndAt = [&](int time) -> std::optional<int> {
+        const auto it = std::upper_bound(sourceHoldCoverage.begin(), sourceHoldCoverage.end(), time,
+            [](int value, const auto& span) { return value < span.first; });
+        if (it == sourceHoldCoverage.begin()) return std::nullopt;
+        return std::prev(it)->second;
+    };
+    std::array<int, kMaxKeyCount> generatedHoldLaneUse{};
+    std::array<int, 4> generatedHoldLengthUse{};
+    std::optional<int> lastHoldLane;
+    std::optional<int> lastHoldLengthClass;
+    const auto lengthClass = [](int duration, int beat) {
+        if (duration < beat * 0.75) return 0;
+        if (duration < beat * 1.5) return 1;
+        if (duration < beat * 3.0) return 2;
+        return 3;
+    };
+    if (boost) {
+        // Include E's generated LNs in the distribution, not just this pass.
+        for (const auto& note : chart.notes) {
+            if (isNk2GeneratedNote(note) && note.type == NoteType::Hold && note.endTime) {
+                ++generatedHoldLaneUse[static_cast<std::size_t>(note.lane)];
+                const auto category = lengthClass(*note.endTime - note.time,
+                                                  phraseHorizonMs(originals, note.time) / 2);
+                ++generatedHoldLengthUse[static_cast<std::size_t>(category)];
+            }
+        }
+    }
+    const auto accept = [&](const SupportEvent& event, std::optional<int> endTime) {
+        ++report.denseSupportCandidates;
+        const bool hold = endTime.has_value();
+        if (options.phraseSourceLn && hold) {
+            const auto coveredEnd = sourceHoldEndAt(event.time);
+            if (!coveredEnd || *endTime > *coveredEnd || *endTime <= event.time) {
+                ++report.denseRejectedBySafety;
+                return false;
+            }
+        }
+        const int window = supportPhraseWindowForTime(event.time);
+        const auto found = sourceByWindow.find(window);
+        const int localSources = found == sourceByWindow.end() ? 0 : found->second;
+        const int localBudget = phraseSupportBudgetFor(options, localSources);
+        if (addedTotal >= totalBudget || addedByWindow[window] >= localBudget ||
+            addedByTime[event.time] >= (boost ? 3 : 2) || (hold &&
+            (report.denseHoldAccepted >= holdBudget || holdsByWindow[window] >= (boost ? 5 : 3) ||
+             holdsByTime[event.time] >= (boost ? 2 : 1)))) {
+            ++report.denseRejectedByBudget;
+            return false;
+        }
+        const auto id = std::string(hold ? (boost ? "nk2-ln-source-boost-" :
+                                          options.phraseSourceLn ? "nk2-ln-source-" : "nk2-ln-dense-")
+                                         : "nk2-beat-dense-") +
+            event.anchorId + "-" + std::to_string(event.time) +
+            (hold ? "-" + std::to_string(*endTime) : "");
+        if (acceptedIds.contains(id)) {
+            ++report.denseRejectedByBudget;
+            return false;
+        }
+        const auto ranked = rankedSupportLanes(event, laneUse, options);
+        std::vector<Candidate> candidates(ranked.begin(), ranked.end());
+        if (options.phraseSourceLn && hold) {
+            // Balance generated holds separately from taps and original LNs.
+            // Safety still wins when only one lane can accept the full span.
+            for (auto& candidate : candidates) {
+                candidate.score -= 0.65 * generatedHoldLaneUse[static_cast<std::size_t>(candidate.lane)];
+                if (lastHoldLane) {
+                    if (candidate.lane == *lastHoldLane) candidate.score -= 3.0;
+                    if ((candidate.lane < options.targetKeyCount / 2) ==
+                        (*lastHoldLane < options.targetKeyCount / 2)) candidate.score -= 0.8;
+                }
+            }
+            std::stable_sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+                return a.score > b.score;
+            });
+        }
+        for (const auto& lane : candidates) {
+            Note candidate;
+            candidate.id = id;
+            candidate.time = event.time;
+            candidate.lane = lane.lane;
+            candidate.sourceLane = event.sourceLane;
+            candidate.type = hold ? NoteType::Hold : NoteType::Tap;
+            candidate.endTime = endTime;
+            if (!denseSupportCandidateIsSafe(safetyIndex, candidate)) continue;
+            chart.notes.push_back(candidate);
+            addToSupportSafetyIndex(safetyIndex, candidate);
+            ++laneUse[static_cast<std::size_t>(candidate.lane)];
+            ++addedTotal;
+            ++addedByWindow[window];
+            ++addedByTime[event.time];
+            acceptedIds.insert(id);
+            if (hold) {
+                ++report.denseHoldAccepted;
+                if (boost) ++report.sourceLnBoostHoldAccepted;
+                ++holdsByWindow[window];
+                ++holdsByTime[event.time];
+                if (options.phraseSourceLn) {
+                    ++generatedHoldLaneUse[static_cast<std::size_t>(candidate.lane)];
+                    lastHoldLane = candidate.lane;
+                    const auto category = lengthClass(*endTime - event.time,
+                                                       phraseHorizonMs(originals, event.time) / 2);
+                    ++generatedHoldLengthUse[static_cast<std::size_t>(category)];
+                    lastHoldLengthClass = category;
+                }
+            } else {
+                ++report.denseTapAccepted;
+            }
+            countGeneratedProvenance(report, hold ? MotifKind::LnAnchor : event.anchorMotif);
+            return true;
+        }
+        ++report.denseRejectedBySafety;
+        return false;
+    };
+    const auto anchorEvent = [](const Note& note, SupportKind kind) {
+        return SupportEvent{kind, kind == SupportKind::Ln ? MotifKind::LnAnchor : MotifKind::Neutral,
+                            note.time, sourceLaneOf(note), note.lane, note.id};
+    };
+
+    if (options.phraseSourceLn) {
+        std::set<int, std::less<>> endpoints;
+        for (const auto& note : source.notes) {
+            endpoints.insert(note.time);
+            if (note.type == NoteType::Hold && note.endTime && *note.endTime > note.time) {
+                endpoints.insert(*note.endTime);
+            }
+        }
+        std::set<int> triedHeads;
+        for (const auto& note : originals.notes) {
+            if (!triedHeads.insert(note.time).second) continue;
+            const auto coveredEnd = sourceHoldEndAt(note.time);
+            if (!coveredEnd || static_cast<long long>(*coveredEnd) - note.time < 200) continue;
+            const auto minEnd = static_cast<long long>(note.time) + 200;
+            const auto maxEnd = std::min(static_cast<long long>(*coveredEnd),
+                                        static_cast<long long>(note.time) + 2000);
+            const auto first = endpoints.lower_bound(minEnd);
+            const auto after = endpoints.upper_bound(maxEnd);
+            if (first == after) continue;
+            const int beat = phraseHorizonMs(originals, note.time) / 2;
+            std::set<int> ends{*first, *std::prev(after)};
+            for (const double multiple : {0.5, 1.0, 1.5, 2.0, 3.0, 4.0}) {
+                const auto desired = std::clamp(static_cast<long long>(note.time) +
+                                               static_cast<long long>(beat * multiple), minEnd, maxEnd);
+                const auto it = endpoints.lower_bound(desired);
+                if (it != endpoints.end() && *it <= maxEnd) ends.insert(*it);
+                if (it != endpoints.begin() && *std::prev(it) >= minEnd) ends.insert(*std::prev(it));
+            }
+            const std::array<double, 4> desiredLengths{beat * 0.5, static_cast<double>(beat),
+                                                       beat * 2.0, static_cast<double>(maxEnd - note.time)};
+            const double desired = std::clamp(desiredLengths[static_cast<std::size_t>(report.denseHoldAccepted % 4)],
+                                               200.0, static_cast<double>(maxEnd - note.time));
+            const auto preference = [&](int end) {
+                const int duration = end - note.time;
+                const int category = lengthClass(duration, beat);
+                return std::abs(duration - desired) / std::max(200, beat) +
+                    2.0 * generatedHoldLengthUse[static_cast<std::size_t>(category)] /
+                        std::max(1, report.denseHoldAccepted) +
+                    (lastHoldLengthClass == category ? 1.2 : 0.0);
+            };
+            std::vector<int> rankedEnds(ends.begin(), ends.end());
+            std::stable_sort(rankedEnds.begin(), rankedEnds.end(), [&](int a, int b) {
+                return preference(a) < preference(b);
+            });
+            for (const int end : rankedEnds) {
+                if (accept(anchorEvent(note, SupportKind::Ln), end)) break;
+            }
+        }
+    } else {
+    // First echo existing LN spans when there is a spare lane for the full span.
+    // Long sustains are not copied: the first dense experiment caps them at 2s.
+    for (const auto& note : originals.notes) {
+        const auto duration = static_cast<long long>(note.endTime.value_or(note.time)) - note.time;
+        if (note.type == NoteType::Hold && duration >= 200 && duration <= 2000) {
+            accept(anchorEvent(note, SupportKind::Ln), note.endTime);
+        }
+    }
+    // Extra short holds connect two existing rhythmic endpoints. This also
+    // gives tap-heavy charts LN candidates without inventing off-grid tails.
+    std::set<int, std::less<>> endpoints;
+    for (const auto& note : originals.notes) {
+        endpoints.insert(note.time);
+        if (note.type == NoteType::Hold && note.endTime && *note.endTime > note.time) {
+            endpoints.insert(*note.endTime);
+        }
+    }
+    for (const auto& note : originals.notes) {
+        const int desiredLength = clampInt(phraseHorizonMs(originals, note.time) / 2, 200, 800);
+        std::optional<int> endTime;
+        long long bestDistance = std::numeric_limits<long long>::max();
+        for (auto it = endpoints.lower_bound(static_cast<long long>(note.time) + 200);
+             it != endpoints.end() && static_cast<long long>(*it) - note.time <= 800; ++it) {
+            const auto distance = std::abs(static_cast<long long>(*it) - note.time - desiredLength);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                endTime = *it;
+            }
+        }
+        if (endTime) accept(anchorEvent(note, SupportKind::Ln), endTime);
+    }
+    }
+    if (!boost) {
+        // Reuse the musical C accents first, then fill other original tap heads.
+        for (const auto& event : buildSupportEvents(originals, options)) accept(event, std::nullopt);
+        for (const auto& note : originals.notes) {
+            if (note.type == NoteType::Tap) accept(anchorEvent(note, SupportKind::Mirror), std::nullopt);
+        }
+    }
+    std::stable_sort(chart.notes.begin(), chart.notes.end(), [](const Note& a, const Note& b) {
+        if (a.time != b.time) return a.time < b.time;
+        if (a.lane != b.lane) return a.lane < b.lane;
+        return a.id < b.id;
+    });
+}
+
+void fillIndependentAudit(const Chart& source, NK2ConversionResult& result) {
+    if (!result.report.options.independentSafetyAudit && !result.report.options.phraseSearch) return;
+    const int targetKeys = result.report.chartMutated ? result.report.options.targetKeyCount
+                                                     : result.report.options.sourceKeyCount;
+    result.report.independentSafety = auditSafety(source, result.chart, targetKeys, 500,
+                                                   result.report.options.phraseSourceLn);
+    if (!result.report.independentSafety->passed()) {
+        result.report.warnings.push_back("Independent lane-by-lane safety audit failed; inspect independentSafety counters.");
+    }
+}
+
 bool supportsSupportNotes(const NK2Options& options) {
     if (options.mode == Mode::Report || options.sourceKeyCount <= 0 || options.targetKeyCount <= 0) {
         return false;
@@ -2058,7 +2545,9 @@ bool supportsSupportNotes(const NK2Options& options) {
     if (options.sourceKeyCount > kMaxKeyCount || options.targetKeyCount > kMaxKeyCount) {
         return false;
     }
-    return options.mode != Mode::Faithful || isFourToFiveFillOptions(options);
+    // B remains placement-only even in the legacy 4K-to-5K fill special case.
+    if (options.phraseSearch) return options.phraseSupport;
+    return options.mode != Mode::Faithful || isFourToFiveFillOptions(options) || options.phraseSupport;
 }
 
 }  // namespace
@@ -2073,16 +2562,46 @@ NK2Report analyzeReportOnly(const Chart& chart, const NK2Options& options) {
 }
 
 NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) {
+    const bool sevenKeyExpansion = options.sourceKeyCount == 7 &&
+        (options.targetKeyCount == 8 || options.targetKeyCount == 10);
+    const bool fourKeyExperiment = options.sourceKeyCount == 4 &&
+        (options.targetKeyCount == 5 || options.targetKeyCount == 7);
+    const bool phraseExpansionPair = sevenKeyExpansion || fourKeyExperiment;
+    const bool phrasePair = phraseExpansionPair || (options.sourceKeyCount == 7 &&
+        (options.targetKeyCount == 4 || options.targetKeyCount == 5));
+    if (options.phraseSourceLnBoost && (!options.phraseSourceLn || !sevenKeyExpansion)) {
+        throw std::runtime_error("NK2 source LN boost requires 7K to 8K/10K source LN support");
+    }
+    if (options.phraseSourceLn && (!options.phraseDenseLn || !options.phraseSupport || !options.phraseSearch ||
+        !phraseExpansionPair ||
+        options.mode != Mode::Faithful || options.superSymmetry)) {
+        throw std::runtime_error("NK2 source LN support requires faithful 7K to 8K/10K or 4K to 5K/7K dense phrase support without super-symmetry");
+    }
+    if (options.phraseDenseLn && (!options.phraseSupport || !options.phraseSearch ||
+        !phraseExpansionPair ||
+        options.mode != Mode::Faithful || options.superSymmetry)) {
+        throw std::runtime_error("NK2 dense LN support requires faithful 7K to 8K/10K or 4K to 5K/7K phrase support without super-symmetry");
+    }
+    if (options.phraseSupport && (!options.phraseSearch || !phraseExpansionPair ||
+        options.mode != Mode::Faithful || options.superSymmetry)) {
+        throw std::runtime_error("NK2 phrase support requires faithful 7K to 8K/10K or 4K to 5K/7K phrase search without super-symmetry");
+    }
+    if (options.phraseSearch &&
+        (!phrasePair || options.mode != Mode::Faithful || options.superSymmetry)) {
+        throw std::runtime_error("NK2 phrase search requires faithful 7K to 4K/5K/8K/10K or 4K to 5K/7K without super-symmetry");
+    }
     NK2ConversionResult result;
     result.chart = chart;
     result.report = buildBaseReport(chart, options);
 
     if (options.mode == Mode::Report) {
+        fillIndependentAudit(chart, result);
         return result;
     }
 
     if (result.report.noOp) {
         fillDistributionAndSafety(result.report, result.chart);
+        fillIndependentAudit(chart, result);
         return result;
     }
 
@@ -2094,12 +2613,18 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
         result.report.warnings.push_back(
             "Use --nk2-mode report for analysis-only on unsupported key-count pairs.");
         fillDistributionAndSafety(result.report, result.chart);
+        fillIndependentAudit(chart, result);
         return result;
     }
 
     result.chart.meta.targetKeyCount = options.targetKeyCount;
     result.chart.meta.version =
         convertedDifficultyName(chart.meta.version, options.targetKeyCount, options.superSymmetry);
+    if (options.phraseSearch) *result.chart.meta.version += "-phrase";
+    if (options.phraseSupport) *result.chart.meta.version += "-notes";
+    if (options.phraseDenseLn) *result.chart.meta.version += "-dense-ln";
+    if (options.phraseSourceLn) *result.chart.meta.version += "-source-ln";
+    if (options.phraseSourceLnBoost) *result.chart.meta.version += "-boost";
     result.chart.notes.clear();
     result.chart.notes.reserve(chart.notes.size());
 
@@ -2114,7 +2639,9 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     std::optional<int> previousSingleTime;
     std::vector<RecentSingleNote> recentSingles;
 
-    for (const auto& slice : slices) {
+    if (options.phraseSearch) {
+        convertWithPhraseSearch(chart, options, slices, result);
+    } else for (const auto& slice : slices) {
         LaneMask occupiedLanes = 0;
         const bool singleNoteSlice = slice.noteIndices.size() == 1;
 
@@ -2255,9 +2782,24 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     result.report.chartMutated = true;
     result.report.prototypeName = sevenToTenPrototype ? "nk2-7k10k-panel-bridge-fullfield"
                                                       : "nk2-generic-nk-relane-compress";
+    if (options.phraseSearch) result.report.prototypeName = "nk2-phrase-search-v1";
+    if (options.phraseSupport) result.report.prototypeName = "nk2-phrase-notes-v1";
+    if (options.phraseDenseLn) result.report.prototypeName = "nk2-phrase-dense-ln-v1";
+    if (options.phraseSourceLn) result.report.prototypeName = "nk2-phrase-source-ln-v1";
+    if (options.phraseSourceLnBoost) result.report.prototypeName = "nk2-phrase-source-ln-boost-v1";
     const bool supportNotesEnabled = supportsSupportNotes(options);
     if (supportNotesEnabled) {
-        applySupportNotes(result.chart, result.report, options);
+        auto baseSupportOptions = options;
+        baseSupportOptions.phraseDenseLn = false;
+        baseSupportOptions.phraseSourceLn = false;
+        baseSupportOptions.phraseSourceLnBoost = false;
+        applySupportNotes(result.chart, result.report, baseSupportOptions);
+        if (options.phraseDenseLn) {
+            auto denseOptions = options;
+            denseOptions.phraseSourceLnBoost = false;
+            applyDensePhraseNotes(result.chart, result.report, denseOptions, chart);
+            if (options.phraseSourceLnBoost) applyDensePhraseNotes(result.chart, result.report, options, chart);
+        }
     } else if (options.superSymmetry && options.mode != Mode::Faithful &&
                options.targetKeyCount > options.sourceKeyCount) {
         result.report.warnings.push_back(
@@ -2268,8 +2810,8 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     }
     fillDistributionAndSafety(result.report, result.chart);
     if (result.report.addedNotes == 0) {
-        if (options.mode == Mode::Faithful && !supportsFourToFiveFill(options)) {
-            result.report.warnings.push_back("NK2 faithful mode keeps source note count; support notes are disabled.");
+        if (options.mode == Mode::Faithful && !supportsFourToFiveFill(options) && !options.phraseSupport) {
+            result.report.warnings.push_back("NK2 faithful mode disables support notes; unsafe source notes may be dropped.");
         } else if (supportNotesEnabled) {
             result.report.warnings.push_back(
                 "NK2 support-note generation found no accepted safe candidates.");
@@ -2281,6 +2823,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     if (result.report.sameTimeCollisions > 0 || result.report.longNoteConflicts > 0) {
         result.report.warnings.push_back("NK2 prototype produced placement conflicts that need repair.");
     }
+    fillIndependentAudit(chart, result);
     return result;
 }
 

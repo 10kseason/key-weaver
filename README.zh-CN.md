@@ -1,4 +1,4 @@
-# KeyWeaver v1.2.0
+# KeyWeaver v1.3.0
 
 语言: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,11 @@ KeyWeaver 是一个基于 C++20/CMake 的键数转换工具，用于 osu!mania `
 
 ## 本版本定位
 
-`v1.2.0` 将实验性 NK2 扩展到 1K-18K 的全部 source/target 组合，包括降键转换和同键转换，并提供已验证的 Windows 包、完整源码包和 NK2 纯源码包。
+`v1.3.0` 增加 GUI A–F 预设、7K 的 B/E 默认选择和独立安全检查。提供 Windows 包、完整项目源码和包含 10 个文件的 NK2 专用源码包。保留现有 1K–18K 支持以及 Classic 默认引擎。
+
+- GUI 的 `Auto (7K presets)` 对原始 7K 输入选择：4K/5K 使用 B，8K/10K 使用 E，其他组合使用 faithful。CLI 仅指定 `--engine nk2` 时采用相同的 7K 默认值，其他组合仍为 native。显式模式、搜索、加音符选项或 stream 变换优先于自动选择。
+- GUI 手动选择为 `A - Legacy faithful`、`B - Phrase only`、`C - Phrase + taps`、`D - Dense taps + LN`、`E - Source LN`、`F - Source LN+`；保留 `native`、`harder`、`transform`。
+- 4K→5K/7K 是手动 B/C/D/E 实验。B 不使用旧 4K→5K fill，不添加音符；E 生成的每个 LN 必须完整包含在一个原始 LN 区间内。F 仅支持 7K→8K/10K。phrase 输出通过独立检查后才保存。详见[搜索与比较指南](docs/nk2-phrase-search.md)。
 
 主要能力:
 
@@ -20,7 +24,7 @@ KeyWeaver 是一个基于 C++20/CMake 的键数转换工具，用于 osu!mania `
 - 基于 `--batch`、`--input-list`、`--jobs` 的并行 CLI 批量转换，带进度和汇总输出。
 - Classic 转换包含 collision、LN、distance、jack 安全检查。
 - 实验性 NK2 模式: `native`、`faithful`、`harder`、`transform`；同键转换只在 `transform` 中执行，`report` 仅限单输入分析。
-- GUI 10K 转换默认使用 Full-Field Mirror-Remix。
+- Classic GUI 的 10K 转换默认使用 Full-Field Mirror-Remix。
 - 用于质量、策略比较、诊断的 JSON/CSV 报告。
 - 可选的 CUDA ONNX Runtime 批量 lane-policy 钩子。
 
@@ -31,7 +35,7 @@ KeyWeaver 是一个基于 C++20/CMake 的键数转换工具，用于 osu!mania `
 只想运行工具时使用 Windows 发布 zip:
 
 ```text
-KeyWeaver-v1.2.0-win64-<timestamp>.zip
+KeyWeaver-v1.3.0-win64-<timestamp>.zip
 ```
 
 包内包含:
@@ -114,10 +118,10 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 发布包:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.2.0
+.\scripts\package_release.ps1 -Version 1.3.0
 ```
 
-package script 会执行 Release 构建、unit test、public header smoke、GUI smoke、CLI dry-run smoke、样本转换、reconversion guard、BMS guard，并在 `dist/release/` 写出 zip 和 `.sha256`。
+package script 会执行 Release 构建、全部已注册 CTest（包括 NK2 安全、phrase 和 CLI 回归）、public header smoke、GUI smoke、CLI dry-run smoke、样本转换、reconversion guard 和 BMS guard，并在 `dist/release/` 写出压缩包和 `.sha256`。自动检查验证结构安全与确定性，实际游玩质量仍需人工比较。
 
 ## 可选 ONNX CUDA 批量路径
 
@@ -149,12 +153,12 @@ ONNX 说明:
 源码包名称格式:
 
 ```text
-KeyWeaver-v1.2.0-source-<timestamp>.zip
+KeyWeaver-v1.3.0-source-<timestamp>.zip
 ```
 
-包含项目源码、文档、模型、脚本和发布 diff 产物。故意排除 `.git`、本地 agent 指令、构建目录和旧发布 zip。
+包含明确选定的已跟踪项目文件，以及最新 NK2 源码、测试和文档。排除私人音频/训练实验、本地 MP3/谱面/OSZ、`AGENTS.md` 等本地 agent 指令、`.git`、构建目录、旧发布包和工作区 diff 产物。
 
-发布页还提供 KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip，其中只包含 src/nk2/ 下的 8 个文件。
+`KeyWeaver-NK2-source-1K-18K-v1.3.0-<timestamp>.zip` 包含 `src/nk2/` 下的 10 个文件，包括独立安全检查器，用于审阅和集成。构建应用请使用完整源码包。
 
 ## 重要文档
 

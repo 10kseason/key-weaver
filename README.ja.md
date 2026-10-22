@@ -1,4 +1,4 @@
-# KeyWeaver v1.2.0
+# KeyWeaver v1.3.0
 
 言語: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,11 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 
 ## このリリース
 
-`v1.2.0` は、実験的な NK2 を 1K-18K の全 source/target 組み合わせ、降格変換、同一キー変換まで拡張し、検証済み Windows パッケージと全ソース・NK2 専用ソースの各アーカイブを提供します。
+`v1.3.0` は GUI の A–F プリセット、7K 向けの B/E 既定選択、独立した安全性検査を追加します。Windows パッケージ、全ソース、および 10 ファイルの NK2 専用ソースを提供します。既存の 1K–18K 対応と Classic の既定動作は維持します。
+
+- GUI の `Auto (7K presets)` は、元譜面が 7K の場合、4K/5K に B、8K/10K に E を選び、その他は faithful を使います。CLI で `--engine nk2` だけを指定した場合も同じ 7K 設定を使い、その他は native です。明示的なモード・探索・追加ノート指定や stream 変換は自動選択より優先します。
+- GUI の手動選択は `A - Legacy faithful`、`B - Phrase only`、`C - Phrase + taps`、`D - Dense taps + LN`、`E - Source LN`、`F - Source LN+` です。`native`、`harder`、`transform` も維持します。
+- 4K→5K/7K は B/C/D/E の手動実験です。B は既存の 4K→5K fill を使わず追加ノートはゼロ、E の生成 LN は元 LN 一つの区間内に限定します。F は 7K→8K/10K のみです。phrase 出力は独立検査に合格してから保存します。詳細は [探索と比較ガイド](docs/nk2-phrase-search.md) を参照してください。
 
 主な機能:
 
@@ -20,7 +24,7 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 - `--batch`、`--input-list`、`--jobs` による並列 CLI バッチ、進捗、サマリー出力。
 - Classic 変換の collision、LN、distance、jack 安全チェック。
 - 実験的 NK2 モード: `native`、`faithful`、`harder`、`transform`。同一キー変換は `transform` のみで実行され、`report` は単一入力の解析専用です。
-- GUI の 10K 変換は既定で Full-Field Mirror-Remix を使います。
+- Classic GUI の 10K 変換は既定で Full-Field Mirror-Remix を使います。
 - 変換品質、ポリシー比較、診断用 JSON/CSV レポート。
 - 任意の CUDA ONNX Runtime バッチ lane-policy フック。
 
@@ -31,7 +35,7 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 実行だけなら Windows リリース zip を使います。
 
 ```text
-KeyWeaver-v1.2.0-win64-<timestamp>.zip
+KeyWeaver-v1.3.0-win64-<timestamp>.zip
 ```
 
 中身:
@@ -114,10 +118,10 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 リリースパッケージ:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.2.0
+.\scripts\package_release.ps1 -Version 1.3.0
 ```
 
-package script は Release ビルド、unit test、public header smoke、GUI smoke、CLI dry-run smoke、サンプル変換、再変換ガード、BMS ガードを実行し、`dist/release/` に zip と `.sha256` を作成します。
+package script は Release ビルド、登録された全 CTest（NK2 安全性・phrase・CLI 回帰を含む）、public header smoke、GUI smoke、CLI dry-run smoke、サンプル変換、再変換ガード、BMS ガードを実行し、`dist/release/` にアーカイブと `.sha256` を作成します。自動検査は構造的安全性と決定性を確認するもので、プレイ感の評価には実際の比較が必要です。
 
 ## 任意の ONNX CUDA バッチ経路
 
@@ -149,12 +153,12 @@ ONNX メモ:
 ソースパッケージ名:
 
 ```text
-KeyWeaver-v1.2.0-source-<timestamp>.zip
+KeyWeaver-v1.3.0-source-<timestamp>.zip
 ```
 
-プロジェクトソース、文書、モデル、スクリプト、リリース diff 成果物を含みます。`.git`、ローカル agent 指示、ビルドフォルダ、古いリリース zip は除外します。
+明示的に選択した追跡済みプロジェクトファイルと最新の NK2 ソース・テスト・文書を含みます。個人の音声・学習実験、ローカル MP3・譜面・OSZ、`AGENTS.md` などのローカル agent 指示、`.git`、ビルドフォルダ、古いリリース、作業ツリーの diff 成果物は除外します。
 
-リリースには、src/nk2/ 配下の 8 ファイルだけを収録した KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip も含まれます。
+`KeyWeaver-NK2-source-1K-18K-v1.3.0-<timestamp>.zip` は、独立安全性検査を含む `src/nk2/` の 10 ファイルを収録します。確認・統合用であり、アプリのビルドには全ソース版を使用してください。
 
 ## 重要文書
 

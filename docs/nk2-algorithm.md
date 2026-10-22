@@ -33,6 +33,70 @@ use the target key field more like an authored target-key chart.
 
 ## Current Implementation Scope
 
+The CLI resolves unqualified `--engine nk2` conversions per input: source 7K
+uses B phrase search for 4K/5K and E Source LN for 8K/10K. Other pairs retain
+the native fallback. `--nk2-mode auto`, also the GUI's NK2 default, adopts the
+same 7K choices with a faithful fallback for other pairs. Explicit mode,
+search, or C/D/E/F options and stream transforms bypass adoption. Classic is
+still the default engine; the core mode enum and `Mode::Native` default are
+unchanged. The legacy flow remains available through explicit mode/search
+selection, including `--nk2-mode faithful --nk2-search off`.
+
+The faithful phrase solver and separate output auditor are described in
+[`nk2-phrase-search.md`](nk2-phrase-search.md). Phrase search supports
+7K-to-4K/5K/8K/10K and manual 4K-to-5K/7K experiments without lower-key roll
+rescue. `--nk2-phrase-support` enables C for 7K-to-8K/10K or 4K-to-5K/7K;
+automatic E includes this stage. The post-placement overlay preserves the B
+source placements, adds only taps, and applies a
+500ms guard without the legacy same-source exception. Its global budget is
+ceil(source notes * 0.12), with at most four additions per 2000ms window and
+one per timestamp; the completed output must pass the independent audit.
+
+The additional `--nk2-phrase-dense-ln` option preserves that entire C output
+and appends a D layer of taps and generated holds. It raises the total added
+budget to ceil(source notes * 0.35), with a maximum of ten per 2000ms window
+and two per timestamp (including C). Generated holds are limited to
+ceil(source notes * 0.12), three per window and one per timestamp. They copy
+original 200..2000ms spans or join original endpoints over 200..800ms. The
+whole closed interval is checked against every original/generated note on
+the chosen lane, in addition to the 500ms head guard. Explicit B/C selections
+remain available.
+
+`--nk2-phrase-source-ln` selects an alternative E overlay and requires the
+phrase, support, and dense options above. E starts from the same immutable C,
+not from D. A generated 200..2000ms LN must fit entirely inside one original
+valid LN interval; overlapping or adjacent source LNs cannot be stitched into
+a longer allowed interval. Heads use retained source starts and tails use
+source heads/tails. Candidate durations sample short, one-beat, two-beat, and
+longer available spans with penalties for repeated duration classes. Separate
+generated-LN lane counts and the preceding LN lane/side influence lane ranking.
+These deterministic preferences never override safety or the existing D budgets.
+The independent auditor counts `generatedHoldsOutsideSourceLn` in all modes and
+requires zero when `sourceLnCoverageRequired` is true (E/F). Explicit B/C/D
+placements remain unchanged. Source material or lack of safe room can still
+limit diversity or result in zero generated LNs.
+
+`--nk2-phrase-source-ln-boost` requires the complete E option chain, is limited
+to 7K-to-8K/10K, and enables
+F. It first completes E unchanged, then reuses the same covered-LN candidate
+selection with higher budgets and no additional tap pass. All E notes survive
+with identical fields. The total generated-note budget (including C/E) is
+ceil(source notes * 0.50), and the generated-LN budget is ceil(source notes *
+0.22). Per 2000ms window, the total budget is ceil(retained source notes * 0.50)
+clamped to 1..14, with at most five generated LNs. Per timestamp it permits
+three generated notes, at most two of them LNs. E's counts consume those
+budgets and its generated LNs seed the lane/duration distribution. Length
+limits, original rhythmic endpoints, single-source-LN containment, 500ms
+head separation, and whole-interval collision checks remain unchanged.
+`support.sourceLnBoostHoldAccepted` counts only new F LNs beyond E;
+`placement.addedHoldNotes` and `support.denseHoldAccepted` include E's LNs.
+
+Phrase compression uses omission without retiming or generated notes. Manual
+4K-to-5K/7K supports B/C/D/E, but not F, and is never automatically adopted.
+B disables the legacy 4K-to-5K fill exception, so it adds no notes. C/D/E use
+their ordinary phrase budgets and 500ms support guard for these experiments.
+Explicit legacy 4K-to-5K behavior remains available.
+
 Current source files:
 
 ```text
@@ -41,6 +105,7 @@ src/nk2/
   layout_model.hpp/.cpp
   nk2_report.hpp/.cpp
   nk2_convert.hpp/.cpp
+  safety_audit.hpp/.cpp
 ```
 
 Current public entrypoints:
@@ -56,17 +121,19 @@ Current supported behavior:
   output.
 - Same-key conversion is a no-op unless `--nk2-mode transform` is selected.
 - Non-report NK2 conversion supports every experimental 1K..18K source/target pair, including upward and downward conversion.
-- 7K -> 10K uses the dedicated `nk2-7k10k-panel-bridge-fullfield` prototype.
-- Other non-same 1K..18K pairs, plus explicit same-K transform, use `nk2-generic-nk-relane-compress`.
-- Same-time chord slices use a small local beam solver before falling back to
+- Legacy 7K -> 10K uses the dedicated `nk2-7k10k-panel-bridge-fullfield` prototype.
+- Other legacy non-same 1K..18K pairs, plus explicit same-K transform, use `nk2-generic-nk-relane-compress`.
+- Legacy same-time chord slices use a small local beam solver before falling back to
   the older note-by-note placement path.
-- Lower-key tap overflow can be rescued by short safe rolls before a source tap
+- Legacy lower-key tap overflow can be rescued by short safe rolls before a source tap
   is counted as dropped.
-- 4K -> 5K is a special generic branch that can add fill/support notes even in
-  faithful mode.
+- Outside phrase search, 4K -> 5K is a special generic branch that can add
+  fill/support notes even in faithful mode.
 - Support-note generation runs for higher-key 1K..18K NK2 pairs in native and
-  harder modes; 4K -> 5K also enables it in faithful mode.
-- Support notes are tap-only in the current milestone.
+  harder modes; legacy 4K -> 5K also enables it in faithful mode. Phrase C/D/E
+  supports 7K -> 8K/10K and manual 4K -> 5K/7K.
+- Support notes are tap-only except in the D/E/F layers; automatic 7K -> 8K/10K
+  selects E.
 
 Current non-goals:
 
@@ -74,7 +141,7 @@ Current non-goals:
 - NK2 does not replace Classic policy locks.
 - NK2 does not perform full-song beam search.
 - NK2 does not retime source notes as a normal repair.
-- NK2 does not synthesize generated LNs in the current milestone.
+- NK2 does not generate LNs outside the D/E/F dense layers.
 - NK2 does not yet use profile scoring to search multiple candidate charts.
 
 ## Core Contracts
@@ -92,8 +159,9 @@ Hard or near-hard contracts:
 - Avoid created target jacks when a safe alternative exists.
 - Preserve source jacks as source jacks instead of counting them as created
   target jacks.
-- Drop source taps only after strict placement and lower-key roll rescue fail.
-- Keep generated support notes tap-only.
+- In legacy lower-key conversion, drop source taps only after strict placement
+  and roll rescue fail. Phrase search omits unsafe notes without retiming them.
+- Keep generated support notes tap-only outside the D/E/F dense layers.
 - Keep generated support notes traceable by ID and report provenance.
 
 Style contracts:
@@ -119,16 +187,24 @@ struct NK2Options {
     LayoutWeights layoutWeights;
     int sameTimeEpsilonMs = 2;
     bool superSymmetry = false;
+    bool phraseSearch = false;
+    bool phraseSupport = false;
+    bool phraseDenseLn = false;
+    bool phraseSourceLn = false;
+    bool phraseSourceLnBoost = false;
+    bool independentSafetyAudit = false;
 };
 ```
 
-Modes:
+Modes (`auto` is a front-end policy, not a core enum value):
 
-- `native`: default NK2 feel target. It balances source identity with target-key
-  authorship and allows limited support notes where enabled.
+- `native`: core default and implicit CLI fallback outside adopted pairs. It
+  balances source identity with target-key authorship and allows limited support
+  notes where enabled.
 - `faithful`: preservation-heavy mode. For normal NK2 paths it disables support
-  notes; 4K -> 5K is the current exception because that branch exists to fill
-  the added lane.
+  notes; legacy 4K -> 5K fills the added lane. Phrase B has no additions,
+  including manual 4K -> 5K. Phrase C/D/E overlays preserve B placements before
+  adding notes for their supported expansion pairs.
 - `harder`: allows a higher support-note budget.
 - `transform`: reserved for same-key transform behavior.
 - `report`: analysis-only; no chart mutation.
@@ -666,21 +742,28 @@ Current jack window for placement is `500 ms`.
 
 ### Unified Strict Acceptance
 
-Every 1K..18K path, including the dedicated 7K -> 10K prototype, uses
+Every legacy 1K..18K path, including the dedicated 7K -> 10K prototype, uses
 `chooseLaneStrict()` and accepts only candidates that pass all gates:
 
 ```text
 no same-time collision
 no LN conflict
-no created target jack unless continuing a source jack
+no created target jack except continuation on the preceding target lane of that source lane
 ```
 
 The converter computes collision/LN and recent-jack lane masks once for each
 note and placement history. Candidate ranking reuses the jack mask, and strict
 placement, local-beam states, and roll attempts share the same mask-based gates.
-This removes candidate-by-candidate scans without changing score order or the
-source-jack exception. Same-time checks cover all placed notes, including taps
-rolled from an earlier slice onto a later source timestamp.
+Same-time and jack checks cover all placed notes, including taps rolled from an
+earlier slice onto either side of the current timestamp. Placement history is
+not necessarily chronological, so an old entry cannot terminate the jack scan.
+The past source-jack exception applies only to the immediately preceding target
+lane for that same source lane. It no longer clears the recent-jack mask across
+all lanes merely because a source jack is continuing; that bug could create
+unrelated target repeats in the legacy 5K output. The exception never permits a
+new jack into a future placed note from a different source lane. This also applies to
+negative roll offsets: an unsafe backward roll is rejected just like a forward
+roll, even when dropping the overflow tap is the only safe choice.
 
 If no candidate passes, it returns no lane. For lower-key tap overflow, NK2 then
 tries short safe roll offsets before the source tap is dropped.
@@ -758,8 +841,9 @@ candidate ranking model, and strict lane acceptance.
 
 For higher-key generic conversions, native and harder modes can add the same
 tap-only LN, strong-beat, and mirror support events used by the 7K -> 10K path.
-Faithful mode remains source-count-preserving except for the 4K -> 5K fill
-exception.
+Legacy faithful mode remains source-count-preserving except for the 4K -> 5K
+fill exception. Phrase B disables that exception, while C/D/E explicitly add
+their separately budgeted layers.
 
 For lower-key conversions, dropped notes represent objects that could
 not be placed or safely rolled without collision, LN conflict, or created-jack
@@ -767,9 +851,11 @@ damage.
 
 ## 4K -> 5K Fill Exception
 
-4K -> 5K is the first generic fill branch. It intentionally adds safe support
+Legacy 4K -> 5K is the first generic fill branch. It intentionally adds safe support
 notes even in faithful mode because the purpose of this branch is to occupy the
-new fifth lane without damaging the source chart.
+new fifth lane without damaging the source chart. Phrase B does not use this
+branch, and manual phrase C/D/E use the general phrase budgets and 500ms guard
+instead of these special fill constants.
 
 Special constants:
 
@@ -789,13 +875,16 @@ treated as unsafe support repetition too aggressively.
 ## Support Notes
 
 Support notes are generated after original notes are placed and sorted. They are
-tap-only, source-related, budgeted, safety-gated, and provenance-tagged.
+source-related, budgeted, safety-gated, and provenance-tagged. The following
+base generation pass remains tap-only; dense LN generation appends a separate
+layer after that pass, as described in `nk2-phrase-search.md`.
 
 Support generation currently runs when:
 
 ```text
 higher-key 1K..18K native/harder NK2 conversion
-or 4K -> 5K faithful/native/harder NK2 conversion
+or legacy 4K -> 5K faithful/native/harder NK2 conversion
+or faithful phrase C/D/E: 7K -> 8K/10K or manual 4K -> 5K/7K
 ```
 
 Lower-key and same-key NK2 conversions do not add support notes.
@@ -838,10 +927,13 @@ Global budget:
 
 ```text
 report mode:      0
-faithful mode:    0, except 4K -> 5K
+faithful mode:    0, except legacy 4K -> 5K or phrase support
+phrase support:  ceil(sourceNotes * 0.12), minimum 1 for nonempty input
+dense LN:        ceil(sourceNotes * 0.35) total, including phrase support
+source LN boost: ceil(sourceNotes * 0.50) total, including unchanged E
 native mode:      ceil(sourceNotes * 0.12), minimum 1
 harder mode:      ceil(sourceNotes * 0.18), minimum 2
-4K -> 5K:         ceil(sourceNotes * 0.12), minimum 8
+legacy 4K -> 5K:  ceil(sourceNotes * 0.12), minimum 8
 ```
 
 Phrase windows are deterministic `2000 ms` buckets:
@@ -857,7 +949,7 @@ native: ceil(sourceNotesInWindow * 0.12), min 1, max 4
 harder: ceil(sourceNotesInWindow * 0.18), min 2, max 6
 ```
 
-4K -> 5K phrase budget:
+Legacy 4K -> 5K per-window budget (not phrase search):
 
 ```text
 ceil(sourceNotesInWindow * 0.30), min 3, max 12
@@ -903,7 +995,7 @@ A support candidate is rejected if another note on the same lane:
 - has an active hold body over the candidate time
 - is within the guarded same-lane gap
 
-Guarded gap:
+Legacy guarded gap (phrase support always uses 500 ms without a source-jack exception):
 
 ```text
 same source lane: default 120 ms, 4K -> 5K 80 ms
@@ -991,7 +1083,8 @@ same-lane notes inside the support jack window are counted as:
 - `preservedSourceJacks` when source lanes match
 - `createdJacks` when source lanes differ
 
-The support jack window is usually `500 ms`, but 4K -> 5K uses `240 ms`.
+The support jack window is usually `500 ms`, but legacy 4K -> 5K uses `240 ms`.
+Manual 4K -> 5K/7K phrase support retains the strict `500 ms` guard.
 
 ## Layout Scores
 
@@ -1134,7 +1227,13 @@ Relevant CLI options:
 
 ```text
 --engine classic|nk2
---nk2-mode native|faithful|harder|transform|report
+--nk2-mode auto|native|faithful|harder|transform|report
+--nk2-search off|phrase
+--nk2-phrase-support
+--nk2-phrase-dense-ln
+--nk2-phrase-source-ln
+--nk2-phrase-source-ln-boost
+--nk2-audit
 --nk2-native-weight <n>
 --nk2-remix-weight <n>
 --nk2-layout-weight-panel <n>
@@ -1146,6 +1245,8 @@ Relevant CLI options:
 Examples:
 
 ```bash
+build/KeyWeaver.exe samples/simple_7k_ln.osu --target 5 --engine nk2 --dry-run
+build/KeyWeaver.exe samples/simple_7k_ln.osu --target 10 --engine nk2 --nk2-mode auto --dry-run
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode report --report dist/nk2_7k10k_intent.json
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode faithful --dry-run
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode native --out dist/simple_7k_10k_nk2.osu --report dist/nk2_7k10k.json
@@ -1153,7 +1254,14 @@ build/KeyWeaver.exe samples/simple_4k.osu --source 4 --target 5 --engine nk2 --n
 build/KeyWeaver.exe samples/simple_7k_ln.osu --source 7 --target 10 --engine nk2 --nk2-mode faithful --stream-transform super-symmetry
 ```
 
-The output difficulty marker for NK2 is:
+The first two examples select adopted B 5K and E 10K. Explicit faithful/native
+examples retain the legacy selection. `--nk2-mode auto --nk2-search off`
+disables adoption and selects legacy faithful. `--nk2-audit` alone does not
+disable adoption; phrase output is always independently audited before writing.
+In mixed-source batches the CLI resolves each file before naming/reserving its
+output, converting it, and auditing it.
+
+The base output difficulty marker for NK2 is:
 
 ```text
 KeyWeaverNK2-<target>K
@@ -1163,21 +1271,29 @@ KeyWeaverNK2-<target>K-sSym when Super Symmetry is enabled
 If the existing version name already contains `KeyWeaver`, NK2 does not append a
 second marker.
 
+Phrase variants append `-phrase`, `-phrase-notes`, `-phrase-notes-dense-ln`,
+`-phrase-notes-dense-ln-source-ln`, or the latter plus `-boost`. Automatic
+selection uses the resolved B/E marker. The GUI uses a separate `NK2-auto`
+filename tag so its automatic outputs do not replace manually selected variants.
+
 ## GUI Surface
 
-The GUI exposes NK2 as an experimental single-chart algorithm. Batch and matrix
-flows remain NK1-only in the current milestone.
+The GUI exposes NK2 as an experimental single-chart and batch algorithm.
+The overall algorithm default remains NK1 (Classic), and Matrix remains
+Classic-only.
 
 Expected GUI model:
 
 ```text
 Algorithm: NK1 (Classic) / NK2 (Experimental)
-NK2 modes: faithful / native / harder / transform
+NK2 modes: Auto (7K presets) / faithful / faithful + phrase / faithful + phrase + notes / faithful + phrase + dense LN / faithful + phrase + source LN / faithful + phrase + source LN+ / native / harder / transform
 Stream modes: off / super-symmetry for NK2
 ```
 
 The GUI shells out to the CLI and reads the report, so NK2 GUI behavior should
-stay consistent with the CLI options above.
+stay consistent with the CLI options above. Its default `auto` choice forwards
+`--nk2-mode auto`, including faithful fallback for non-7K inputs. Existing manual
+B/C/D/E/F choices and filenames remain available.
 
 ## Tests And Acceptance
 
@@ -1222,7 +1338,12 @@ report mode does not mutate charts
 same-time local solver reports windows/candidates/fallbacks
 lower-key tap overflow reports rolled-note rescue
 support accepted counters match added notes
-support notes are tap-only
+base support notes are tap-only; dense LN tests verify whole-interval safety
+source LN tests verify source coverage, unchanged C, duration/lane diversity and determinism
+source LN boost tests verify unchanged E, LN-only additions, coverage and expanded budgets at 8K/10K
+5K phrase compression tests verify omitted notes are counted, with no additions or retiming
+manual 4K-to-5K/7K tests verify B adds nothing, E preserves C and source coverage, and F is rejected
+CLI adoption tests compare implicit/auto output bytes to explicit B/E and verify mixed-source batch fallback
 ```
 
 For documentation-only changes, a build is not usually needed. For NK2 behavior
@@ -1318,9 +1439,13 @@ design document. Known gaps:
 
 - Intent graph is still a summary, not a full object graph.
 - There is no full-song multi-candidate solver or beam search.
+- Phrase search is limited to two-beat chunks (48 notes, 24 states), faithful
+  7K-to-4K/5K/8K/10K or manual 4K-to-5K/7K, and has no full-song optimality guarantee.
 - Profile-guided phrase scoring is report-only.
-- Support notes are tap-only.
-- Lower-key conversion uses strict relaning and safe short-roll rescue, but still
+- Generated LNs are limited to D/E for 7K -> 8K/10K and manual 4K -> 5K/7K,
+  plus F for 7K -> 8K/10K. Automatic 7K expansion selects E; manual playtesting
+  is still required to judge the generated patterns.
+- Legacy lower-key conversion uses strict relaning and safe short-roll rescue, but still
   lacks phrase-aware merge ranking across full phrases for impossible overflow.
 - Strong-beat detection is intentionally simple.
 - Manual playtest is still required for authored-feel acceptance.
@@ -1333,7 +1458,7 @@ Natural next steps:
 - Add a candidate solver that can compare multiple local placements before
   committing.
 - Make support generation available for more higher-key pairs.
-- Add generated-LN support only after tap support is consistently safe.
+- Broaden generated-LN policies only after comparing the bounded dense overlay in play.
 - Use profile-guided phrase scores to choose among candidate variants.
 - Add stronger lower-key merge ranking before dropping source notes.
 - Implement same-key transform mutation for `nk2-mode transform`.

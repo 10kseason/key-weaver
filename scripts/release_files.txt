@@ -1,0 +1,22 @@
+# Explicit runtime contents: local experiments and generated charts are excluded.
+docs/algorithm-lock-v0.5.5.md
+docs/algorithm-lock-v0.6.0.md
+docs/algorithm-lock-v0.6.1.md
+docs/code-architecture.md
+docs/design-10k-fullfield-remix.md
+docs/lane-policy-student.md
+docs/nk2-algorithm.md
+docs/nk2-design.md
+docs/nk2-phrase-search.md
+models/lane_policy_student_mlp_u_e_circusgalop.onnx
+profiles/README.md
+profiles/keyweaver_10k_broad_style_v1.json
+samples/README.md
+samples/simple_4k.osu
+samples/simple_7k_ln.osu
+samples/simple_bms_4k.bms
+scripts/build_target_k_profile.py
+scripts/package_release.ps1
+scripts/package_nk2_comparison.py
+scripts/release_files.txt
+scripts/u_e_10k_curated_patterns.txt

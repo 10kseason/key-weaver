@@ -1,4 +1,4 @@
-# KeyWeaver v1.2.0
+# KeyWeaver v1.3.1
 
 語言: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,11 @@ KeyWeaver 是一個以 C++20/CMake 製作的鍵數轉換工具，用於 osu!mani
 
 ## 本版本定位
 
-`v1.2.0` 將實驗性 NK2 擴充至 1K-18K 的全部 source/target 組合，包括降鍵轉換與同鍵轉換，並提供已驗證的 Windows 套件、完整原始碼包與 NK2 純原始碼包。
+`v1.3.1` 將手動 NK2 預設 A–F 擴展至 1K–18K 的全部增減鍵數組合，並為 GUI Target 新增 1K–3K。保留 7K 預設選擇、安全檢查與 Classic 預設引擎。提供 Windows 套件、完整專案原始碼，以及包含 10 個檔案的 NK2 專用原始碼包。
+
+- GUI 的 `Auto (7K presets)` 對原始 7K 輸入選擇：4K/5K 使用 B，8K/10K 使用 E，其餘組合使用 faithful。CLI 僅指定 `--engine nk2` 時採用相同的 7K 預設值，其餘組合仍為 native。明確指定的模式、搜尋、加音符選項或 stream 轉換優先於自動選擇。
+- GUI 手動選擇為 `A - Legacy faithful`、`B - Phrase only`、`C - Phrase + taps`、`D - Dense taps + LN`、`E - Source LN`、`F - Source LN+`；保留 `native`、`harder`、`transform`。
+- 手動 A–F 均支援 1K–18K 的全部組合，可增加或減少鍵數。B 不新增音符或移動時間；C–F 保留基礎配置，只在安全空位新增音符。E/F 的生成 LN 必須完整包含於一個原始 LN 內；沒有安全空位時新增量可以為零。同鍵數 A–F 維持原樣，重新配置軌道請用 `transform`。phrase 需要 faithful、stream off，且通過獨立檢查後才儲存。詳見[搜尋與比較指南](docs/nk2-phrase-search.md)。
 
 主要能力:
 
@@ -15,12 +19,12 @@ KeyWeaver 是一個以 C++20/CMake 製作的鍵數轉換工具，用於 osu!mani
 - Source key 自動偵測與手動 override。
 - GUI Source 支援 `auto` 與 `1`-`18`。
 - 批次模式中選擇數字 Source 時，只轉換相符 source-key 的譜面，其餘略過。
-- GUI Target 支援 4K-18K。NK2 CLI/core 支援 1K-18K 的全部 source/target 組合，包括從高鍵數轉換到低鍵數。
+- GUI Target 支援 1K-18K。NK2 CLI/core 支援 1K-18K 的全部 source/target 組合，包括從高鍵數轉換到低鍵數。
 - 未指定 `--out` / `--out-dir` 時，輸出寫在輸入譜面旁。
 - 以 `--batch`、`--input-list`、`--jobs` 進行平行 CLI 批次轉換，並輸出進度與摘要。
 - Classic 轉換包含 collision、LN、distance、jack 安全檢查。
 - 實驗性 NK2 模式: `native`、`faithful`、`harder`、`transform`；同鍵轉換只在 `transform` 中執行，`report` 僅限單一輸入分析。
-- GUI 10K 轉換預設使用 Full-Field Mirror-Remix。
+- Classic GUI 的 10K 轉換預設使用 Full-Field Mirror-Remix。
 - 用於品質、策略比較、診斷的 JSON/CSV 報告。
 - 可選的 CUDA ONNX Runtime 批次 lane-policy hook。
 
@@ -31,7 +35,7 @@ KeyWeaver 是一個以 C++20/CMake 製作的鍵數轉換工具，用於 osu!mani
 只想執行工具時請使用 Windows 發布 zip:
 
 ```text
-KeyWeaver-v1.2.0-win64-<timestamp>.zip
+KeyWeaver-v1.3.1-win64-<timestamp>.zip
 ```
 
 套件內容:
@@ -50,7 +54,7 @@ KeyWeaver-v1.2.0-win64-<timestamp>.zip
 3. 若 GUI 未自動偵測，手動選擇 `KeyWeaver.exe`。
 4. 選擇或拖入 osu!mania/BMS 系列譜面。
 5. Source 選擇 `auto` 或 `1`-`18`。
-6. Target 選擇 `4`-`18`。
+6. Target 選擇 `1`-`18`。
 7. 選擇 Classic 或 NK2。
 8. 按 Convert 或 Batch Folder。
 
@@ -114,10 +118,10 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 發布套件:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.2.0
+.\scripts\package_release.ps1 -Version 1.3.1
 ```
 
-package script 會執行 Release 建置、unit test、public header smoke、GUI smoke、CLI dry-run smoke、樣本轉換、reconversion guard、BMS guard，並在 `dist/release/` 寫出 zip 與 `.sha256`。
+package script 會執行 Release 建置、所有已註冊 CTest（包括 NK2 安全、phrase 與 CLI 回歸）、public header smoke、GUI smoke、CLI dry-run smoke、樣本轉換、reconversion guard 與 BMS guard，並在 `dist/release/` 寫出壓縮包與 `.sha256`。自動檢查驗證結構安全與確定性，實際遊玩品質仍需人工比較。
 
 ## 可選 ONNX CUDA 批次路徑
 
@@ -149,12 +153,12 @@ ONNX 說明:
 原始碼套件名稱格式:
 
 ```text
-KeyWeaver-v1.2.0-source-<timestamp>.zip
+KeyWeaver-v1.3.1-source-<timestamp>.zip
 ```
 
-包含專案原始碼、文件、模型、腳本與發布 diff 產物。刻意排除 `.git`、本機 agent 指示、建置目錄與舊發布 zip。
+包含明確選定的已追蹤專案檔案，以及最新 NK2 原始碼、測試與文件。排除私人音訊/訓練實驗、本機 MP3/譜面/OSZ、`AGENTS.md` 等本機 agent 指示、`.git`、建置目錄、舊發布包與工作目錄 diff 產物。
 
-發佈頁另提供 KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip，其中只包含 src/nk2/ 下的 8 個檔案。
+`KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip` 包含 `src/nk2/` 下的 10 個檔案，包括獨立安全檢查器，供檢閱與整合使用。建置應用程式請使用完整原始碼包。
 
 ## 重要文件
 

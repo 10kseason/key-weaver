@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.3.1",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -62,14 +62,12 @@ try {
     if (-not $SkipBuild) {
         & cmake -S $Root -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=Release
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
-        & cmake --build $BuildDir --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv_public_header_smoke
+        & cmake --build $BuildDir --parallel 4
         if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
     }
 
-    & (Join-Path $BuildDir "keyconv_tests.exe")
-    if ($LASTEXITCODE -ne 0) { throw "keyconv_tests failed" }
-    & (Join-Path $BuildDir "keyconv_public_header_smoke.exe")
-    if ($LASTEXITCODE -ne 0) { throw "keyconv_public_header_smoke failed" }
+    & ctest --test-dir $BuildDir --output-on-failure
+    if ($LASTEXITCODE -ne 0) { throw "CTest failed" }
 
     $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $PackageName = "KeyWeaver-v$Version-win64-$Stamp"
@@ -102,12 +100,19 @@ try {
     }
     Get-ChildItem -LiteralPath $Root -Filter "README*.md" -File |
         Copy-Item -Destination $PackageDir
-    foreach ($dir in @("samples", "profiles", "docs")) {
-        Copy-Item -LiteralPath (Join-Path $Root $dir) -Destination (Join-Path $PackageDir $dir) -Recurse
-    }
-    $ModelsDir = Join-Path $Root "models"
-    if (Test-Path $ModelsDir) {
-        Copy-Item -LiteralPath $ModelsDir -Destination (Join-Path $PackageDir "models") -Recurse
+    # An allowlist keeps private local experiments and generated songs out of
+    # publishable packages, and also works from a source ZIP without Git.
+    foreach ($Entry in Get-Content -LiteralPath (Join-Path $ScriptDir "release_files.txt")) {
+        $Relative = $Entry.Trim()
+        if (-not $Relative -or $Relative.StartsWith("#")) { continue }
+        $Source = [System.IO.Path]::GetFullPath((Join-Path $Root $Relative))
+        $Destination = [System.IO.Path]::GetFullPath((Join-Path $PackageDir $Relative))
+        if (-not $Source.StartsWith("$Root\", [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not $Destination.StartsWith("$PackageDir\", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Package entry must stay inside its source and destination roots"
+        }
+        New-Item -ItemType Directory -Force (Split-Path -Parent $Destination) | Out-Null
+        Copy-Item -LiteralPath $Source -Destination $Destination
     }
     $BundledModels = "(none)"
     $PackageModelsDir = Join-Path $PackageDir "models"
@@ -118,13 +123,6 @@ try {
             $BundledModels = "(none)"
         }
     }
-    Get-ChildItem -LiteralPath (Join-Path $PackageDir "samples") -Filter "* KeyWeaver*.osu" -File |
-        Remove-Item -Force
-    $PackageScriptsDir = Join-Path $PackageDir "scripts"
-    New-Item -ItemType Directory -Force $PackageScriptsDir | Out-Null
-    foreach ($scriptFile in @("build_target_k_profile.py", "package_release.ps1", "u_e_10k_curated_patterns.txt")) {
-        Copy-Item -LiteralPath (Join-Path $Root "scripts\$scriptFile") -Destination $PackageScriptsDir
-    }
 
     @"
 KeyWeaver v$Version Windows x64 package
@@ -133,11 +131,16 @@ Run keyconv_gui.exe for the GUI. Double-clicking KeyWeaver.exe also opens keycon
 Run KeyWeaver.exe from a terminal for CLI usage.
 osu!mania outputs default beside the source chart when --out is omitted.
 Drag files onto keyconv_gui.exe or KeyWeaver.exe to load them in the GUI first; set Target, then press Convert or Batch.
-The GUI Target selector supports 4K through 18K; 10K GUI Classic conversions use Full-Field Mirror-Remix by default.
+The GUI Target selector supports 1K through 18K; 10K GUI Classic conversions use Full-Field Mirror-Remix by default.
 Localized README files are included: README.md, README.en.md, README.ko.md, README.ja.md, README.zh-CN.md, README.zh-TW.md, README.ru.md.
 GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
 Source can be auto or 1K-18K in the GUI; numeric Source filters batch inputs to matching source-key charts.
 Experimental NK2 supports every 1K-18K source/target pair, including downward conversion and same-K transform relaning.
+GUI NK2 Auto (7K presets): source 7K uses B for 4K/5K and E for 8K/10K; other pairs use faithful.
+Select A-F to compare manual variants. B adds no notes; E adds taps/LNs only with full original-LN coverage for generated holds.
+All manual NK2 A-F presets support upward and downward 1K-18K pairs. C-F append only safe notes without rearranging the base output; safe additions may be zero. Same-key A-F stays unchanged; use transform for same-key relaning.
+CLI NK2 without explicit mode/search/note options uses the same source-7K defaults and native fallback for other pairs.
+Phrase outputs must pass the independent safety audit before being saved. See docs/nk2-phrase-search.md.
 Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
 CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart and auto-detects CPU worker count.
 BMS-family inputs stay BMS-family outputs (.bms, .bme, .bml, .pms); BMS to .osu output is intentionally rejected.
@@ -163,7 +166,7 @@ $BundledModels
 Bundled MinGW runtime DLLs:
 $($RuntimeDlls -join "`n")
 
-Build verification: Release CMake build, unit tests, public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, NK2 4K-to-18K and 7K-to-4K dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
+Build verification: Release CMake build, all CTest suites (including NK2 safety, all-key phrase/default and batch regressions), public header smoke, GUI smoke, CLI batch/auto-low/auto-more/preserve-convert/stream-transform dry-run smokes, NK2 4K-to-18K and 7K-to-4K dry-run smokes, osu!mania sample conversion/report, KeyWeaver mode-marker smoke, reconversion guard smoke, BMS-to-BMS sample conversion/report, broad profile dry-run smoke, packaged algorithm-lock doc, and BMS-to-.osu guard smoke.
 "@ | Set-Content -LiteralPath (Join-Path $PackageDir "PACKAGE_CONTENTS.txt") -Encoding UTF8
 
     @"
@@ -175,6 +178,34 @@ $($RuntimeDlls -join "`n")
     New-Item -ItemType Directory -Force $SmokeDir | Out-Null
     $Exe = Join-Path $PackageDir "KeyWeaver.exe"
     $Gui = Join-Path $PackageDir "keyconv_gui.exe"
+
+    $HelpText = & $Exe --help
+    if ($LASTEXITCODE -ne 0 -or $HelpText[0] -ne "KeyWeaver v$Version") {
+        throw "Packaged executable version does not match the requested release"
+    }
+    $HelpText | Set-Content -LiteralPath (Join-Path $SmokeDir "help.txt") -Encoding UTF8
+
+    # Exercise the shipped executable as well as the build-tree CTest targets.
+    foreach ($Target in @(4, 5, 8, 10)) {
+        $ReportPath = Join-Path $SmokeDir "nk2_auto_7k_to_$($Target)k.json"
+        & $Exe (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target $Target --engine nk2 --dry-run --report $ReportPath *> (Join-Path $SmokeDir "nk2_auto_$($Target)k.txt")
+        if ($LASTEXITCODE -ne 0) { throw "Packaged NK2 automatic preset smoke failed" }
+        $Report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
+        if (-not $Report.independentSafety.passed) { throw "Packaged NK2 preset audit failed" }
+    }
+    foreach ($Target in @(5, 7)) {
+        foreach ($Variant in @("B", "E")) {
+            $VariantArgs = @("--nk2-mode", "faithful", "--nk2-search", "phrase")
+            if ($Variant -eq "E") {
+                $VariantArgs += @("--nk2-phrase-support", "--nk2-phrase-dense-ln", "--nk2-phrase-source-ln")
+            }
+            $ReportPath = Join-Path $SmokeDir "nk2_4k_$($Variant)_$($Target)k.json"
+            & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --target $Target --engine nk2 @VariantArgs --dry-run --report $ReportPath *> (Join-Path $SmokeDir "nk2_4k_$($Variant)_$($Target)k.txt")
+            if ($LASTEXITCODE -ne 0) { throw "Packaged NK2 4K experiment smoke failed" }
+            $Report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
+            if (-not $Report.independentSafety.passed) { throw "Packaged NK2 4K experiment audit failed" }
+        }
+    }
 
     & $Exe (Join-Path $PackageDir "samples\simple_4k.osu") --source 4 --target 10 --dry-run --report (Join-Path $SmokeDir "sample_4k_to_10k.report.json") *> (Join-Path $SmokeDir "sample_4k_to_10k.console.txt")
     if ($LASTEXITCODE -ne 0) { throw "osu!mania sample smoke failed" }

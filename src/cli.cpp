@@ -44,7 +44,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v1.2.0";
+constexpr const char* kToolVersion = "v1.3.1";
 constexpr const char* kDefaultBatchOnnxPolicyModel = "lane_policy_student_mlp_u_e_circusgalop.onnx";
 constexpr const char* kLegacyBatchOnnxPolicyModel = "u_e_circusgalop_chart_dataset_lane_policy.onnx";
 using SteadyClock = std::chrono::steady_clock;
@@ -291,6 +291,15 @@ struct CliOptions {
     bool preserveConvert = false;
     keyconv::nk2::Engine engine = keyconv::nk2::Engine::Classic;
     keyconv::nk2::Mode nk2Mode = keyconv::nk2::Mode::Native;
+    bool nk2ModeProvided = false;
+    bool nk2AutoMode = false;
+    bool nk2PhraseSearch = false;
+    bool nk2PhraseSupport = false;
+    bool nk2PhraseDenseLn = false;
+    bool nk2PhraseSourceLn = false;
+    bool nk2PhraseSourceLnBoost = false;
+    bool nk2SearchProvided = false;
+    bool nk2Audit = false;
     double nk2NativeWeight = 0.5;
     double nk2RemixWeight = 0.5;
     int nk2LayoutWeightPanel = 3;
@@ -381,7 +390,17 @@ void printHelp(std::ostream& out) {
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
     out << "  --engine <engine>       classic | nk2. Default: classic. NK2 supports experimental 1K..18K conversion.\n";
-    out << "  --nk2-mode <mode>       native | faithful | harder | transform | report. Report is analysis-only.\n";
+    out << "  --nk2-mode <mode>       auto | native | faithful | harder | transform | report. Report is analysis-only.\n";
+    out << "                          With no NK2 mode/search/note options: 7K->4K/5K uses B, 7K->8K/10K uses E; otherwise native.\n";
+    out << "                          auto selects the same B/E defaults per file, with faithful fallback for other keys.\n";
+    out << "                          Explicit search/note options or Stream transforms disable automatic B/E selection.\n";
+    out << "  --nk2-search <method>   off | phrase. Phrase supports any 1K..18K source/target, faithful mode, Stream off.\n";
+    out << "  --nk2-phrase-support   Add safe taps after phrase search, including key-count reductions; additions may be zero.\n";
+    out << "  --nk2-phrase-dense-ln  Add more taps and LNs after phrase support; requires --nk2-phrase-support.\n";
+    out << "  --nk2-phrase-source-ln Vary generated LNs only inside source LN spans; requires --nk2-phrase-dense-ln.\n";
+    out << "  --nk2-phrase-source-ln-boost Add only extra LNs after Source LN; requires all Source LN flags.\n";
+    out << "                          Presets B-F support every 1K..18K pair; equal-key conversion stays a no-op.\n";
+    out << "  --nk2-audit             Independently audit NK2 output without changing its placement. Phrase search always audits.\n";
     out << "  --nk2-native-weight <n> Native authorship weight. Default: 0.5.\n";
     out << "  --nk2-remix-weight <n>  Remix expansion weight. Default: 0.5.\n";
     out << "  --nk2-layout-weight-panel <n> target-layout panel weight. Default: 3.\n";
@@ -568,12 +587,32 @@ std::filesystem::path defaultOutputPath(const std::filesystem::path& input,
 std::filesystem::path defaultNk2OutputPath(const std::filesystem::path& input,
                                            int targetKeys,
                                            keyconv::StreamTransformPolicy streamTransformPolicy,
-                                           const std::optional<std::filesystem::path>& outputDir = std::nullopt) {
+                                           const std::optional<std::filesystem::path>& outputDir = std::nullopt,
+                                           bool phraseSearch = false,
+                                           bool phraseSupport = false,
+                                           bool phraseDenseLn = false,
+                                           bool phraseSourceLn = false,
+                                           bool phraseSourceLnBoost = false) {
     const auto parent = outputDir.has_value()
                             ? *outputDir
                             : input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
     const auto extension = defaultChartExtension(input, targetKeys);
     std::string marker = "KeyWeaverNK2-" + std::to_string(targetKeys) + "K";
+    if (phraseSearch) {
+        marker += "-phrase";
+        if (phraseSupport) {
+            marker += "-notes";
+            if (phraseDenseLn) {
+                marker += "-dense-ln";
+                if (phraseSourceLn) {
+                    marker += "-source-ln";
+                    if (phraseSourceLnBoost) {
+                        marker += "-boost";
+                    }
+                }
+            }
+        }
+    }
     const auto streamTag = difficultyStreamTag(streamTransformPolicy);
     if (!streamTag.empty()) {
         marker += "-";
@@ -878,7 +917,28 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
         } else if (arg == "--engine") {
             options.engine = keyconv::nk2::parseEngineOrThrow(requireValue(i, args, arg));
         } else if (arg == "--nk2-mode") {
-            options.nk2Mode = keyconv::nk2::parseModeOrThrow(requireValue(i, args, arg));
+            const auto mode = requireValue(i, args, arg);
+            options.nk2AutoMode = mode == "auto";
+            options.nk2Mode = options.nk2AutoMode ? keyconv::nk2::Mode::Faithful
+                                               : keyconv::nk2::parseModeOrThrow(mode);
+            options.nk2ModeProvided = true;
+        } else if (arg == "--nk2-search") {
+            const auto method = requireValue(i, args, arg);
+            if (method != "off" && method != "phrase") {
+                throw std::runtime_error("--nk2-search must be off or phrase");
+            }
+            options.nk2PhraseSearch = method == "phrase";
+            options.nk2SearchProvided = true;
+        } else if (arg == "--nk2-phrase-support") {
+            options.nk2PhraseSupport = true;
+        } else if (arg == "--nk2-phrase-dense-ln") {
+            options.nk2PhraseDenseLn = true;
+        } else if (arg == "--nk2-phrase-source-ln") {
+            options.nk2PhraseSourceLn = true;
+        } else if (arg == "--nk2-phrase-source-ln-boost") {
+            options.nk2PhraseSourceLnBoost = true;
+        } else if (arg == "--nk2-audit") {
+            options.nk2Audit = true;
         } else if (arg == "--nk2-native-weight") {
             options.nk2NativeWeight = parseDouble(requireValue(i, args, arg), arg);
         } else if (arg == "--nk2-remix-weight") {
@@ -1426,6 +1486,40 @@ void validateOptions(const CliOptions& options) {
     if (options.engine == keyconv::nk2::Engine::NK2 && options.source.has_value() &&
         *options.source > keyconv::nk2::kMaxSupportedKeyCount) {
         throw std::runtime_error("NK2 --source must be between 1 and 18");
+    }
+    if ((options.nk2SearchProvided || options.nk2Audit || options.nk2PhraseSupport ||
+         options.nk2PhraseDenseLn || options.nk2PhraseSourceLn || options.nk2PhraseSourceLnBoost) &&
+        options.engine != keyconv::nk2::Engine::NK2) {
+        throw std::runtime_error("NK2 search, audit, and phrase note options require --engine nk2");
+    }
+    if (options.nk2PhraseSourceLnBoost && !options.nk2PhraseSourceLn) {
+        throw std::runtime_error(
+            "--nk2-phrase-source-ln-boost requires --nk2-phrase-source-ln and all its prerequisite phrase options");
+    }
+    if (options.nk2PhraseSourceLn &&
+        (!options.nk2PhraseDenseLn || !options.nk2PhraseSupport || !options.nk2PhraseSearch ||
+         options.nk2Mode != keyconv::nk2::Mode::Faithful ||
+         options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
+        throw std::runtime_error(
+            "--nk2-phrase-source-ln requires dense-ln/support/phrase flags, faithful mode, and --stream-transform off");
+    }
+    if (options.nk2PhraseDenseLn &&
+        (!options.nk2PhraseSupport || !options.nk2PhraseSearch || options.nk2Mode != keyconv::nk2::Mode::Faithful ||
+         options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
+        throw std::runtime_error(
+            "--nk2-phrase-dense-ln requires support/phrase flags, faithful mode, and --stream-transform off");
+    }
+    if (options.nk2PhraseSupport &&
+        (!options.nk2PhraseSearch || options.nk2Mode != keyconv::nk2::Mode::Faithful ||
+         options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
+        throw std::runtime_error(
+            "--nk2-phrase-support requires --nk2-search phrase, faithful mode, and --stream-transform off");
+    }
+    if (options.nk2PhraseSearch &&
+        (options.nk2Mode != keyconv::nk2::Mode::Faithful ||
+         options.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
+        throw std::runtime_error(
+            "--nk2-search phrase requires faithful mode and --stream-transform off");
     }
     if (options.tenKFullFieldRemix && *options.target != 10) {
         throw std::runtime_error("--ten-k-fullfield-remix requires --target 10");
@@ -2110,7 +2204,28 @@ void printPolicyComparison(const std::vector<PolicyComparisonRow>& rows,
     }
 }
 
-int runSingleConversion(const CliOptions& cli,
+void resolveNk2Defaults(CliOptions& cli, int sourceKeys) {
+    if (cli.engine != keyconv::nk2::Engine::NK2) return;
+    const bool explicitPhraseOptions = cli.nk2SearchProvided || cli.nk2PhraseSupport ||
+        cli.nk2PhraseDenseLn || cli.nk2PhraseSourceLn || cli.nk2PhraseSourceLnBoost;
+    if ((cli.nk2ModeProvided && !cli.nk2AutoMode) || explicitPhraseOptions ||
+        cli.streamTransformPolicy != keyconv::StreamTransformPolicy::Off || sourceKeys != 7) {
+        return;
+    }
+    if (*cli.target != 4 && *cli.target != 5 && *cli.target != 8 && *cli.target != 10) return;
+
+    // Resolve after each input is parsed. Mixed-key batches must not share an
+    // adopted mode, and audit/output naming must use the same effective flags.
+    cli.nk2Mode = keyconv::nk2::Mode::Faithful;
+    cli.nk2PhraseSearch = true;
+    if (*cli.target == 8 || *cli.target == 10) {
+        cli.nk2PhraseSupport = true;
+        cli.nk2PhraseDenseLn = true;
+        cli.nk2PhraseSourceLn = true;
+    }
+}
+
+int runSingleConversion(CliOptions cli,
                         const std::filesystem::path& input,
                         std::ostream& out = std::cout,
                         std::mutex* outputMutex = nullptr) {
@@ -2138,6 +2253,7 @@ int runSingleConversion(const CliOptions& cli,
                           : keyconv::parseOsu(inputText, parseOptions);
     parseTimeMs = elapsedMs(parseStart, SteadyClock::now());
     throwIfConvertedInput(input, chart);
+    resolveNk2Defaults(cli, cli.source.value_or(chart.meta.sourceKeyCount));
 
     keyconv::ConvertOptions convertOptions;
     convertOptions.sourceKeyCount = cli.source.value_or(chart.meta.sourceKeyCount);
@@ -2201,6 +2317,12 @@ int runSingleConversion(const CliOptions& cli,
         nk2Options.sourceKeyCount = convertOptions.sourceKeyCount;
         nk2Options.targetKeyCount = convertOptions.targetKeyCount;
         nk2Options.mode = cli.nk2Mode;
+        nk2Options.phraseSearch = cli.nk2PhraseSearch;
+        nk2Options.phraseSupport = cli.nk2PhraseSupport;
+        nk2Options.phraseDenseLn = cli.nk2PhraseDenseLn;
+        nk2Options.phraseSourceLn = cli.nk2PhraseSourceLn;
+        nk2Options.phraseSourceLnBoost = cli.nk2PhraseSourceLnBoost;
+        nk2Options.independentSafetyAudit = cli.nk2Audit;
         nk2Options.nativeWeight = cli.nk2NativeWeight;
         nk2Options.remixWeight = cli.nk2RemixWeight;
         nk2Options.layoutWeights.panel = cli.nk2LayoutWeightPanel;
@@ -2213,12 +2335,28 @@ int runSingleConversion(const CliOptions& cli,
         const auto nk2Start = SteadyClock::now();
         const auto nk2Result = keyconv::nk2::convertChart(chart, nk2Options);
         convertTimeMs = elapsedMs(nk2Start, SteadyClock::now());
+        // Diagnostic audits preserve legacy output. The opt-in search path must
+        // pass its independent audit before any chart can be written.
+        if (cli.nk2PhraseSearch &&
+            (!nk2Result.report.independentSafety.has_value() ||
+             !nk2Result.report.independentSafety->passed())) {
+            if (cli.report.has_value()) {
+                writeFile(*cli.report, keyconv::nk2::reportToJson(nk2Result.report));
+            }
+            throw std::runtime_error("NK2 phrase search failed its independent safety audit; no chart output written");
+        }
         auto outputPath = cli.out;
-        if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value()) {
+        if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value() &&
+            outputMutex == nullptr) {
             outputPath = defaultNk2OutputPath(input,
                                               convertOptions.targetKeyCount,
                                               cli.streamTransformPolicy,
-                                              cli.outDir);
+                                              cli.outDir,
+                                              cli.nk2PhraseSearch,
+                                              cli.nk2PhraseSupport,
+                                              cli.nk2PhraseDenseLn,
+                                              cli.nk2PhraseSourceLn,
+                                              cli.nk2PhraseSourceLnBoost);
         }
 
         if (!cli.batchQuiet) {
@@ -2236,7 +2374,23 @@ int runSingleConversion(const CliOptions& cli,
                                              : keyconv::exportOsu(nk2Result.chart, convertOptions.targetKeyCount);
             exportTimeMs = elapsedMs(exportStart, SteadyClock::now());
             const auto writeStart = SteadyClock::now();
-            writeFile(*outputPath, outputText);
+            if (!outputPath.has_value() && outputMutex != nullptr) {
+                // Reserve the suffix and write under one lock, just as Classic does.
+                // Different input folders can contain the same chart filename.
+                std::lock_guard<std::mutex> lock(*outputMutex);
+                outputPath = defaultNk2OutputPath(input,
+                                                 convertOptions.targetKeyCount,
+                                                 cli.streamTransformPolicy,
+                                                 cli.outDir,
+                                                 cli.nk2PhraseSearch,
+                                                 cli.nk2PhraseSupport,
+                                                 cli.nk2PhraseDenseLn,
+                                                 cli.nk2PhraseSourceLn,
+                                                 cli.nk2PhraseSourceLnBoost);
+                writeFile(*outputPath, outputText);
+            } else {
+                writeFile(*outputPath, outputText);
+            }
             writeTimeMs = elapsedMs(writeStart, SteadyClock::now());
             if (!cli.batchQuiet) {
                 out << "Output written: " << displayPath(*outputPath) << "\n";

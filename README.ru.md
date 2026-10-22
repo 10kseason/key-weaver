@@ -1,4 +1,4 @@
-# KeyWeaver v1.2.0
+# KeyWeaver v1.3.1
 
 Языки: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,11 @@ KeyWeaver - это инструмент на C++20/CMake для конверта
 
 ## Что представляет этот релиз
 
-`v1.2.0` расширяет экспериментальный NK2 на все пары source/target от 1K до 18K, включая понижение числа клавиш и преобразования с тем же числом клавиш, и поставляется с проверенным Windows-пакетом, полным архивом исходников и отдельным архивом NK2.
+`v1.3.1` расширяет ручные пресеты NK2 A–F на все пары 1K–18K для увеличения и уменьшения числа клавиш и добавляет 1K–3K в GUI Target. Пресеты 7K по умолчанию, проверки безопасности и основной движок Classic сохраняются. Доступны Windows-пакет, полный исходный код и отдельный архив из 10 файлов NK2.
+
+- `Auto (7K presets)` в GUI выбирает B для 7K→4K/5K и E для 7K→8K/10K; остальные пары используют faithful. CLI с одним `--engine nk2` выбирает те же пресеты для 7K, а для остальных пар — native. Явные параметры режима, поиска, добавления нот или stream-преобразования имеют приоритет над автоматическим выбором.
+- Ручные варианты GUI: `A - Legacy faithful`, `B - Phrase only`, `C - Phrase + taps`, `D - Dense taps + LN`, `E - Source LN`, `F - Source LN+`. Режимы `native`, `harder` и `transform` сохранены.
+- Ручные пресеты A–F доступны для всех пар 1K–18K при увеличении и уменьшении числа клавиш. B не добавляет нот и не меняет время. C–F добавляют только безопасные ноты, сохраняя базовое размещение. Новые LN в E/F целиком находятся внутри одной исходной LN; при отсутствии безопасного места добавлений может не быть. При одинаковом числе клавиш A–F сохраняют чарт; для перераспределения используйте `transform`. Phrase требует faithful и stream off; результат сохраняется после независимой проверки. См. [руководство по поиску и сравнению](docs/nk2-phrase-search.md).
 
 Основные возможности:
 
@@ -15,12 +19,12 @@ KeyWeaver - это инструмент на C++20/CMake для конверта
 - Автоопределение source key и ручной Source override.
 - GUI Source поддерживает `auto` и `1`-`18`.
 - В batch-режиме числовой Source конвертирует только совпадающие source-key чарты, остальные пропускаются.
-- GUI Target поддерживает 4K-18K. NK2 CLI/core поддерживает все пары source/target 1K-18K, включая конвертацию из большего числа клавиш в меньшее.
+- GUI Target поддерживает 1K-18K. NK2 CLI/core поддерживает все пары source/target 1K-18K, включая конвертацию из большего числа клавиш в меньшее.
 - Если `--out` / `--out-dir` не указаны, результат пишется рядом с исходным чартом.
 - Параллельный CLI batch через `--batch`, `--input-list`, `--jobs`, с прогрессом и итоговой сводкой.
 - Classic-конвертация с проверками collision, LN, distance и jack safety.
 - Экспериментальные режимы NK2: `native`, `faithful`, `harder`, `transform`; same-key конвертация выполняется только в `transform`, а `report` предназначен только для анализа одного входа.
-- GUI 10K по умолчанию использует Full-Field Mirror-Remix.
+- Classic в GUI для 10K по умолчанию использует Full-Field Mirror-Remix.
 - JSON/CSV отчеты для качества конвертации, сравнения политик и диагностики.
 - Опциональный batch-only ONNX Runtime lane-policy hook для CUDA-сборок.
 
@@ -31,7 +35,7 @@ KeyWeaver - это инструмент на C++20/CMake для конверта
 Если нужно только запустить инструмент, используйте Windows release zip:
 
 ```text
-KeyWeaver-v1.2.0-win64-<timestamp>.zip
+KeyWeaver-v1.3.1-win64-<timestamp>.zip
 ```
 
 Внутри пакета:
@@ -50,7 +54,7 @@ KeyWeaver-v1.2.0-win64-<timestamp>.zip
 3. Если GUI не нашел его автоматически, выберите `KeyWeaver.exe`.
 4. Выберите или перетащите osu!mania/BMS-family чарт.
 5. Установите Source в `auto` или значение `1`-`18`.
-6. Установите Target от `4` до `18`.
+6. Установите Target от `1` до `18`.
 7. Выберите Classic или NK2.
 8. Нажмите Convert или Batch Folder.
 
@@ -114,10 +118,10 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.2.0
+.\scripts\package_release.ps1 -Version 1.3.1
 ```
 
-Package script выполняет Release CMake build, unit tests, public-header smoke, GUI smoke, CLI dry-run smokes, sample conversions, reconversion guard, BMS guard и пишет zip плюс `.sha256` в `dist/release/`.
+Скрипт упаковки выполняет Release-сборку, все зарегистрированные CTest (включая регрессии безопасности NK2, phrase и CLI), public-header smoke, GUI smoke, CLI dry-run, преобразования образцов, проверки reconversion и BMS. Архивы и `.sha256` записываются в `dist/release/`. Автоматические проверки подтверждают структурную безопасность и детерминированность; качество игры требует ручного сравнения.
 
 ## Опциональный ONNX CUDA batch path
 
@@ -149,12 +153,12 @@ ONNX notes:
 Source package имеет имя:
 
 ```text
-KeyWeaver-v1.2.0-source-<timestamp>.zip
+KeyWeaver-v1.3.1-source-<timestamp>.zip
 ```
 
-Он содержит source, docs, models, scripts и release diff artifacts. Он намеренно исключает `.git`, локальные agent instructions, build folders и старые release zips.
+Архив содержит явно выбранные отслеживаемые файлы проекта и актуальные исходники, тесты и документацию NK2. Исключены личные эксперименты с аудио/обучением, локальные MP3/чарты/OSZ, `AGENTS.md` и другие локальные инструкции агентам, `.git`, каталоги сборки, старые архивы и diff рабочего дерева.
 
-В релиз также входит KeyWeaver-NK2-source-1K-18K-v1.2.0-<timestamp>.zip, содержащий только восемь файлов из src/nk2/.
+`KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip` содержит 10 файлов из `src/nk2/`, включая независимый аудитор безопасности, для изучения и интеграции. Для сборки приложения используйте полный архив исходников.
 
 ## Важные документы
 

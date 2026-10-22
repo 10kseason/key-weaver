@@ -95,6 +95,35 @@ std::string reportToJson(const NK2Report& report) {
     std::ostringstream out;
     out << "{\n";
     out << "  \"engine\": \"nk2\",\n";
+    out << "  \"phraseSearch\": {\"enabled\": " << (report.options.phraseSearch ? "true" : "false")
+        << ", \"supportNotes\": " << (report.options.phraseSupport ? "true" : "false")
+        << ", \"denseLn\": " << (report.options.phraseDenseLn ? "true" : "false")
+        << ", \"sourceLn\": " << (report.options.phraseSourceLn ? "true" : "false")
+        << ", \"sourceLnBoost\": " << (report.options.phraseSourceLnBoost ? "true" : "false")
+        << ", \"windows\": " << report.phraseSearchWindows
+        << ", \"candidates\": " << report.phraseSearchCandidates
+        << ", \"peakNotes\": " << report.phraseSearchPeakNotes << "},\n";
+    out << "  \"independentSafety\": ";
+    if (report.independentSafety) {
+        const auto& audit = *report.independentSafety;
+        out << "{\n    \"passed\": " << (audit.passed() ? "true" : "false") << ",\n";
+        out << "    \"sourceLnCoverageRequired\": " << (audit.sourceLnCoverageRequired ? "true" : "false") << ",\n";
+        out << "    \"generatedHoldsOutsideSourceLn\": " << audit.generatedHoldsOutsideSourceLn << ",\n";
+        out << "    \"invalidLanes\": " << audit.invalidLanes << ",\n";
+        out << "    \"invalidHolds\": " << audit.invalidHolds << ",\n";
+        out << "    \"sameTimeCollisions\": " << audit.sameTimeCollisions << ",\n";
+        out << "    \"longNoteConflicts\": " << audit.longNoteConflicts << ",\n";
+        out << "    \"createdLaneRepeats\": " << audit.createdLaneRepeats << ",\n";
+        out << "    \"preservedLaneRepeats\": " << audit.preservedLaneRepeats << ",\n";
+        out << "    \"retainedSourceNotes\": " << audit.retainedSourceNotes << ",\n";
+        out << "    \"droppedSourceNotes\": " << audit.droppedSourceNotes << ",\n";
+        out << "    \"addedNotes\": " << audit.addedNotes << ",\n";
+        out << "    \"retimedSourceNotes\": " << audit.retimedSourceNotes << ",\n";
+        out << "    \"changedHoldDurations\": " << audit.changedHoldDurations << ",\n";
+        out << "    \"unknownSourceNotes\": " << audit.unknownSourceNotes << "\n  },\n";
+    } else {
+        out << "null,\n";
+    }
     out << "  \"mode\": \"" << toString(report.options.mode) << "\",\n";
     out << "  \"superSymmetry\": " << (report.options.superSymmetry ? "true" : "false") << ",\n";
     out << "  \"chartMutated\": " << (report.chartMutated ? "true" : "false") << ",\n";
@@ -138,6 +167,8 @@ std::string reportToJson(const NK2Report& report) {
     out << "  \"placement\": {\n";
     out << "    \"outputNotes\": " << report.outputNotes << ",\n";
     out << "    \"addedNotes\": " << report.addedNotes << ",\n";
+    out << "    \"addedTapNotes\": " << report.addedTapNotes << ",\n";
+    out << "    \"addedHoldNotes\": " << report.addedHoldNotes << ",\n";
     out << "    \"droppedNotes\": " << report.droppedNotes << ",\n";
     out << "    \"localSolverWindows\": " << report.localSolverWindows << ",\n";
     out << "    \"localSolverCandidates\": " << report.localSolverCandidates << ",\n";
@@ -162,6 +193,12 @@ std::string reportToJson(const NK2Report& report) {
     out << "]\n";
     out << "  },\n";
     out << "  \"support\": {\n";
+    out << "    \"denseCandidates\": " << report.denseSupportCandidates << ",\n";
+    out << "    \"denseTapAccepted\": " << report.denseTapAccepted << ",\n";
+    out << "    \"denseHoldAccepted\": " << report.denseHoldAccepted << ",\n";
+    out << "    \"sourceLnBoostHoldAccepted\": " << report.sourceLnBoostHoldAccepted << ",\n";
+    out << "    \"denseRejectedByBudget\": " << report.denseRejectedByBudget << ",\n";
+    out << "    \"denseRejectedBySafety\": " << report.denseRejectedBySafety << ",\n";
     out << "    \"lnCandidates\": " << report.lnSupportCandidates << ",\n";
     out << "    \"lnAccepted\": " << report.lnSupportAccepted << ",\n";
     out << "    \"lnRejected\": " << report.lnSupportRejected << ",\n";
@@ -226,6 +263,24 @@ std::string reportToText(const NK2Report& report) {
     out << "Source keys: " << report.options.sourceKeyCount << "\n";
     out << "Target keys: " << report.options.targetKeyCount << "\n";
     out << "Super symmetry: " << (report.options.superSymmetry ? "on" : "off") << "\n";
+    out << "Phrase search: " << (report.options.phraseSearch ? "on" : "off")
+        << " supportNotes=" << (report.options.phraseSupport ? "on" : "off")
+        << " denseLn=" << (report.options.phraseDenseLn ? "on" : "off")
+        << " sourceLn=" << (report.options.phraseSourceLn ? "on" : "off")
+        << " sourceLnBoost=" << (report.options.phraseSourceLnBoost ? "on" : "off")
+        << " windows=" << report.phraseSearchWindows << " candidates=" << report.phraseSearchCandidates
+        << " peakNotes=" << report.phraseSearchPeakNotes << "\n";
+    if (report.independentSafety) {
+        const auto& audit = *report.independentSafety;
+        out << "Independent safety: " << (audit.passed() ? "PASS" : "FAIL")
+            << " collisions=" << audit.sameTimeCollisions << " lnConflicts=" << audit.longNoteConflicts
+            << " createdLaneRepeats=" << audit.createdLaneRepeats
+            << " invalidLanes=" << audit.invalidLanes << " invalidHolds=" << audit.invalidHolds
+            << " changedHoldDurations=" << audit.changedHoldDurations
+            << " unknownSourceNotes=" << audit.unknownSourceNotes
+            << " retained=" << audit.retainedSourceNotes << " dropped=" << audit.droppedSourceNotes
+            << " added=" << audit.addedNotes << " retimed=" << audit.retimedSourceNotes << "\n";
+    }
     out << "Chart mutated: " << (report.chartMutated ? "yes" : "no") << "\n";
     if (!report.prototypeName.empty()) {
         out << "Prototype: " << report.prototypeName << "\n";

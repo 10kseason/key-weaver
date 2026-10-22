@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(KeyWeaver VERSION 1.2.0 LANGUAGES CXX)
+project(KeyWeaver VERSION 1.3.1 LANGUAGES CXX)
 
 option(KEYWEAVER_WITH_ONNXRUNTIME "Enable experimental ONNX Runtime lane policy support" OFF)
 set(ONNXRUNTIME_ROOT "" CACHE PATH "ONNX Runtime package root")
@@ -29,6 +29,7 @@ add_library(keyconv_core
     src/nk2/layout_model.cpp
     src/nk2/nk2_convert.cpp
     src/nk2/nk2_report.cpp
+    src/nk2/safety_audit.cpp
     src/exporter/bms.cpp
     src/exporter/osu.cpp
     src/parser/bms.cpp
@@ -124,3 +125,27 @@ add_test(NAME keyconv_tests COMMAND keyconv_tests)
 add_executable(keyconv_public_header_smoke tests/public_header_smoke.cpp)
 target_link_libraries(keyconv_public_header_smoke PRIVATE keyconv_core)
 add_test(NAME keyconv_public_header_smoke COMMAND keyconv_public_header_smoke)
+
+add_executable(keyconv_nk2_safety_tests tests/test_nk2_safety.cpp)
+target_link_libraries(keyconv_nk2_safety_tests PRIVATE keyconv_core)
+target_include_directories(keyconv_nk2_safety_tests PRIVATE src)
+add_test(NAME keyconv_nk2_safety_tests COMMAND keyconv_nk2_safety_tests)
+
+add_executable(keyconv_nk2_phrase_tests tests/test_nk2_phrase.cpp)
+target_link_libraries(keyconv_nk2_phrase_tests PRIVATE keyconv_core)
+target_include_directories(keyconv_nk2_phrase_tests PRIVATE src)
+add_test(NAME keyconv_nk2_phrase_tests COMMAND keyconv_nk2_phrase_tests)
+
+add_test(NAME keyconv_nk2_batch_regression
+    COMMAND ${CMAKE_COMMAND}
+        "-DKEYWEAVER_EXE=$<TARGET_FILE:KeyWeaver>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_nk2_batch.cmake")
+set_tests_properties(keyconv_nk2_batch_regression PROPERTIES TIMEOUT 100)
+
+add_test(NAME keyconv_nk2_phrase_cli
+    COMMAND ${CMAKE_COMMAND}
+        "-DKEYWEAVER_EXE=$<TARGET_FILE:KeyWeaver>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_nk2_phrase_cli.cmake")
+set_tests_properties(keyconv_nk2_phrase_cli PROPERTIES TIMEOUT 60)

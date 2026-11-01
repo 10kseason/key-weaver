@@ -1,10 +1,14 @@
 #pragma once
 
 #include <string>
+#include <optional>
 #include <vector>
 
 #include "intent_graph.hpp"
 #include "layout_model.hpp"
+#include "safety_audit.hpp"
+#include "e_fullfield.hpp"
+#include "e_tap_boost.hpp"
 
 namespace keyconv::nk2 {
 
@@ -32,6 +36,14 @@ struct NK2Options {
     LayoutWeights layoutWeights;
     int sameTimeEpsilonMs = 2;
     bool superSymmetry = false;
+    bool phraseSearch = false;
+    bool phraseSupport = false;
+    bool phraseDenseLn = false;
+    bool phraseSourceLn = false;
+    bool phraseSourceLnBoost = false;
+    bool independentSafetyAudit = false;
+    bool eFullField = false;
+    bool eFullFieldTapBoost = false;
 };
 
 struct NK2Report {
@@ -44,11 +56,25 @@ struct NK2Report {
     std::string prototypeName;
     int outputNotes = 0;
     int addedNotes = 0;
+    int addedTapNotes = 0;
+    int addedHoldNotes = 0;
+    int denseSupportCandidates = 0;
+    int denseTapAccepted = 0;
+    int denseHoldAccepted = 0;
+    int sourceLnBoostHoldAccepted = 0;
+    int denseRejectedByBudget = 0;
+    int denseRejectedBySafety = 0;
     int droppedNotes = 0;
     int localSolverWindows = 0;
     int localSolverCandidates = 0;
     int localSolverFallbacks = 0;
     int lowerKeyRolledNotes = 0;
+    int phraseSearchWindows = 0;
+    int phraseSearchCandidates = 0;
+    int phraseSearchPeakNotes = 0;
+    std::optional<SafetyAudit> independentSafety;
+    std::optional<EFullFieldStats> fullFieldTransform;
+    std::optional<EFullFieldTapBoostStats> fullFieldTapBoost;
     int superSymmetryMirrorAnchors = 0;
     int superSymmetryGaplessStairs = 0;
     int sameTimeCollisions = 0;

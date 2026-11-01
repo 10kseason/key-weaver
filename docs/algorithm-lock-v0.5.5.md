@@ -82,12 +82,12 @@ The frozen algorithm must keep these invariants:
 - BMS-family inputs remain BMS-family outputs.
 - 4K-8K BMS outputs use SP `#4K`-`#8K`; 9K defaults to `.pms`; 10K exports scratchless 2P channels.
 
-## Locked Ray Smoke Baseline
+## Locked 7K Smoke Baseline
 
-For the Ray 7K-to-10K smoke chart:
+For the local 7K-to-10K smoke chart:
 
 ```text
-Input: D:\osu!\Songs\2558616 Kaguya(cvYuko Natsuyoshi) - ray (Cosmic Princess Kaguya! Version)\Kaguya(cv.Yuko Natsuyoshi) - ray (Cosmic Princess Kaguya! Version) (OsuJoa) [luna].osu
+Input: <private-7k-smoke-chart>.osu
 Profile: keyweaver_10k_broad_style_v1
 Target added note ratio: 0.375
 Adaptive budget average ratio: 0.377974

@@ -1,6 +1,131 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-11-02
+
+- Simplified the NK2 GUI to exactly five presets: E Source LN (default),
+  E+ Full-field + taps, native, transform and harder. Historical CLI recipes
+  and conversion behavior remain available; no remaster mode was added.
+- Extended **E+ - Full-field** and **E+ - Full-field + taps** to Target 8K as
+  well as 10K. Redistribution, tap candidates, metadata, safety and lane reports
+  use the requested output count; the optional hotspot report supports both.
+  GUI/single/batch/BMS routes are covered. Existing 10K chart/report/diagnostic
+  bytes and plain E behavior remain compatible. See `docs/nk2-e-tap-boost.md`.
+- Added optional **E+ - Full-field + taps** / `--nk2-e-tap-boost`. After E+ v2,
+  append safe chord taps at retained source head times while keeping every E+
+  placement and LN. Bounds include existing generated notes: 75% of retained
+  originals globally, local 2s caps, three new taps/onset and eight-head chords.
+  Tap boost v2 allows only its new taps a half-beat repeat guard (180–500ms);
+  base-note safety and inclusive LN tails remain protected. It balances new-tap
+  lane counts, raises the local cap to 40 and reserves proportional phrase
+  budgets to avoid starving the song ending. Strict 500ms repeats remain visible
+  beside the effective audit; output suffix is `-fullfield-v2-taps-v2`. Added
+  separate report counters/stages, filename suffix, GUI/batch integration and
+  regression checks. Plain E/E+ stay byte-compatible. See `docs/nk2-e-tap-boost.md`.
+- Added opt-in NK2 **E+ - Full-field** / `--nk2-e-fullfield` for 10K. It
+  redistributes completed E notes without changing identities, note population,
+  rhythm or LN tails; short E repeat chains move together. Candidate checks
+  and original-source final audit retain collision/LN/created-jack guards.
+- Added E+ move/distribution diagnostics, distinct filenames, GUI and batch
+  routing, deterministic work limits and fallback, and focused regression tests.
+  Default E output/reports remain unchanged. See `docs/nk2-e-fullfield.md`.
+- E+ algorithm v2 addresses source-lane pinning for all 1K–18K inputs to 10K:
+  long repeat chains can relocate in 2-second segments, source-to-target
+  concentration joins scoring, and safe lane-pair exchanges redistribute
+  originals even when generated notes already balance the field. Short chains,
+  complete LNs and the 500ms created-jack guard remain protected. V2 filenames
+  and metadata distinguish earlier comparison outputs.
+- Added opt-in `--pattern-hotspot-report <new.json>` for single-input NK2 preset E
+  10K conversions. It counts final note heads in disjoint 8-second windows,
+  skips hotspot decisions below 20 notes, and flags lane shares differing from
+  the full chart by at least 15 percentage points.
+- Kept E placement, source-LN containment, Jack Guard, existing report schemas,
+  and default conversion output unchanged. The separate diagnostic reports
+  empty/insufficient/invalid populations explicitly and never overwrites a file.
+- Added focused arithmetic, determinism, E safety, CLI, path-alias, and BMS
+  regression coverage. See `docs/pattern-hotspot-audit.md` for limitations.
+
+## 1.3.1 - 2026-10-22
+
+- Enabled every manual NK2 preset A-F for all 1K-18K source/target pairs,
+  including expansion and compression. B keeps source timestamps and surviving
+  LN lengths and adds no notes. C-F append safe notes without moving their base
+  output; safety constraints can leave zero additions.
+- Retained phrase addition budgets, the 500ms guard, independent safety checks,
+  and full single-source-LN containment for E/F. Same-key A-F remains a no-op.
+- Expanded the GUI Target selector to 1K-18K and updated preset hints/help.
+  Automatic 7K-to-4K/5K B and 7K-to-8K/10K E choices remain unchanged.
+- Kept existing named comparison OSZ bundles and prior releases unchanged.
+
+## 1.3.0 - 2026-10-22
+
+- Updated the NK2 GUI choices to `Auto (7K presets)`, `A - Legacy faithful`,
+  `B - Phrase only`, `C - Phrase + taps`, `D - Dense taps + LN`,
+  `E - Source LN`, and `F - Source LN+`, with supported-pair hints. Existing
+  native/harder/transform choices and manual variant filenames remain available.
+- Release packaging now runs the complete registered CTest suite, including
+  independent safety, phrase-search and CLI adoption/batch regressions, alongside
+  GUI smoke and format/reconversion guards. Automated safety and determinism
+  checks remain separate from manual play-quality evaluation.
+- Refreshed the Windows package, full project source archive, and ten-file
+  `src/nk2/` archive, including the independent auditor. Source packaging uses
+  explicitly selected tracked project files plus current NK2 additions and
+  excludes private audio/training experiments, local chart/OSZ assets, agent
+  instructions, working-tree diff artifacts, and previous build/release outputs.
+- Adopted B for implicit NK2 7K-to-4K/5K and E for 7K-to-8K/10K, resolved per
+  parsed input. Explicit mode/search/note options and stream transforms retain
+  their chosen behavior. Added frontend `--nk2-mode auto` with faithful fallback
+  and made it the GUI NK2 default; implicit CLI fallback stays native. Classic
+  remains the default engine, and the core mode enum/default is unchanged.
+- Added opt-in 4K-to-5K/7K B/C/D/E experiments. B never applies legacy 4K-to-5K
+  fill and adds no notes; E retains source-LN containment. F remains restricted
+  to 7K-to-8K/10K.
+- Fixed the legacy source-jack continuation exception that cleared every
+  target lane's recent-jack mask. The exception now covers only the immediately
+  preceding target lane for the same source lane, preventing unrelated jacks.
+- Added `adopted-repair` comparisons with source 7K, A Fixed 5K, B Adopted 4K/5K,
+  and E Adopted 8K/10K (six difficulties), plus `phrase-four-key-tests` with
+  source 4K and B/E 5K/7K (five). Previous comparison modes and artifacts remain.
+- Added optional F Source LN Plus (`--nk2-phrase-source-ln-boost`) after E.
+  F preserves every E note and adds only LNs, retaining source-LN containment
+  and full-interval/500ms safety checks while raising total/LN budgets to
+  50%/22%. Existing D/E placements remain unchanged.
+- Enabled opt-in faithful phrase search for 7K-to-5K/8K; C/D/E/F overlays
+  now also support 7K-to-8K. Compression does not add notes. New comparison
+  modes package D/E/F 10K and A/B 5K plus D/E/F 8K with source 7K references.
+- Added optional E Source LN (`--nk2-phrase-source-ln`, alongside phrase support
+  and dense LN). It starts from unchanged C, varies LN duration and lane
+  preferences, and requires each generated LN to fit entirely inside one
+  original LN interval. Tap-only passages receive no generated LNs. The
+  independent audit enforces coverage for E while retaining existing D behavior;
+  the new `phrase-source-ln` OSZ comparison includes source 7K and C/D/E 10K.
+- Added opt-in dense phrase support with generated holds (`--nk2-phrase-dense-ln`).
+  It preserves the complete C placement, uses original rhythmic endpoints for
+  new LNs, checks their full intervals, and raises the total addition ceiling
+  to 35%. B/C/D OSZ comparisons require actual note growth and added LNs.
+- Added optional `--nk2-phrase-support` for faithful 7K-to-10K phrase output,
+  preserving the B placement and adding only support taps with a strict 500ms
+  lane guard, one added tap per timestamp, and global/local density budgets.
+  GUI selection and B/C OSZ packaging distinguish the new notes variant.
+- Initially added opt-in NK2 faithful 7K-to-4K/10K phrase search (`--nk2-search off|phrase`)
+  with a two-beat, 48-note, 24-state bound; the adoption above supersedes its
+  initial default-off policy. Phrase search keeps source timestamps and surviving LN durations.
+- Added independent lane-by-lane safety auditing (`--nk2-audit`) and explicit
+  report counters. Phrase outputs must pass before the CLI writes a chart;
+  legacy auditing remains diagnostic only. The GUI exposes `B - Phrase only`.
+- Added local A/B OSZ packaging with source 7K plus legacy/phrase 4K and 10K,
+  retained audit failures, media/CRC/hash readback, and no original overwrites.
+- Fixed NK2 backward overflow rolls creating source-different target jacks;
+  placement checks now cover both time directions even when roll history is
+  unordered. Unsafe overflow taps are dropped, while safe source-jack rolls
+  remain available. Added focused regression coverage and clarified faithful
+  mode's note-drop warning.
+- Cached NK2 per-note placement safety masks instead of rescanning placed notes
+  for each candidate lane, while preserving deterministic ranking and jack rules.
+- Fixed NK2 parallel batches overwriting same-named inputs in a shared output
+  directory, and lower-key rolled taps colliding with later source slices.
+- Fixed automatic 18K BMS parsing to preserve lane positions when all eighteen
+  playable channels are present; sparse charts still require `--source 18`.
+- Added serial/parallel CLI batch and cross-slice/BMS lane regression coverage.
 
 ## 1.2.0 - 2026-08-01
 

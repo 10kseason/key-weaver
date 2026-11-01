@@ -1,6 +1,7 @@
 #include "nk2/nk2_report.hpp"
 
 #include <sstream>
+#include <locale>
 #include <stdexcept>
 
 namespace keyconv::nk2 {
@@ -95,6 +96,79 @@ std::string reportToJson(const NK2Report& report) {
     std::ostringstream out;
     out << "{\n";
     out << "  \"engine\": \"nk2\",\n";
+    out << "  \"phraseSearch\": {\"enabled\": " << (report.options.phraseSearch ? "true" : "false")
+        << ", \"supportNotes\": " << (report.options.phraseSupport ? "true" : "false")
+        << ", \"denseLn\": " << (report.options.phraseDenseLn ? "true" : "false")
+        << ", \"sourceLn\": " << (report.options.phraseSourceLn ? "true" : "false")
+        << ", \"sourceLnBoost\": " << (report.options.phraseSourceLnBoost ? "true" : "false")
+        << ", \"windows\": " << report.phraseSearchWindows
+        << ", \"candidates\": " << report.phraseSearchCandidates
+        << ", \"peakNotes\": " << report.phraseSearchPeakNotes << "},\n";
+    if (report.fullFieldTransform) {
+        const auto& f = *report.fullFieldTransform;
+        // E+ metrics always use JSON decimal notation, independent of UI locale.
+        std::ostringstream block;
+        block.imbue(std::locale::classic());
+        block << "  \"fullFieldTransform\": {\"algorithmVersion\": 2, \"metricWindowMs\": 2000, \"movedNotes\": " << f.movedNotes
+              << ", \"movedGroups\": " << f.movedGroups << ", \"acceptedMoves\": " << f.acceptedMoves
+              << ", \"splitLongChains\": " << f.splitLongChains << ", \"phraseSwaps\": " << f.phraseSwaps
+              << ", \"safetyWork\": " << f.safetyWork
+              << ", \"budgetLimited\": " << (f.budgetLimited ? "true" : "false")
+              << ", \"reverted\": " << (f.reverted ? "true" : "false")
+              << ", \"activeLanesBefore\": " << f.activeLanesBefore << ", \"activeLanesAfter\": " << f.activeLanesAfter
+              << ", \"concentrationBefore\": " << f.concentrationBefore
+              << ", \"concentrationAfter\": " << f.concentrationAfter
+              << ", \"sourceConcentrationBefore\": " << f.sourceConcentrationBefore
+              << ", \"sourceConcentrationAfter\": " << f.sourceConcentrationAfter;
+        if (report.fullFieldTapBoost) block << ", \"analysisStage\": \"before_tap_boost\"";
+        block << "},\n";
+        if (report.fullFieldTapBoost) {
+            const auto& t = *report.fullFieldTapBoost;
+            block << "  \"fullFieldTapBoost\": {\"algorithmVersion\": 2, \"repeatPolicy\": \"new_taps_half_beat_180_500ms\", \"inputNotes\": " << t.inputNotes
+                  << ", \"retainedSourceNotes\": " << t.retainedSourceNotes
+                  << ", \"totalAddedBudget\": " << t.totalAddedBudget << ", \"addedTaps\": " << t.addedTaps
+                  << ", \"candidates\": " << t.candidates << ", \"rejectedBySafety\": " << t.rejectedBySafety
+                  << ", \"rejectedByBudget\": " << t.rejectedByBudget
+                  << ", \"minTapGuardMs\": " << t.minTapGuardMs << ", \"maxTapGuardMs\": " << t.maxTapGuardMs
+                  << ", \"strict500CreatedRepeats\": " << t.strict500CreatedRepeats
+                  << ", \"tempoAllowedTapRepeats\": " << t.tempoAllowedTapRepeats
+                  << ", \"addedLaneCounts\": [";
+            for (std::size_t lane = 0; lane < t.addedLaneCounts.size() &&
+                 lane < static_cast<std::size_t>(report.options.targetKeyCount); ++lane) {
+                if (lane) block << ", ";
+                block << t.addedLaneCounts[lane];
+            }
+            block << "]"
+                  << ", \"reverted\": " << (t.reverted ? "true" : "false") << "},\n";
+        }
+        out << block.str();
+    }
+    out << "  \"independentSafety\": ";
+    if (report.independentSafety) {
+        const auto& audit = *report.independentSafety;
+        out << "{\n    \"passed\": " << (audit.passed() ? "true" : "false") << ",\n";
+        if (report.fullFieldTapBoost) {
+            out << "    \"repeatPolicy\": \"new_taps_half_beat_180_500ms\",\n";
+            out << "    \"strict500CreatedRepeats\": " << audit.createdLaneRepeats + audit.tempoAllowedTapRepeats << ",\n";
+            out << "    \"tempoAllowedTapRepeats\": " << audit.tempoAllowedTapRepeats << ",\n";
+        }
+        out << "    \"sourceLnCoverageRequired\": " << (audit.sourceLnCoverageRequired ? "true" : "false") << ",\n";
+        out << "    \"generatedHoldsOutsideSourceLn\": " << audit.generatedHoldsOutsideSourceLn << ",\n";
+        out << "    \"invalidLanes\": " << audit.invalidLanes << ",\n";
+        out << "    \"invalidHolds\": " << audit.invalidHolds << ",\n";
+        out << "    \"sameTimeCollisions\": " << audit.sameTimeCollisions << ",\n";
+        out << "    \"longNoteConflicts\": " << audit.longNoteConflicts << ",\n";
+        out << "    \"createdLaneRepeats\": " << audit.createdLaneRepeats << ",\n";
+        out << "    \"preservedLaneRepeats\": " << audit.preservedLaneRepeats << ",\n";
+        out << "    \"retainedSourceNotes\": " << audit.retainedSourceNotes << ",\n";
+        out << "    \"droppedSourceNotes\": " << audit.droppedSourceNotes << ",\n";
+        out << "    \"addedNotes\": " << audit.addedNotes << ",\n";
+        out << "    \"retimedSourceNotes\": " << audit.retimedSourceNotes << ",\n";
+        out << "    \"changedHoldDurations\": " << audit.changedHoldDurations << ",\n";
+        out << "    \"unknownSourceNotes\": " << audit.unknownSourceNotes << "\n  },\n";
+    } else {
+        out << "null,\n";
+    }
     out << "  \"mode\": \"" << toString(report.options.mode) << "\",\n";
     out << "  \"superSymmetry\": " << (report.options.superSymmetry ? "true" : "false") << ",\n";
     out << "  \"chartMutated\": " << (report.chartMutated ? "true" : "false") << ",\n";
@@ -138,6 +212,8 @@ std::string reportToJson(const NK2Report& report) {
     out << "  \"placement\": {\n";
     out << "    \"outputNotes\": " << report.outputNotes << ",\n";
     out << "    \"addedNotes\": " << report.addedNotes << ",\n";
+    out << "    \"addedTapNotes\": " << report.addedTapNotes << ",\n";
+    out << "    \"addedHoldNotes\": " << report.addedHoldNotes << ",\n";
     out << "    \"droppedNotes\": " << report.droppedNotes << ",\n";
     out << "    \"localSolverWindows\": " << report.localSolverWindows << ",\n";
     out << "    \"localSolverCandidates\": " << report.localSolverCandidates << ",\n";
@@ -162,6 +238,12 @@ std::string reportToJson(const NK2Report& report) {
     out << "]\n";
     out << "  },\n";
     out << "  \"support\": {\n";
+    out << "    \"denseCandidates\": " << report.denseSupportCandidates << ",\n";
+    out << "    \"denseTapAccepted\": " << report.denseTapAccepted << ",\n";
+    out << "    \"denseHoldAccepted\": " << report.denseHoldAccepted << ",\n";
+    out << "    \"sourceLnBoostHoldAccepted\": " << report.sourceLnBoostHoldAccepted << ",\n";
+    out << "    \"denseRejectedByBudget\": " << report.denseRejectedByBudget << ",\n";
+    out << "    \"denseRejectedBySafety\": " << report.denseRejectedBySafety << ",\n";
     out << "    \"lnCandidates\": " << report.lnSupportCandidates << ",\n";
     out << "    \"lnAccepted\": " << report.lnSupportAccepted << ",\n";
     out << "    \"lnRejected\": " << report.lnSupportRejected << ",\n";
@@ -226,6 +308,48 @@ std::string reportToText(const NK2Report& report) {
     out << "Source keys: " << report.options.sourceKeyCount << "\n";
     out << "Target keys: " << report.options.targetKeyCount << "\n";
     out << "Super symmetry: " << (report.options.superSymmetry ? "on" : "off") << "\n";
+    out << "Phrase search: " << (report.options.phraseSearch ? "on" : "off")
+        << " supportNotes=" << (report.options.phraseSupport ? "on" : "off")
+        << " denseLn=" << (report.options.phraseDenseLn ? "on" : "off")
+        << " sourceLn=" << (report.options.phraseSourceLn ? "on" : "off")
+        << " sourceLnBoost=" << (report.options.phraseSourceLnBoost ? "on" : "off")
+        << " windows=" << report.phraseSearchWindows << " candidates=" << report.phraseSearchCandidates
+        << " peakNotes=" << report.phraseSearchPeakNotes << "\n";
+    if (report.fullFieldTransform) {
+        const auto& f = *report.fullFieldTransform;
+        out << "E+ full-field: moved=" << f.movedNotes << " groups=" << f.movedGroups
+            << " activeLanes2s=" << f.activeLanesBefore << " -> " << f.activeLanesAfter
+            << " concentration2s=" << f.concentrationBefore << " -> " << f.concentrationAfter
+            << " sourceConcentration=" << f.sourceConcentrationBefore << " -> " << f.sourceConcentrationAfter
+            << " splitLongChains=" << f.splitLongChains << " phraseSwaps=" << f.phraseSwaps
+            << " reverted=" << (f.reverted ? "yes" : "no")
+            << " budgetLimited=" << (f.budgetLimited ? "yes" : "no") << "\n";
+        if (report.fullFieldTapBoost) {
+            const auto& t = *report.fullFieldTapBoost;
+            out << "E+ tap boost (after redistribution): addedTaps=" << t.addedTaps
+                << " totalGeneratedBudget=" << t.totalAddedBudget
+                << " safetyRejected=" << t.rejectedBySafety
+                << " newTapGuardMs=" << t.minTapGuardMs << ".." << t.maxTapGuardMs
+                << " strict500CreatedRepeats=" << t.strict500CreatedRepeats
+                << " tempoAllowed=" << t.tempoAllowedTapRepeats
+                << " reverted=" << (t.reverted ? "yes" : "no") << "\n";
+        }
+    }
+    if (report.independentSafety) {
+        const auto& audit = *report.independentSafety;
+        out << "Independent safety: " << (audit.passed() ? "PASS" : "FAIL")
+            << " collisions=" << audit.sameTimeCollisions << " lnConflicts=" << audit.longNoteConflicts
+            << " createdLaneRepeats=" << audit.createdLaneRepeats
+            << " invalidLanes=" << audit.invalidLanes << " invalidHolds=" << audit.invalidHolds
+            << " changedHoldDurations=" << audit.changedHoldDurations
+            << " unknownSourceNotes=" << audit.unknownSourceNotes
+            << " retained=" << audit.retainedSourceNotes << " dropped=" << audit.droppedSourceNotes
+            << " added=" << audit.addedNotes << " retimed=" << audit.retimedSourceNotes << "\n";
+        if (report.fullFieldTapBoost)
+            out << "Repeat policy: base notes retain 500ms; new taps use half-beat (180-500ms). Strict500CreatedRepeats="
+                << audit.createdLaneRepeats + audit.tempoAllowedTapRepeats
+                << " tempoAllowedTapRepeats=" << audit.tempoAllowedTapRepeats << "\n";
+    }
     out << "Chart mutated: " << (report.chartMutated ? "yes" : "no") << "\n";
     if (!report.prototypeName.empty()) {
         out << "Prototype: " << report.prototypeName << "\n";

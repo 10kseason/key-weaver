@@ -1,4 +1,4 @@
-# KeyWeaver v1.3.1
+# KeyWeaver v1.4.0
 
 言語: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,7 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 
 ## このリリース
 
-`v1.3.1` は手動 NK2 プリセット A–F を 1K–18K の全組み合わせの増加・減少変換に拡張し、GUI Target に 1K–3K を追加します。7K の既定選択、安全性検査、Classic の既定動作は維持します。Windows パッケージ、全ソース、および 10 ファイルの NK2 専用ソースを提供します。
+`v1.4.0` は 8K/10K 向け E+ Full-field + taps と任意の8秒区間ホットスポット診断を追加します。NK2 GUI は E（既定）、E+ taps、native、transform、harder の5つです。既存の CLI プリセットと全キー数変換を維持し、Windows パッケージ、全ソース、および14ファイルの NK2 専用ソースを提供します。
 
 - GUI の NK2 選択肢は `E - Source LN`（既定）、`E+ - Full-field + taps`、`native`、`transform`、`harder` の5つです。E+ taps は 8K/10K 出力に対応します。
 - 以前の Auto/A/B/C/D/F とタップ追加なしの E+ は CLI で引き続き使用できます。CLI の 7K 自動選択は 4K/5K に B、8K/10K に E、その他の入力には native を使います。明示的なオプションが優先されます。
@@ -35,7 +35,7 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 実行だけなら Windows リリース zip を使います。
 
 ```text
-KeyWeaver-v1.3.1-win64-<timestamp>.zip
+KeyWeaver-v1.4.0-win64-<timestamp>.zip
 ```
 
 中身:
@@ -118,7 +118,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 リリースパッケージ:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.3.1
+.\scripts\package_release.ps1 -Version 1.4.0
 ```
 
 package script は Release ビルド、登録された全 CTest（NK2 安全性・phrase・CLI 回帰を含む）、public header smoke、GUI smoke、CLI dry-run smoke、サンプル変換、再変換ガード、BMS ガードを実行し、`dist/release/` にアーカイブと `.sha256` を作成します。自動検査は構造的安全性と決定性を確認するもので、プレイ感の評価には実際の比較が必要です。
@@ -153,12 +153,12 @@ ONNX メモ:
 ソースパッケージ名:
 
 ```text
-KeyWeaver-v1.3.1-source-<timestamp>.zip
+KeyWeaver-v1.4.0-source-<timestamp>.zip
 ```
 
 明示的に選択した追跡済みプロジェクトファイルと最新の NK2 ソース・テスト・文書を含みます。個人の音声・学習実験、ローカル MP3・譜面・OSZ、`AGENTS.md` などのローカル agent 指示、`.git`、ビルドフォルダ、古いリリース、作業ツリーの diff 成果物は除外します。
 
-`KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip` は、独立安全性検査を含む `src/nk2/` の 10 ファイルを収録します。確認・統合用であり、アプリのビルドには全ソース版を使用してください。
+`KeyWeaver-NK2-source-1K-18K-v1.4.0-<timestamp>.zip` は、独立安全性検査を含む `src/nk2/` の 14 ファイルを収録します。確認・統合用であり、アプリのビルドには全ソース版を使用してください。
 
 ## 重要文書
 

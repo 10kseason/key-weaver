@@ -481,7 +481,7 @@ void drawLogo(HDC dc, const AppState& state) {
     RECT version{96, 60, kSidebarWidth - 18, 80};
     RECT ready{96, 82, kSidebarWidth - 18, 104};
     drawUiText(dc, state.titleFont, RGB(246, 250, 250), L"KeyWeaver", title);
-    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.3.1", version);
+    drawUiText(dc, state.smallFont, RGB(226, 235, 237), L"v1.4.0", version);
     drawUiText(dc, state.smallFont, RGB(116, 232, 172), L"Ready", ready);
 }
 
@@ -594,7 +594,7 @@ void paintUiChrome(AppState& state, HDC dc) {
     roundRect(dc, header, RGB(23, 34, 45), RGB(23, 34, 45), 8);
     fillRect(dc, RECT{header.left, header.bottom - 4, header.right, header.bottom}, kColorAccent);
     drawUiText(dc, state.titleFont, RGB(247, 250, 252), L"KeyWeaver", RECT{56, 38, 260, 66});
-    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.3.1 conversion console",
+    drawUiText(dc, state.smallFont, RGB(190, 205, 217), L"v1.4.0 conversion console",
                RECT{56, 66, 320, 88});
     drawUiText(dc, state.smallFont, RGB(207, 219, 229), L"Classic / NK2  |  Single / Batch  |  Reports",
                RECT{1020, 52, 1386, 76}, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);

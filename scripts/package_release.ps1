@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.3.1",
+    [string]$Version = "1.4.0",
     [string]$BuildDir = "",
     [string]$OutDir = "",
     [switch]$SkipBuild
@@ -204,6 +204,37 @@ $($RuntimeDlls -join "`n")
             if ($LASTEXITCODE -ne 0) { throw "Packaged NK2 4K experiment smoke failed" }
             $Report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
             if (-not $Report.independentSafety.passed) { throw "Packaged NK2 4K experiment audit failed" }
+        }
+    }
+
+    # Validate the new opt-in route from the actual runtime package, including
+    # the diagnostic's final population rather than only the build-tree tests.
+    foreach ($Target in @(8, 10)) {
+        $ReportPath = Join-Path $SmokeDir "nk2_e_taps_$($Target)k.json"
+        $HotspotPath = Join-Path $SmokeDir "nk2_e_taps_$($Target)k.hotspots.json"
+        $ChartPath = Join-Path $SmokeDir "nk2_e_taps_$($Target)k.osu"
+        & $Exe (Join-Path $PackageDir "samples\simple_7k_ln.osu") --target $Target --engine nk2 `
+            --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln `
+            --nk2-phrase-source-ln --nk2-e-fullfield --nk2-e-tap-boost `
+            --out $ChartPath --report $ReportPath --pattern-hotspot-report $HotspotPath `
+            *> (Join-Path $SmokeDir "nk2_e_taps_$($Target)k.txt")
+        if ($LASTEXITCODE -ne 0) { throw "Packaged NK2 E+ taps smoke failed" }
+        $Report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
+        $Hotspot = Get-Content -LiteralPath $HotspotPath -Raw | ConvertFrom-Json
+        if (-not $Report.independentSafety.passed -or $Report.fullFieldTapBoost.reverted -or
+            $Report.fullFieldTapBoost.addedLaneCounts.Count -ne $Target) {
+            throw "Packaged NK2 E+ taps audit or target count failed"
+        }
+        $ChartHeads = 0
+        $InHitObjects = $false
+        foreach ($Line in Get-Content -LiteralPath $ChartPath) {
+            if ($Line.StartsWith("[")) { $InHitObjects = $Line.Trim() -eq "[HitObjects]" }
+            elseif ($InHitObjects -and $Line -match '^\d+,\d+,-?\d+,') { ++$ChartHeads }
+        }
+        $WindowHeads = ($Hotspot.patternHotspots.windows | Measure-Object -Property noteCount -Sum).Sum
+        if ($Hotspot.preset -ne "E+ taps" -or $Hotspot.patternHotspots.laneCount -ne $Target -or
+            $Hotspot.patternHotspots.totalNotes -ne $ChartHeads -or $WindowHeads -ne $ChartHeads) {
+            throw "Packaged hotspot target or stage failed"
         }
     }
 

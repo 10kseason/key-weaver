@@ -1,6 +1,6 @@
-# KeyWeaver v1.3.1
+# KeyWeaver v1.4.0
 
-미출시 소스 기능: CLI `--nk2-e-fullfield`는 완성된 E의
+v1.4.0 추가 기능: CLI `--nk2-e-fullfield`는 완성된 E의
 노트 수·리듬·LN 길이를 유지하며 8개 또는 10개 레인에 재배치한다. 기존 E와 자동 선택은
 유지한다. [사용법·안전 조건·한계](docs/nk2-e-fullfield.md)를 참고한다.
 E+ v2는 1K–18K 원본→8K/10K 전체에서 원본 레인이 특정 출력 위치에 계속 묶이는
@@ -14,7 +14,7 @@ Target **8** 또는 **10**을 선택할 수 있으며 단일·배치 변환과 �
 고정하며, 엄격한 500ms 기준의 새 반복 수는 별도로 표시한다.
 [추가 상한·안전 조건·실측](docs/nk2-e-tap-boost.md)을 참고한다.
 
-미출시 소스 기능: `--pattern-hotspot-report <new.json>`으로 NK2 E의 최종 8K/10K
+v1.4.0 추가 기능: `--pattern-hotspot-report <new.json>`으로 NK2 E의 최종 8K/10K
 결과에 8초 구간 레인 편중 진단을 선택적으로 추가할 수 있다. 변환과 기존 리포트는
 그대로 유지한다. [사용법·설계·한계](docs/pattern-hotspot-audit.md),
 [검증 기록](docs/pattern-hotspot-audit-validation.md)을 참고한다.
@@ -26,7 +26,7 @@ KeyWeaver는 osu!mania `.osu` 차트와 BMS 계열 차트를 키 수 기준으�
 
 ## 이 릴리즈의 기준
 
-`v1.3.1`은 NK2 수동 프리셋 A–F 모두를 1K–18K의 모든 원본/목표 조합에서 상향·하향 변환하도록 확장하고, GUI Target에 1K–3K를 추가한다. 기존 7K 자동 채택과 안전성 검사는 유지한다. Windows 패키지, 전체 프로젝트 소스, 10개 파일로 구성된 NK2 전용 소스 압축 파일을 제공한다.
+`v1.4.0`은 8K/10K용 E+ Full-field + taps와 선택적 8초 핫스팟 진단을 추가한다. NK2 GUI는 E(기본), E+ taps, native, transform, harder 다섯 가지만 제공한다. 기존 CLI 프리셋과 모든 키 수 변환은 유지한다. Windows 패키지, 전체 프로젝트 소스, 14개 파일의 NK2 전용 소스 압축 파일을 제공한다.
 
 주요 기능:
 
@@ -59,7 +59,7 @@ KeyWeaver는 osu!mania `.osu` 차트와 BMS 계열 차트를 키 수 기준으�
 실행만 하려면 Windows 릴리즈 zip을 사용한다.
 
 ```text
-KeyWeaver-v1.3.1-win64-<timestamp>.zip
+KeyWeaver-v1.4.0-win64-<timestamp>.zip
 ```
 
 패키지 구성:
@@ -165,7 +165,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 릴리즈 패키지:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.3.1
+.\scripts\package_release.ps1 -Version 1.4.0
 ```
 
 package script는 Release 빌드, 등록된 전체 CTest(NK2 안전성·구간 탐색·CLI 회귀 포함), public header smoke, GUI smoke, CLI dry-run smoke, 샘플 변환, reconversion guard, BMS guard를 실행하고 `dist/release/`에 압축 파일과 `.sha256`을 만든다. 자동 검사는 구조적 안전성과 결정성을 확인하며, 실제 플레이 감각은 직접 비교해야 한다.
@@ -200,12 +200,12 @@ ONNX 참고:
 소스 패키지 이름은 다음 형식이다.
 
 ```text
-KeyWeaver-v1.3.1-source-<timestamp>.zip
+KeyWeaver-v1.4.0-source-<timestamp>.zip
 ```
 
 명시적으로 선택한 추적 프로젝트 파일과 최신 NK2 소스·테스트·문서를 포함한다. 개인 음원·학습 실험, 로컬 MP3·채보·OSZ, `AGENTS.md` 등 로컬 agent 지침, `.git`, 빌드 폴더, 기존 릴리즈 압축 파일은 제외한다. 작업 폴더의 diff 산출물도 포함하지 않는다.
 
-릴리즈에는 독립 안전성 검사기를 포함한 `src/nk2/`의 10개 파일을 담은 `KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip`도 제공한다. 검토·통합용 소스이며 애플리케이션 빌드에는 전체 소스 압축 파일을 사용한다.
+릴리즈에는 독립 안전성 검사기를 포함한 `src/nk2/`의 14개 파일을 담은 `KeyWeaver-NK2-source-1K-18K-v1.4.0-<timestamp>.zip`도 제공한다. 검토·통합용 소스이며 애플리케이션 빌드에는 전체 소스 압축 파일을 사용한다.
 
 ## 주요 문서
 

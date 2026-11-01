@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-11-02
 
 - Simplified the NK2 GUI to exactly five presets: E Source LN (default),
   E+ Full-field + taps, native, transform and harder. Historical CLI recipes

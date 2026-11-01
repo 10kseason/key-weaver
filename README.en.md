@@ -1,6 +1,6 @@
-# KeyWeaver v1.3.1
+# KeyWeaver v1.4.0
 
-Source-only, unreleased: CLI `--nk2-e-fullfield` redistributes
+New in v1.4.0: CLI `--nk2-e-fullfield` redistributes
 completed E notes across 8K/10K while keeping E rhythm and LN lengths. Existing E
 and automatic presets stay unchanged. See [E+ usage and limits](docs/nk2-e-fullfield.md).
 E+ v2 also addresses source-lane pinning for every 1K–18K input to 8K/10K, with
@@ -14,7 +14,7 @@ for new taps, balances their lanes and reserves budgets across the song. Base
 notes/LNs stay fixed; strict 500ms repeats are reported separately.
 See [bounds and validation](docs/nk2-e-tap-boost.md).
 
-Source-only, unreleased: `--pattern-hotspot-report <new.json>` adds an optional
+New in v1.4.0: `--pattern-hotspot-report <new.json>` adds an optional
 8-second lane-use diagnostic for final NK2 E 8K/10K results. Conversion and existing
 reports remain unchanged. See [usage and limits](docs/pattern-hotspot-audit.md).
 Existing 1.3.1 release binaries do not include this option.
@@ -25,7 +25,7 @@ KeyWeaver is a C++20/CMake key-count converter for osu!mania `.osu` charts and B
 
 ## What This Release Is
 
-`v1.3.1` extends every manual NK2 preset A–F to all 1K–18K source/target pairs for expansion and compression, and adds 1K–3K to the GUI Target selector. Automatic 7K presets and existing safety checks remain unchanged. The release includes a Windows package, full project source, and a separate ten-file NK2 source archive.
+`v1.4.0` adds E+ Full-field + taps for 8K/10K and optional 8-second hotspot diagnostics. The NK2 GUI now offers E (default), E+ taps, native, transform and harder. Existing CLI recipes and all-key conversion remain available. The release includes a Windows package, full project source and a separate 14-file NK2 source archive.
 
 Main capabilities:
 
@@ -57,7 +57,7 @@ Not included: full chart editing, audio playback, waveform view, DP split conver
 Use the Windows release zip when you only want to run the tool:
 
 ```text
-KeyWeaver-v1.3.1-win64-<timestamp>.zip
+KeyWeaver-v1.4.0-win64-<timestamp>.zip
 ```
 
 Inside the package:
@@ -164,7 +164,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 Release package:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.3.1
+.\scripts\package_release.ps1 -Version 1.4.0
 ```
 
 The package script runs a Release CMake build, the complete registered CTest suite (including NK2 safety, phrase and CLI regressions), public-header smoke, GUI smoke, CLI dry-run smokes, sample conversions, reconversion guard checks, and BMS guard checks. It writes archives and `.sha256` files under `dist/release/`. Automated checks cover structural safety and deterministic output; in-game play quality still requires manual comparison.
@@ -199,12 +199,12 @@ ONNX notes:
 The source package is named like:
 
 ```text
-KeyWeaver-v1.3.1-source-<timestamp>.zip
+KeyWeaver-v1.4.0-source-<timestamp>.zip
 ```
 
 It contains explicitly selected tracked project files plus the current NK2 source, tests, and documentation. Private audio/training experiments, local MP3/chart/OSZ assets, `AGENTS.md` and other local agent instructions, `.git`, build folders, and old release archives are excluded. It does not include working-tree diff artifacts.
 
-The release also provides `KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip`, containing the ten files under `src/nk2/`, including the independent safety auditor. This focused archive is for inspection and integration; use the full source archive to build the application.
+The release also provides `KeyWeaver-NK2-source-1K-18K-v1.4.0-<timestamp>.zip`, containing the 14 files under `src/nk2/`, including the independent safety auditor. This focused archive is for inspection and integration; use the full source archive to build the application.
 
 ## Important Docs
 

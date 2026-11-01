@@ -1,6 +1,6 @@
 # E+ Full-field + taps
 
-Status: experimental, unreleased, opt-in. This follows the request for substantially
+Status: experimental, opt-in, included in v1.4.0. This follows the request for substantially
 more simultaneous taps at existing timings. It applies to all 1K–18K sources
 converted to 8K or 10K. Plain E remains unchanged; the preceding E+ v2 lane
 algorithm is shared by both targets, and existing 10K behavior is retained.

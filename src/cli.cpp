@@ -46,7 +46,7 @@
 namespace {
 
 constexpr const char* kToolName = "KeyWeaver";
-constexpr const char* kToolVersion = "v1.3.1";
+constexpr const char* kToolVersion = "v1.4.0";
 constexpr const char* kDefaultBatchOnnxPolicyModel = "lane_policy_student_mlp_u_e_circusgalop.onnx";
 constexpr const char* kLegacyBatchOnnxPolicyModel = "u_e_circusgalop_chart_dataset_lane_policy.onnx";
 using SteadyClock = std::chrono::steady_clock;

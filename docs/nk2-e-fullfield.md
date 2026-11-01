@@ -1,6 +1,6 @@
 # NK2 E+ Full-field
 
-Status: experimental implementation, unreleased. The existing E preset
+Status: experimental implementation, included in v1.4.0. The existing E preset
 and its automatic adoption remain unchanged. E+ is an explicit 8K/10K comparison
 mode: finish E first, then redistribute its existing notes across the field.
 Algorithm v2 additionally addresses persistent source-lane ownership for every

@@ -9,7 +9,7 @@ The optional [E+ tap boost](nk2-e-tap-boost.md) is also observed after its
 additions and final safety gate; that sidecar uses `preset: "E+ taps"` and
 counts every final head, including the additional chord taps.
 
-Status: implemented, unreleased. Base: KeyWeaver 1.3.1,
+Status: included in v1.4.0. Original implementation base: KeyWeaver 1.3.1,
 `2c5a035c3f6728f4f94748f90e6d5740fd5351d2`.
 
 ## 목적과 구현 범위

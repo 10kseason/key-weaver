@@ -1,4 +1,4 @@
-# KeyWeaver v1.3.1
+# KeyWeaver v1.4.0
 
 语言: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
@@ -6,7 +6,7 @@ KeyWeaver 是一个基于 C++20/CMake 的键数转换工具，用于 osu!mania `
 
 ## 本版本定位
 
-`v1.3.1` 将手动 NK2 预设 A–F 扩展到 1K–18K 的全部增减键数组合，并为 GUI Target 添加 1K–3K。保留 7K 默认选择、安全检查以及 Classic 默认引擎。提供 Windows 包、完整项目源码和包含 10 个文件的 NK2 专用源码包。
+`v1.4.0` 新增适用于 8K/10K 的 E+ Full-field + taps 和可选的8秒区间热点诊断。NK2 GUI 仅保留 E（默认）、E+ taps、native、transform、harder 五项。保留原有 CLI 预设和全部键数转换，提供 Windows 包、完整项目源码和含14个文件的 NK2 专用源码包。
 
 - GUI 的 NK2 选项仅保留 `E - Source LN`（默认）、`E+ - Full-field + taps`、`native`、`transform`、`harder` 五项。E+ taps 支持 8K/10K 输出。
 - 原有 Auto/A/B/C/D/F 以及不加 tap 的 E+ 仍可通过 CLI 使用。CLI 对 7K 输入的自动选择仍为 4K/5K 使用 B、8K/10K 使用 E，其他输入使用 native；显式选项优先。
@@ -35,7 +35,7 @@ KeyWeaver 是一个基于 C++20/CMake 的键数转换工具，用于 osu!mania `
 只想运行工具时使用 Windows 发布 zip:
 
 ```text
-KeyWeaver-v1.3.1-win64-<timestamp>.zip
+KeyWeaver-v1.4.0-win64-<timestamp>.zip
 ```
 
 包内包含:
@@ -118,7 +118,7 @@ cmake --build build --target KeyWeaver keyconv keyconv_gui keyconv_tests keyconv
 发布包:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 1.3.1
+.\scripts\package_release.ps1 -Version 1.4.0
 ```
 
 package script 会执行 Release 构建、全部已注册 CTest（包括 NK2 安全、phrase 和 CLI 回归）、public header smoke、GUI smoke、CLI dry-run smoke、样本转换、reconversion guard 和 BMS guard，并在 `dist/release/` 写出压缩包和 `.sha256`。自动检查验证结构安全与确定性，实际游玩质量仍需人工比较。
@@ -153,12 +153,12 @@ ONNX 说明:
 源码包名称格式:
 
 ```text
-KeyWeaver-v1.3.1-source-<timestamp>.zip
+KeyWeaver-v1.4.0-source-<timestamp>.zip
 ```
 
 包含明确选定的已跟踪项目文件，以及最新 NK2 源码、测试和文档。排除私人音频/训练实验、本地 MP3/谱面/OSZ、`AGENTS.md` 等本地 agent 指令、`.git`、构建目录、旧发布包和工作区 diff 产物。
 
-`KeyWeaver-NK2-source-1K-18K-v1.3.1-<timestamp>.zip` 包含 `src/nk2/` 下的 10 个文件，包括独立安全检查器，用于审阅和集成。构建应用请使用完整源码包。
+`KeyWeaver-NK2-source-1K-18K-v1.4.0-<timestamp>.zip` 包含 `src/nk2/` 下的 14 个文件，包括独立安全检查器，用于审阅和集成。构建应用请使用完整源码包。
 
 ## 重要文档
 

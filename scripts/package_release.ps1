@@ -136,10 +136,10 @@ Localized README files are included: README.md, README.en.md, README.ko.md, READ
 GUI Batch converts dropped charts or a selected songs/root folder and shows percent-done progress with remaining chart count.
 Source can be auto or 1K-18K in the GUI; numeric Source filters batch inputs to matching source-key charts.
 Experimental NK2 supports every 1K-18K source/target pair, including downward conversion and same-K transform relaning.
-GUI NK2 Auto (7K presets): source 7K uses B for 4K/5K and E for 8K/10K; other pairs use faithful.
-Select A-F to compare manual variants. B adds no notes; E adds taps/LNs only with full original-LN coverage for generated holds.
-All manual NK2 A-F presets support upward and downward 1K-18K pairs. C-F append only safe notes without rearranging the base output; safe additions may be zero. Same-key A-F stays unchanged; use transform for same-key relaning.
-CLI NK2 without explicit mode/search/note options uses the same source-7K defaults and native fallback for other pairs.
+GUI NK2 choices: E Source LN (default), E+ Full-field + taps, native, transform, harder.
+E supports 1K-18K pairs; generated LNs stay wholly inside original LN intervals. E+ taps supports 8K/10K output, spreading E then adding taps at original head times with a beat-based repeat guard.
+Historical A-F and plain E+ CLI recipes remain available. Same-key E stays unchanged; use transform or explicit 8K/10K E+ taps for same-key relaning.
+CLI NK2 without explicit mode/search/note options still adopts B for 7K-to-4K/5K and E for 7K-to-8K/10K, with native fallback for other pairs.
 Phrase outputs must pass the independent safety audit before being saved. See docs/nk2-phrase-search.md.
 Dropping files onto an already-open GUI window uses the current Target field; multi-file drops stay loaded for Batch.
 CLI batch: pass multiple input charts plus explicit --target; outputs default beside each input chart and auto-detects CPU worker count.

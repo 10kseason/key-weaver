@@ -1,5 +1,25 @@
 # KeyWeaver v1.3.1
 
+미출시 소스 기능: CLI `--nk2-e-fullfield`는 완성된 E의
+노트 수·리듬·LN 길이를 유지하며 8개 또는 10개 레인에 재배치한다. 기존 E와 자동 선택은
+유지한다. [사용법·안전 조건·한계](docs/nk2-e-fullfield.md)를 참고한다.
+E+ v2는 1K–18K 원본→8K/10K 전체에서 원본 레인이 특정 출력 위치에 계속 묶이는
+현상도 완화한다. 짧은 연타와 LN은 보존하고 긴 연속 패턴은 안전한 2초 경계에서
+레인을 바꿀 수 있다. 이전 비교본과 구별하도록 `-fullfield-v2`를 표시한다.
+동시치기를 늘리려면 **E+ - Full-field + taps** / `--nk2-e-tap-boost`를 사용한다.
+Target **8** 또는 **10**을 선택할 수 있으며 단일·배치 변환과 핫스팟 진단에 적용된다.
+완성된 E+의 배치와 LN을 유지하며 남아 있는 원본 노트의 시작 시각에만 탭을
+추가한다. 탭 증량 v2는 새 탭에만 반 박자(180~500ms 제한) 반복 간격을 적용하고,
+추가 탭의 레인 분포와 곡 후반의 구간별 예산을 반영한다. 기존 노트·LN 배치는
+고정하며, 엄격한 500ms 기준의 새 반복 수는 별도로 표시한다.
+[추가 상한·안전 조건·실측](docs/nk2-e-tap-boost.md)을 참고한다.
+
+미출시 소스 기능: `--pattern-hotspot-report <new.json>`으로 NK2 E의 최종 8K/10K
+결과에 8초 구간 레인 편중 진단을 선택적으로 추가할 수 있다. 변환과 기존 리포트는
+그대로 유지한다. [사용법·설계·한계](docs/pattern-hotspot-audit.md),
+[검증 기록](docs/pattern-hotspot-audit-validation.md)을 참고한다.
+기존 1.3.1 배포 실행 파일에는 이 옵션이 없다.
+
 언어: [English](README.en.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Русский](README.ru.md)
 
 KeyWeaver는 osu!mania `.osu` 차트와 BMS 계열 차트를 키 수 기준으로 변환하는 C++20/CMake 도구다. 로컬 결정론적 변환, Windows GUI, 배치/리포트 출력, 18K까지 상향·하향·동일 키 변환을 처리하는 실험적 NK2 엔진을 포함한다.
@@ -19,8 +39,8 @@ KeyWeaver는 osu!mania `.osu` 차트와 BMS 계열 차트를 키 수 기준으�
 - `--out` / `--out-dir`가 없으면 입력 차트 옆에 출력한다.
 - `--batch`, `--input-list`, `--jobs` 기반 병렬 CLI 배치와 진행률/요약 출력.
 - Classic 변환의 collision, LN, distance, jack 안전 검사.
-- 실험적 NK2 모드: `native`, `faithful`, `harder`, `transform`. 동일 키 변환은 `transform`에서만 실행하며, `report`는 단일 입력 분석 전용이다.
-- `--engine nk2`에서 모드·탐색·노트 추가 옵션을 명시하지 않으면 원본 7K의 4/5K 변환은 B 탐색, 8/10K 변환은 E Source LN을 기본 채택한다. 다른 조합은 CLI의 기존 native 기본을 유지한다. GUI 기본은 `Auto (7K presets)`이며 `--nk2-mode auto`로 전달하고, 그 밖의 키 조합은 기존 GUI처럼 faithful로 처리한다. 명시한 모드·탐색·추가 옵션과 stream 변환은 자동 채택보다 우선한다. 전체 기본 엔진 Classic과 코어 `Mode` 기본값은 그대로다.
+- 실험적 NK2 모드: `native`, `faithful`, `harder`, `transform`. 동일 키 변환은 `transform` 또는 명시적 10K E+에서 실행하며, `report`는 단일 입력 분석 전용이다.
+- `--engine nk2`에서 모드·탐색·노트 추가 옵션을 명시하지 않으면 원본 7K의 4/5K 변환은 B 탐색, 8/10K 변환은 E Source LN을 기본 채택한다. 다른 조합은 CLI의 기존 native 기본을 유지한다. GUI의 NK2 기본 선택은 `E - Source LN`이며 E 옵션을 명시해 전달한다. CLI 자동 선택과 명시적 옵션 동작은 유지한다. 전체 기본 엔진 Classic과 코어 `Mode` 기본값은 그대로다.
 - `--nk2-search phrase`는 1K–18K의 모든 원본/목표 조합에서 faithful, stream off 조건으로 두 박 구간의 배치 후보를 비교한다. `--nk2-mode faithful --nk2-search off`로 기존 faithful 경로를 명시하고 `--nk2-audit`로 독립 검사할 수 있다. [구간 탐색·OSZ 비교 안내](docs/nk2-phrase-search.md).
 - `--nk2-phrase-support`는 상향·하향 탐색 결과의 원본 배치를 유지하면서 보조 탭을 추가한다. 패키저의 `--comparison phrase-notes`로 B Phrase와 C Phrase Notes의 10K를 비교할 수 있다.
 - 여기에 `--nk2-phrase-dense-ln`을 켜면 C를 유지한 채 탭과 롱놋을 더 추가한다. `--comparison phrase-dense-ln` 패키지는 원본 7K와 B/C/D 10K를 담는다.
@@ -73,18 +93,17 @@ NK2 GUI 선택지:
 
 | 선택지 | 동작 |
 | --- | --- |
-| `Auto (7K presets)` | 원본 7K의 4K/5K는 B, 8K/10K는 E. 나머지는 faithful. |
-| `A - Legacy faithful` | 기존 faithful 변환. |
-| `B - Phrase only` | 노트 추가 없는 구간 탐색. |
-| `C - Phrase + taps` | B를 보존하고 안전한 보조 탭 추가. |
-| `D - Dense taps + LN` | C를 보존하고 탭과 LN을 더 추가. |
-| `E - Source LN` | C를 보존하며 생성 LN 전체를 원본 LN 안으로 제한. |
-| `F - Source LN+` | E를 보존하고 원본 LN 안에 LN만 더 추가. |
+| `E - Source LN` | NK2 GUI 기본 선택. 생성 LN 전체를 원본 LN 안으로 제한. |
+| `E+ - Full-field + taps` | E 재배치와 박자 기반 탭 증량. Target 8K/10K. |
+| `native` | 기존 네이티브 변환. |
+| `transform` | 같은 키 재배치를 포함한 기존 트랜스폼 변환. |
+| `harder` | 기존 네이티브 증량 강화 변환. |
 
-`native`, `harder`, `transform`도 유지한다. Auto는 혼합 키 배치에서도 입력별로
-결정한다. A–F 수동 선택 모두 1K–18K 상향·하향 변환을 지원한다. 동일 키 A–F는
-기존처럼 변환하지 않으며 같은 키 재배치는 `transform`을 사용한다. 구간 탐색은
-faithful, stream off 조건을 유지한다. BMS 출력은 지원하는 레이아웃만 허용한다.
+GUI에는 위 다섯 가지만 표시한다. Auto, A/B/C/D/F, 탭 없는 E+의 CLI 옵션은
+기존 스크립트 호환을 위해 유지한다. CLI 자동 선택은 입력별로 처리한다.
+E는 1K–18K 상향·하향 변환을 지원하고 동일 키에서는 no-op이다. E+ taps는
+8K/10K 동일 키 재배치도 지원한다. 구간 탐색은 stream off 조건을 유지한다.
+BMS 출력은 지원하는 레이아웃만 허용한다.
 
 ```powershell
 # E 상향: 5K → 12K

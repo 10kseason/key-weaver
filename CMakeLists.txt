@@ -25,7 +25,10 @@ add_library(keyconv_core
     src/core/repeat.cpp
     src/core/report.cpp
     src/core/slice.cpp
+    src/diagnostics/pattern_hotspot.cpp
     src/nk2/intent_graph.cpp
+    src/nk2/e_fullfield.cpp
+    src/nk2/e_tap_boost.cpp
     src/nk2/layout_model.cpp
     src/nk2/nk2_convert.cpp
     src/nk2/nk2_report.cpp
@@ -136,6 +139,21 @@ target_link_libraries(keyconv_nk2_phrase_tests PRIVATE keyconv_core)
 target_include_directories(keyconv_nk2_phrase_tests PRIVATE src)
 add_test(NAME keyconv_nk2_phrase_tests COMMAND keyconv_nk2_phrase_tests)
 
+add_executable(keyconv_nk2_e_fullfield_tests tests/test_nk2_e_fullfield.cpp)
+target_link_libraries(keyconv_nk2_e_fullfield_tests PRIVATE keyconv_core)
+target_include_directories(keyconv_nk2_e_fullfield_tests PRIVATE src)
+add_test(NAME keyconv_nk2_e_fullfield_tests COMMAND keyconv_nk2_e_fullfield_tests)
+add_executable(keyconv_nk2_e_tap_boost_tests tests/test_nk2_e_tap_boost.cpp)
+target_link_libraries(keyconv_nk2_e_tap_boost_tests PRIVATE keyconv_core)
+target_include_directories(keyconv_nk2_e_tap_boost_tests PRIVATE src)
+add_test(NAME keyconv_nk2_e_tap_boost_tests COMMAND keyconv_nk2_e_tap_boost_tests)
+add_test(NAME keyconv_nk2_e_fullfield_cli
+    COMMAND ${CMAKE_COMMAND}
+        "-DKEYWEAVER_EXE=$<TARGET_FILE:KeyWeaver>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_nk2_e_fullfield_cli.cmake")
+set_tests_properties(keyconv_nk2_e_fullfield_cli PROPERTIES TIMEOUT 45)
+
 add_test(NAME keyconv_nk2_batch_regression
     COMMAND ${CMAKE_COMMAND}
         "-DKEYWEAVER_EXE=$<TARGET_FILE:KeyWeaver>"
@@ -149,3 +167,15 @@ add_test(NAME keyconv_nk2_phrase_cli
         "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_nk2_phrase_cli.cmake")
 set_tests_properties(keyconv_nk2_phrase_cli PROPERTIES TIMEOUT 60)
+
+add_executable(keyconv_pattern_hotspot_tests tests/test_pattern_hotspot.cpp)
+target_link_libraries(keyconv_pattern_hotspot_tests PRIVATE keyconv_core)
+target_include_directories(keyconv_pattern_hotspot_tests PRIVATE src)
+add_test(NAME keyconv_pattern_hotspot_tests COMMAND keyconv_pattern_hotspot_tests)
+
+add_test(NAME keyconv_pattern_hotspot_cli
+    COMMAND ${CMAKE_COMMAND}
+        "-DKEYWEAVER_EXE=$<TARGET_FILE:KeyWeaver>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pattern_hotspot_cli.cmake")
+set_tests_properties(keyconv_pattern_hotspot_cli PROPERTIES TIMEOUT 45)

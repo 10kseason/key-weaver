@@ -8,6 +8,11 @@ docs/lane-policy-student.md
 docs/nk2-algorithm.md
 docs/nk2-design.md
 docs/nk2-phrase-search.md
+docs/nk2-e-fullfield.md
+docs/nk2-e-fullfield-validation.md
+docs/nk2-e-tap-boost.md
+docs/pattern-hotspot-audit.md
+docs/pattern-hotspot-audit-validation.md
 models/lane_policy_student_mlp_u_e_circusgalop.onnx
 profiles/README.md
 profiles/keyweaver_10k_broad_style_v1.json

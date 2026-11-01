@@ -8,8 +8,8 @@ KeyWeaver は、osu!mania `.osu` チャートと BMS 系チャートのキー数
 
 `v1.3.1` は手動 NK2 プリセット A–F を 1K–18K の全組み合わせの増加・減少変換に拡張し、GUI Target に 1K–3K を追加します。7K の既定選択、安全性検査、Classic の既定動作は維持します。Windows パッケージ、全ソース、および 10 ファイルの NK2 専用ソースを提供します。
 
-- GUI の `Auto (7K presets)` は、元譜面が 7K の場合、4K/5K に B、8K/10K に E を選び、その他は faithful を使います。CLI で `--engine nk2` だけを指定した場合も同じ 7K 設定を使い、その他は native です。明示的なモード・探索・追加ノート指定や stream 変換は自動選択より優先します。
-- GUI の手動選択は `A - Legacy faithful`、`B - Phrase only`、`C - Phrase + taps`、`D - Dense taps + LN`、`E - Source LN`、`F - Source LN+` です。`native`、`harder`、`transform` も維持します。
+- GUI の NK2 選択肢は `E - Source LN`（既定）、`E+ - Full-field + taps`、`native`、`transform`、`harder` の5つです。E+ taps は 8K/10K 出力に対応します。
+- 以前の Auto/A/B/C/D/F とタップ追加なしの E+ は CLI で引き続き使用できます。CLI の 7K 自動選択は 4K/5K に B、8K/10K に E、その他の入力には native を使います。明示的なオプションが優先されます。
 - 手動 A–F はすべて 1K–18K の全組み合わせで増加・減少変換に対応します。B はノートを追加せず時刻を変えません。C–F は基になる配置を動かさず、安全な空きにだけ追加します。E/F の生成 LN は元 LN 一つの区間内に限定します。空きがなければ追加はゼロです。同じキー数の A–F は従来どおり変更せず、再配置には `transform` を使います。phrase は faithful、stream off を必要とし、独立検査に合格してから保存します。詳細は [探索と比較ガイド](docs/nk2-phrase-search.md) を参照してください。
 
 主な機能:

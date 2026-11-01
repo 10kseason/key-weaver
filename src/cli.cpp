@@ -8,6 +8,7 @@
 
 #include "nk2/nk2_convert.hpp"
 #include "nk2/nk2_report.hpp"
+#include "diagnostics/pattern_hotspot.hpp"
 #if defined(KEYWEAVER_WITH_ONNXRUNTIME)
 #include "onnx/onnx_cuda_policy.hpp"
 #endif
@@ -18,6 +19,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -271,6 +273,7 @@ struct CliOptions {
     double echoMaxLocalNps = 12.0;
     bool dryRun = false;
     std::optional<std::filesystem::path> report;
+    std::optional<std::filesystem::path> patternHotspotReport;
     std::optional<std::filesystem::path> targetProfile;
     std::optional<std::string> comparePolicies;
     bool emitFeelReport = false;
@@ -298,6 +301,8 @@ struct CliOptions {
     bool nk2PhraseDenseLn = false;
     bool nk2PhraseSourceLn = false;
     bool nk2PhraseSourceLnBoost = false;
+    bool nk2EFullField = false;
+    bool nk2EFullFieldTapBoost = false;
     bool nk2SearchProvided = false;
     bool nk2Audit = false;
     double nk2NativeWeight = 0.5;
@@ -387,6 +392,7 @@ void printHelp(std::ostream& out) {
     out << "  --onnx-max-batch-notes <number> Split CUDA inference into note chunks. Default: 512; use 0 for all notes.\n";
     out << "  --onnx-advisory-weight <n> Lane-score weight for ONNX advisory lanes. Default: 18.\n";
     out << "  --report <path>         Write conversion report JSON.\n";
+    out << "  --pattern-hotspot-report <new.json>  Optional 8s lane audit of final NK2 E 8K/10K notes; single input only.\n";
     out << "  --target-profile <json> Use a Target-K reference profile JSON for K-likeness scoring.\n";
     out << "                          Target 10 auto-loads profiles/keyweaver_10k_broad_style_v1.json when bundled.\n";
     out << "  --engine <engine>       classic | nk2. Default: classic. NK2 supports experimental 1K..18K conversion.\n";
@@ -399,7 +405,9 @@ void printHelp(std::ostream& out) {
     out << "  --nk2-phrase-dense-ln  Add more taps and LNs after phrase support; requires --nk2-phrase-support.\n";
     out << "  --nk2-phrase-source-ln Vary generated LNs only inside source LN spans; requires --nk2-phrase-dense-ln.\n";
     out << "  --nk2-phrase-source-ln-boost Add only extra LNs after Source LN; requires all Source LN flags.\n";
-    out << "                          Presets B-F support every 1K..18K pair; equal-key conversion stays a no-op.\n";
+    out << "  --nk2-e-fullfield  E+ lane-only redistribution across 8K/10K; requires preset E, preserves its rhythm/LNs.\n";
+    out << "  --nk2-e-tap-boost Add chord taps after E+ with a half-beat repeat guard (180-500ms); requires --nk2-e-fullfield.\n";
+    out << "                          Presets B-F support every 1K..18K pair; equal-key stays a no-op except explicit E+.\n";
     out << "  --nk2-audit             Independently audit NK2 output without changing its placement. Phrase search always audits.\n";
     out << "  --nk2-native-weight <n> Native authorship weight. Default: 0.5.\n";
     out << "  --nk2-remix-weight <n>  Remix expansion weight. Default: 0.5.\n";
@@ -592,7 +600,9 @@ std::filesystem::path defaultNk2OutputPath(const std::filesystem::path& input,
                                            bool phraseSupport = false,
                                            bool phraseDenseLn = false,
                                            bool phraseSourceLn = false,
-                                           bool phraseSourceLnBoost = false) {
+                                           bool phraseSourceLnBoost = false,
+                                           bool eFullField = false,
+                                           bool eFullFieldTapBoost = false) {
     const auto parent = outputDir.has_value()
                             ? *outputDir
                             : input.has_parent_path() ? input.parent_path() : std::filesystem::path(".");
@@ -613,6 +623,8 @@ std::filesystem::path defaultNk2OutputPath(const std::filesystem::path& input,
             }
         }
     }
+    if (eFullField) marker += "-fullfield-v2";
+    if (eFullFieldTapBoost) marker += "-taps-v2";
     const auto streamTag = difficultyStreamTag(streamTransformPolicy);
     if (!streamTag.empty()) {
         marker += "-";
@@ -912,6 +924,8 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.onnxAdvisoryWeight = parseDouble(requireValue(i, args, arg), arg);
         } else if (arg == "--report") {
             options.report = pathFromArgument(requireValue(i, args, arg));
+        } else if (arg == "--pattern-hotspot-report") {
+            options.patternHotspotReport = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--target-profile") {
             options.targetProfile = pathFromArgument(requireValue(i, args, arg));
         } else if (arg == "--engine") {
@@ -937,6 +951,10 @@ CliOptions parseArgs(const std::vector<std::string>& args) {
             options.nk2PhraseSourceLn = true;
         } else if (arg == "--nk2-phrase-source-ln-boost") {
             options.nk2PhraseSourceLnBoost = true;
+        } else if (arg == "--nk2-e-fullfield") {
+            options.nk2EFullField = true;
+        } else if (arg == "--nk2-e-tap-boost") {
+            options.nk2EFullFieldTapBoost = true;
         } else if (arg == "--nk2-audit") {
             options.nk2Audit = true;
         } else if (arg == "--nk2-native-weight") {
@@ -1031,6 +1049,44 @@ void writeFile(const std::filesystem::path& path, const std::string& text) {
         throw std::runtime_error("Could not write file: " + displayPath(path));
     }
     out << text;
+}
+
+bool sameDiagnosticPath(const std::filesystem::path& left, const std::filesystem::path& right) {
+    if (std::filesystem::exists(left) && std::filesystem::exists(right) &&
+        std::filesystem::equivalent(left, right)) return true;
+    const auto a = std::filesystem::weakly_canonical(std::filesystem::absolute(left));
+    const auto b = std::filesystem::weakly_canonical(std::filesystem::absolute(right));
+#if defined(_WIN32)
+    return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
+#else
+    return a == b;
+#endif
+}
+
+void writeNewHotspotReport(const std::filesystem::path& path, const std::string& text) {
+    if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
+    // This optional sidecar never truncates an existing file, including a file
+    // created by another process after CLI preflight.
+#if defined(_WIN32)
+    if (text.size() > MAXDWORD) throw std::runtime_error("Hotspot report is too large");
+    const auto handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        throw std::runtime_error("Could not create new hotspot report: " + displayPath(path));
+    }
+    DWORD written = 0;
+    const bool complete = WriteFile(handle, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) &&
+                          written == text.size();
+    const bool closed = CloseHandle(handle) != 0;
+#else
+    auto* file = std::fopen(path.c_str(), "wbx");
+    if (!file) throw std::runtime_error("Could not create new hotspot report: " + displayPath(path));
+    const bool complete = std::fwrite(text.data(), 1, text.size(), file) == text.size();
+    const bool closed = std::fclose(file) == 0;
+#endif
+    if (!complete || !closed) {
+        throw std::runtime_error("Incomplete hotspot report write: " + displayPath(path));
+    }
 }
 
 std::optional<std::string> jsonStringField(const std::string& text, const std::string& key) {
@@ -1488,13 +1544,20 @@ void validateOptions(const CliOptions& options) {
         throw std::runtime_error("NK2 --source must be between 1 and 18");
     }
     if ((options.nk2SearchProvided || options.nk2Audit || options.nk2PhraseSupport ||
-         options.nk2PhraseDenseLn || options.nk2PhraseSourceLn || options.nk2PhraseSourceLnBoost) &&
+         options.nk2PhraseDenseLn || options.nk2PhraseSourceLn || options.nk2PhraseSourceLnBoost ||
+         options.nk2EFullField || options.nk2EFullFieldTapBoost) &&
         options.engine != keyconv::nk2::Engine::NK2) {
         throw std::runtime_error("NK2 search, audit, and phrase note options require --engine nk2");
     }
     if (options.nk2PhraseSourceLnBoost && !options.nk2PhraseSourceLn) {
         throw std::runtime_error(
             "--nk2-phrase-source-ln-boost requires --nk2-phrase-source-ln and all its prerequisite phrase options");
+    }
+    if (options.nk2EFullField && *options.target != 8 && *options.target != 10) {
+        throw std::runtime_error("--nk2-e-fullfield requires --target 8 or 10");
+    }
+    if (options.nk2EFullFieldTapBoost && !options.nk2EFullField) {
+        throw std::runtime_error("--nk2-e-tap-boost requires --nk2-e-fullfield");
     }
     if (options.nk2PhraseSourceLn &&
         (!options.nk2PhraseDenseLn || !options.nk2PhraseSupport || !options.nk2PhraseSearch ||
@@ -1528,6 +1591,25 @@ void validateOptions(const CliOptions& options) {
         throw std::runtime_error("--compare-policies must not be empty");
     }
     const bool batch = options.batchMode || options.inputs.size() > 1;
+    if (options.patternHotspotReport.has_value()) {
+        if (batch || options.engine != keyconv::nk2::Engine::NK2 || (*options.target != 8 && *options.target != 10)) {
+            throw std::runtime_error("--pattern-hotspot-report requires one NK2 preset E input and --target 8 or 10");
+        }
+        const auto& path = *options.patternHotspotReport;
+#if defined(_WIN32)
+        if (path.relative_path().native().find(L':') != std::wstring::npos) {
+            throw std::runtime_error("Hotspot report must be a new file, not an alternate data stream");
+        }
+#endif
+        if (lowerAscii(path.extension().string()) != ".json" || std::filesystem::exists(path)) {
+            throw std::runtime_error("--pattern-hotspot-report requires a new .json file; existing files are never overwritten");
+        }
+        if (sameDiagnosticPath(path, options.input) ||
+            (options.out && sameDiagnosticPath(path, *options.out)) ||
+            (options.report && sameDiagnosticPath(path, *options.report))) {
+            throw std::runtime_error("Hotspot report must differ from the input, chart output, and conversion report");
+        }
+    }
     if (options.engine == keyconv::nk2::Engine::NK2 && batch &&
         options.nk2Mode == keyconv::nk2::Mode::Report) {
         throw std::runtime_error("--nk2-mode report is single-input only");
@@ -2255,6 +2337,20 @@ int runSingleConversion(CliOptions cli,
     throwIfConvertedInput(input, chart);
     resolveNk2Defaults(cli, cli.source.value_or(chart.meta.sourceKeyCount));
 
+    if (cli.nk2EFullField &&
+        (cli.nk2Mode != keyconv::nk2::Mode::Faithful || !cli.nk2PhraseSearch || !cli.nk2PhraseSupport ||
+         !cli.nk2PhraseDenseLn || !cli.nk2PhraseSourceLn || cli.nk2PhraseSourceLnBoost ||
+         cli.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
+        throw std::runtime_error("--nk2-e-fullfield requires effective NK2 preset E, without F boost or super-symmetry");
+    }
+
+    if (cli.patternHotspotReport &&
+        (cli.nk2Mode != keyconv::nk2::Mode::Faithful || !cli.nk2PhraseSearch || !cli.nk2PhraseSupport ||
+         !cli.nk2PhraseDenseLn || !cli.nk2PhraseSourceLn || cli.nk2PhraseSourceLnBoost ||
+         cli.streamTransformPolicy != keyconv::StreamTransformPolicy::Off)) {
+        throw std::runtime_error("--pattern-hotspot-report requires effective NK2 preset E (source LN, without F boost)");
+    }
+
     keyconv::ConvertOptions convertOptions;
     convertOptions.sourceKeyCount = cli.source.value_or(chart.meta.sourceKeyCount);
     convertOptions.targetKeyCount = *cli.target;
@@ -2322,6 +2418,8 @@ int runSingleConversion(CliOptions cli,
         nk2Options.phraseDenseLn = cli.nk2PhraseDenseLn;
         nk2Options.phraseSourceLn = cli.nk2PhraseSourceLn;
         nk2Options.phraseSourceLnBoost = cli.nk2PhraseSourceLnBoost;
+        nk2Options.eFullField = cli.nk2EFullField;
+        nk2Options.eFullFieldTapBoost = cli.nk2EFullFieldTapBoost;
         nk2Options.independentSafetyAudit = cli.nk2Audit;
         nk2Options.nativeWeight = cli.nk2NativeWeight;
         nk2Options.remixWeight = cli.nk2RemixWeight;
@@ -2345,6 +2443,26 @@ int runSingleConversion(CliOptions cli,
             }
             throw std::runtime_error("NK2 phrase search failed its independent safety audit; no chart output written");
         }
+        if (cli.patternHotspotReport) {
+            // Observe only the final E chart after the existing safety gate.
+            // In particular, do not feed this diagnostic into candidate scoring.
+            const auto audit = keyconv::diagnostics::analyzePatternHotspots(nk2Result.chart, *cli.target);
+            const auto json = std::string("{\n  \"engine\": \"nk2\",\n  \"preset\": \"") +
+                (cli.nk2EFullFieldTapBoost ? "E+ taps" : cli.nk2EFullField ? "E+" : "E") + "\",\n" +
+                "  \"analysisStage\": \"final_chart_before_export\",\n  \"patternHotspots\": " +
+                keyconv::diagnostics::patternHotspotsToJson(audit) + "}\n";
+            writeNewHotspotReport(*cli.patternHotspotReport, json);
+            // Once created, filesystem identity also catches platform aliases
+            // (e.g. Win32 trailing dots) before a legacy output can truncate it.
+            if ((cli.out && sameDiagnosticPath(*cli.patternHotspotReport, *cli.out)) ||
+                (cli.report && sameDiagnosticPath(*cli.patternHotspotReport, *cli.report))) {
+                throw std::runtime_error("Hotspot report aliases another output; no chart output written");
+            }
+            out << "Pattern hotspot audit: " << audit.status;
+            if (!audit.reasonCode.empty()) out << " (" << audit.reasonCode << ")";
+            out << ", flagged windows=" << std::count_if(audit.windows.begin(), audit.windows.end(),
+                [](const auto& window) { return window.hotspot.value_or(false); }) << "\n";
+        }
         auto outputPath = cli.out;
         if (!cli.dryRun && nk2Result.report.chartMutated && !outputPath.has_value() &&
             outputMutex == nullptr) {
@@ -2356,7 +2474,9 @@ int runSingleConversion(CliOptions cli,
                                               cli.nk2PhraseSupport,
                                               cli.nk2PhraseDenseLn,
                                               cli.nk2PhraseSourceLn,
-                                              cli.nk2PhraseSourceLnBoost);
+                                              cli.nk2PhraseSourceLnBoost,
+                                              cli.nk2EFullField,
+                                              cli.nk2EFullFieldTapBoost);
         }
 
         if (!cli.batchQuiet) {
@@ -2386,7 +2506,9 @@ int runSingleConversion(CliOptions cli,
                                                  cli.nk2PhraseSupport,
                                                  cli.nk2PhraseDenseLn,
                                                  cli.nk2PhraseSourceLn,
-                                                 cli.nk2PhraseSourceLnBoost);
+                                                 cli.nk2PhraseSourceLnBoost,
+                                                 cli.nk2EFullField,
+                                                 cli.nk2EFullFieldTapBoost);
                 writeFile(*outputPath, outputText);
             } else {
                 writeFile(*outputPath, outputText);

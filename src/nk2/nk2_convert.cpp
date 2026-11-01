@@ -1524,7 +1524,7 @@ void fillPhraseProfileScores(NK2Report& report, const Chart& converted) {
     std::map<int, int> sourceNotesByPhrase;
     std::map<int, int> supportNotesByPhrase;
     for (const auto& note : converted.notes) {
-        const int window = supportPhraseWindowForTime(note.time);
+        const int window = report.fullFieldTapBoost ? fullFieldTapWindow(note.time) : supportPhraseWindowForTime(note.time);
         if (isNk2GeneratedNote(note)) {
             ++supportNotesByPhrase[window];
         } else {
@@ -1555,7 +1555,8 @@ void fillPhraseProfileScores(NK2Report& report, const Chart& converted) {
         const auto supportCount = supportNotesByPhrase.find(window);
         const int sourceNotes = sourceCount == sourceNotesByPhrase.end() ? 0 : sourceCount->second;
         const int supportNotes = supportCount == supportNotesByPhrase.end() ? 0 : supportCount->second;
-        const int budget = phraseSupportBudgetFor(report.options, sourceNotes);
+        const int budget = report.fullFieldTapBoost ? static_cast<int>(fullFieldTapPhraseBudget(sourceNotes)) :
+                                                   phraseSupportBudgetFor(report.options, sourceNotes);
         if (supportNotes > budget) {
             ++report.phraseProfileOverBudgetWindows;
             const int overflow = supportNotes - budget;
@@ -1574,7 +1575,8 @@ void fillDistributionAndSafety(NK2Report& report, const Chart& converted) {
     // to drop a source note. Preserve the legacy report convention elsewhere.
     report.addedNotes = report.options.phraseSupport
         ? report.lnSupportAccepted + report.mirrorSupportAccepted + report.strongBeatSupportAccepted +
-              report.denseTapAccepted + report.denseHoldAccepted
+              report.denseTapAccepted + report.denseHoldAccepted +
+              (report.fullFieldTapBoost ? static_cast<int>(report.fullFieldTapBoost->addedTaps) : 0)
         : std::max(0, report.outputNotes - report.intent.totalNotes);
     report.addedTapNotes = 0;
     report.addedHoldNotes = 0;
@@ -2521,12 +2523,41 @@ void applyDensePhraseNotes(Chart& chart, NK2Report& report, const NK2Options& op
     });
 }
 
+void applyEFullField(const Chart& source, NK2ConversionResult& result) {
+    if (!result.report.options.eFullField) return;
+    const int targetKeys = result.report.options.targetKeyCount;
+    result.report.fullFieldTransform = spreadEFullField(source, result.chart, targetKeys);
+    if (result.report.noOp) {
+        // Same-key E is a no-op; explicit E+ still requests a lane-only remix.
+        result.chart.meta.version = convertedDifficultyName(source.meta.version, targetKeys, false);
+        *result.chart.meta.version += "-phrase-notes-dense-ln-source-ln";
+    }
+    result.chart.meta.targetKeyCount = targetKeys;
+    *result.chart.meta.version += "-fullfield-v2";
+    result.report.noOp = false;
+    result.report.noOpReason.clear();
+    result.report.chartMutated = true;
+    result.report.prototypeName = "nk2-e-fullfield-v2";
+    if (result.report.fullFieldTransform->reverted)
+        result.report.warnings.push_back("E+ safety audit rejected redistribution; retained E lanes.");
+    if (result.report.fullFieldTransform->budgetLimited)
+        result.report.warnings.push_back("E+ deterministic work limit reached; remaining groups retain E lanes.");
+    if (result.report.options.eFullFieldTapBoost) {
+        result.report.fullFieldTapBoost = addEFullFieldTaps(source, result.chart, targetKeys);
+        *result.chart.meta.version += "-taps-v2";
+        result.report.prototypeName += "-taps-v2";
+        if (result.report.fullFieldTapBoost->reverted)
+            result.report.warnings.push_back("E+ tap boost failed safety; retained the pre-boost chart.");
+    }
+}
+
 void fillIndependentAudit(const Chart& source, NK2ConversionResult& result) {
     if (!result.report.options.independentSafetyAudit && !result.report.options.phraseSearch) return;
     const int targetKeys = result.report.chartMutated ? result.report.options.targetKeyCount
                                                      : result.report.options.sourceKeyCount;
     result.report.independentSafety = auditSafety(source, result.chart, targetKeys, 500,
-                                                   result.report.options.phraseSourceLn);
+        result.report.options.phraseSourceLn,
+        result.report.fullFieldTapBoost ? &result.report.fullFieldTapBoost->newTapGuards : nullptr);
     if (!result.report.independentSafety->passed()) {
         result.report.warnings.push_back("Independent lane-by-lane safety audit failed; inspect independentSafety counters.");
     }
@@ -2564,8 +2595,15 @@ NK2Report analyzeReportOnly(const Chart& chart, const NK2Options& options) {
 }
 
 NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) {
+    if (options.eFullFieldTapBoost && !options.eFullField)
+        throw std::runtime_error("NK2 E+ tap boost requires E+ full-field");
     const bool phrasePair = options.sourceKeyCount >= 1 && options.sourceKeyCount <= kMaxKeyCount &&
         options.targetKeyCount >= 1 && options.targetKeyCount <= kMaxKeyCount;
+    if (options.eFullField && (!phrasePair || (options.targetKeyCount != 8 && options.targetKeyCount != 10) ||
+        options.mode != Mode::Faithful || !options.phraseSearch || !options.phraseSupport ||
+        !options.phraseDenseLn || !options.phraseSourceLn || options.phraseSourceLnBoost || options.superSymmetry)) {
+        throw std::runtime_error("NK2 E+ requires preset E, target 8 or 10, without F boost or super-symmetry");
+    }
     if (options.phraseSourceLnBoost && (!options.phraseSourceLn || !phrasePair)) {
         throw std::runtime_error("NK2 source LN boost requires 1K..18K source LN support");
     }
@@ -2597,6 +2635,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
     }
 
     if (result.report.noOp) {
+        applyEFullField(chart, result);
         fillDistributionAndSafety(result.report, result.chart);
         fillIndependentAudit(chart, result);
         return result;
@@ -2805,6 +2844,7 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
         result.report.warnings.push_back(
             "NK2 support-note generation is disabled for this key-count pair or mode.");
     }
+    applyEFullField(chart, result);
     fillDistributionAndSafety(result.report, result.chart);
     if (result.report.addedNotes == 0) {
         if (options.mode == Mode::Faithful && !supportsFourToFiveFill(options) && !options.phraseSupport) {
@@ -2815,7 +2855,9 @@ NK2ConversionResult convertChart(const Chart& chart, const NK2Options& options) 
         }
     }
     if (result.report.createdJacks > 0) {
-        result.report.warnings.push_back("NK2 prototype created target same-lane repeats from different source lanes.");
+        result.report.warnings.push_back(result.report.fullFieldTapBoost
+            ? "Legacy placement.createdJacks uses 500ms; independentSafety separately audits authorized tempo-spaced extra taps."
+            : "NK2 prototype created target same-lane repeats from different source lanes.");
     }
     if (result.report.sameTimeCollisions > 0 || result.report.longNoteConflicts > 0) {
         result.report.warnings.push_back("NK2 prototype produced placement conflicts that need repair.");

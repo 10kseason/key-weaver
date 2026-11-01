@@ -35,7 +35,7 @@ use the target key field more like an authored target-key chart.
 
 The CLI resolves unqualified `--engine nk2` conversions per input: source 7K
 uses B phrase search for 4K/5K and E Source LN for 8K/10K. Other pairs retain
-the native fallback. `--nk2-mode auto`, also the GUI's NK2 default, adopts the
+the native fallback. The CLI's `--nk2-mode auto` adopts the
 same 7K choices with a faithful fallback for other pairs. Explicit mode,
 search, or C/D/E/F options and stream transforms bypass adoption. Classic is
 still the default engine; the core mode enum and `Mode::Native` default are
@@ -1291,16 +1291,17 @@ Expected GUI model:
 
 ```text
 Algorithm: NK1 (Classic) / NK2 (Experimental)
-NK2 modes: Auto (7K presets) / faithful / faithful + phrase / faithful + phrase + notes / faithful + phrase + dense LN / faithful + phrase + source LN / faithful + phrase + source LN+ / native / harder / transform
+NK2 modes: E - Source LN (default) / E+ - Full-field + taps / native / transform / harder
 Stream modes: off / super-symmetry for NK2
 ```
 
 The GUI shells out to the CLI and reads the report, so NK2 GUI behavior should
-stay consistent with the CLI options above. Its default `auto` choice forwards
-`--nk2-mode auto`, including faithful fallback for non-7K inputs. Existing manual
-B/C/D/E/F choices and filenames remain available. The Source selector offers
-`auto` and 1K..18K; Target offers 1K..18K. Manual A-F applies across that range,
-with unchanged same-key no-op behavior and BMS output-layout restrictions.
+stay consistent with the CLI options above. Its default E choice forwards the
+explicit faithful/phrase/support/dense/source-LN flags. Only the five modes
+listed above appear in the GUI; historical Auto/A/B/C/D/F and plain E+ recipes
+remain available through the CLI. Source supports `auto` and 1K..18K; Target
+offers 1K..18K, with E+ taps restricted to 8K/10K. Same-key E stays a no-op;
+explicit E+ taps can remix native 8K/10K. BMS output-layout restrictions remain.
 
 ## Tests And Acceptance
 

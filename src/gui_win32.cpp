@@ -65,7 +65,14 @@ constexpr const wchar_t* kNk2PhraseModeLabel = L"B - Phrase only";
 constexpr const wchar_t* kNk2NotesModeLabel = L"C - Phrase + taps";
 constexpr const wchar_t* kNk2DenseLnModeLabel = L"D - Dense taps + LN";
 constexpr const wchar_t* kNk2SourceLnModeLabel = L"E - Source LN";
+constexpr const wchar_t* kNk2EFullFieldModeLabel = L"E+ - Full-field";
+constexpr const wchar_t* kNk2EFullFieldTapsModeLabel = L"E+ - Full-field + taps";
 constexpr const wchar_t* kNk2BoostModeLabel = L"F - Source LN+";
+// Curated GUI choices. Historical preset builders remain available to the
+// regression smoke checks and their CLI recipes keep their existing behavior.
+constexpr std::array<const wchar_t*, 5> kNk2VisibleModes{
+    kNk2SourceLnModeLabel, kNk2EFullFieldTapsModeLabel, L"native", L"transform", L"harder"
+};
 constexpr const wchar_t* kTransformerUeCircusGalopModelLabel =
     L"Transformer model (u_e X CircusGalop Chart dataset model)";
 constexpr const wchar_t* kTransformerUeCircusGalopModelPath =
@@ -98,7 +105,7 @@ struct ToolOptions {
     std::wstring sourceOverride;
     std::wstring targetKeys = L"10";
     std::wstring algorithm = L"NK1 (Classic)";
-    std::wstring nk2Mode = kNk2AutoModeLabel;
+    std::wstring nk2Mode = kNk2SourceLnModeLabel;
     std::wstring modelPreset = kModelOffLabel;
     std::wstring expansionPolicy = L"auto (normal)";
     std::wstring compressPolicy = L"auto";
@@ -835,9 +842,19 @@ bool nk2PhraseSourceLnBoostActive(const ToolOptions& options) {
     return nk2EngineActive(options) && options.nk2Mode == kNk2BoostModeLabel;
 }
 
+bool nk2EFullFieldTapsActive(const ToolOptions& options) {
+    return nk2EngineActive(options) && options.nk2Mode == kNk2EFullFieldTapsModeLabel;
+}
+
+bool nk2EFullFieldActive(const ToolOptions& options) {
+    return nk2EngineActive(options) &&
+        (options.nk2Mode == kNk2EFullFieldModeLabel || nk2EFullFieldTapsActive(options));
+}
+
 bool nk2PhraseSourceLnActive(const ToolOptions& options) {
     return nk2EngineActive(options) &&
-           (options.nk2Mode == kNk2SourceLnModeLabel || nk2PhraseSourceLnBoostActive(options));
+           (options.nk2Mode == kNk2SourceLnModeLabel || nk2EFullFieldActive(options) ||
+            nk2PhraseSourceLnBoostActive(options));
 }
 
 bool nk2PhraseDenseLnActive(const ToolOptions& options) {
@@ -890,7 +907,9 @@ std::wstring expansionDifficultyTag(const ToolOptions& options) {
                (nk2PhraseSupportActive(options) ? L"-notes" : L"") +
                (nk2PhraseDenseLnActive(options) ? L"-dense-ln" : L"") +
                (nk2PhraseSourceLnActive(options) ? L"-source-ln" : L"") +
-               (nk2PhraseSourceLnBoostActive(options) ? L"-boost" : L"");
+               (nk2PhraseSourceLnBoostActive(options) ? L"-boost" : L"") +
+               (nk2EFullFieldActive(options) ? L"-fullfield-v2" : L"") +
+               (nk2EFullFieldTapsActive(options) ? L"-taps-v2" : L"");
     }
     if (options.preserveConvert) {
         return {};
@@ -1042,6 +1061,10 @@ std::wstring buildSingleCommand(ToolOptions options,
         if (nk2PhraseSourceLnBoostActive(options)) {
             appendArg(command, L"--nk2-phrase-source-ln-boost");
         }
+        if (nk2EFullFieldActive(options)) {
+            appendArg(command, L"--nk2-e-fullfield");
+        }
+        if (nk2EFullFieldTapsActive(options)) appendArg(command, L"--nk2-e-tap-boost");
         if (options.streamTransform != L"off") {
             appendArg(command, L"--stream-transform");
             appendArg(command, options.streamTransform);
@@ -1146,6 +1169,10 @@ std::wstring buildBatchCommand(const ToolOptions& options,
         if (nk2PhraseSourceLnBoostActive(options)) {
             appendArg(command, L"--nk2-phrase-source-ln-boost");
         }
+        if (nk2EFullFieldActive(options)) {
+            appendArg(command, L"--nk2-e-fullfield");
+        }
+        if (nk2EFullFieldTapsActive(options)) appendArg(command, L"--nk2-e-tap-boost");
         if (options.streamTransform != L"off") {
             appendArg(command, L"--stream-transform");
             appendArg(command, options.streamTransform);
@@ -1533,6 +1560,11 @@ std::optional<int> parseGuiTargetKeyCount(const std::wstring& value) {
     return static_cast<int>(parsed);
 }
 
+bool nk2EFullFieldTargetSupported(const ToolOptions& options) {
+    const auto target = parseGuiTargetKeyCount(options.targetKeys);
+    return !nk2EFullFieldActive(options) || target == 8 || target == 10;
+}
+
 struct FolderScanProgress {
     std::size_t visitedFiles = 0;
     std::size_t totalFiles = 0;
@@ -1765,13 +1797,13 @@ void updateAlgorithmControlState(AppState& state) {
         const auto mode = comboText(state.nk2ModeCombo);
         const wchar_t* hint = L"Engine, target key count, and conversion policy";
         if (nk2) {
-            if (mode == kNk2AutoModeLabel) hint = L"7K: 4/5K B, 8/10K E; others: faithful";
-            else if (mode == kNk2PhraseModeLabel) hint = L"B: any 1-18K pair; source notes only";
-            else if (mode == kNk2NotesModeLabel || mode == kNk2DenseLnModeLabel)
-                hint = L"C/D: any 1-18K pair; add notes where safe";
-            else if (mode == kNk2SourceLnModeLabel || mode == kNk2BoostModeLabel)
-                hint = L"E/F: any 1-18K pair; LNs inside source spans";
-            else hint = L"Legacy NK2 mode; automatic B/E selection is off";
+            if (mode == kNk2EFullFieldTapsModeLabel)
+                hint = L"E+ taps: 8K/10K; beat-spaced taps (180-500ms), keep E+ notes/LNs";
+            else if (mode == kNk2SourceLnModeLabel)
+                hint = L"E: any 1-18K pair; generated LNs stay inside source spans";
+            else if (mode == L"native") hint = L"Native: convert patterns for the selected target keys";
+            else if (mode == L"transform") hint = L"Transform: relane patterns, including same-key charts";
+            else if (mode == L"harder") hint = L"Harder: native conversion with more support notes";
         }
         setWindowText(state.recipeHintLabel, hint);
     }
@@ -1919,6 +1951,10 @@ bool validateToolOptions(const ToolOptions& options, HWND owner, bool batchMode 
     }
     if (nk2EngineActive(options) && nk2ModeCliValue(options.nk2Mode).empty()) {
         MessageBoxW(owner, L"NK2 mode is invalid.", L"KeyWeaver GUI", MB_ICONERROR);
+        return false;
+    }
+    if (!nk2EFullFieldTargetSupported(options)) {
+        MessageBoxW(owner, L"NK2 E+ Full-field requires Target 8K or 10K.", L"KeyWeaver GUI", MB_ICONERROR);
         return false;
     }
     if (nk2PhraseSearchActive(options)) {
@@ -2732,13 +2768,10 @@ void createUi(AppState& state) {
     state.nk2ModeCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
                                      912, 262, 190, 310, kComboNk2Mode);
     SendMessageW(state.nk2ModeCombo, CB_SETDROPPEDWIDTH, 260, 0);
-    for (const auto* item : {kNk2AutoModeLabel, kNk2LegacyModeLabel, kNk2PhraseModeLabel, kNk2NotesModeLabel,
-                             kNk2DenseLnModeLabel, kNk2SourceLnModeLabel,
-                             kNk2BoostModeLabel,
-                             L"native", L"harder", L"transform"}) {
+    for (const auto* item : kNk2VisibleModes) {
         addComboItem(state.nk2ModeCombo, item);
     }
-    setComboSelection(state.nk2ModeCombo, kNk2AutoModeLabel);
+    setComboSelection(state.nk2ModeCombo, kNk2SourceLnModeLabel);
 
     makeControl(state, L"STATIC", L"Expansion", 0, 714, 298, 100, 22, -1);
     state.expansionCombo = makeControl(state, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
@@ -3193,11 +3226,37 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
             return 1;
         }
     }
-    if (ToolOptions{}.nk2Mode != kNk2AutoModeLabel ||
+    if (ToolOptions{}.nk2Mode != kNk2SourceLnModeLabel ||
         nk2AutoPaths.outputChart.filename().wstring().find(L"NK2-auto") == std::wstring::npos ||
         nk2AutoPaths.outputChart == nk2Paths.outputChart) {
-        std::cerr << "GUI smoke expected default auto selection and separate output filenames\n";
+        std::cerr << "GUI smoke expected default E selection and distinct legacy auto filenames\n";
         return 1;
+    }
+
+    const std::array<std::wstring_view, 5> expectedModes{
+        L"E - Source LN", L"E+ - Full-field + taps", L"native", L"transform", L"harder"
+    };
+    for (std::size_t index = 0; index < expectedModes.size(); ++index) {
+        if (kNk2VisibleModes[index] != expectedModes[index]) {
+            std::cerr << "GUI smoke expected exactly the five requested NK2 presets\n";
+            return 1;
+        }
+        auto visibleOptions = nk2Options;
+        visibleOptions.nk2Mode = kNk2VisibleModes[index];
+        visibleOptions.targetKeys = L"10";
+        visibleOptions.streamTransform = L"off";
+        OutputPaths visiblePaths;
+        const auto single = buildSingleCommand(visibleOptions, visiblePaths);
+        const auto batch = buildBatchCommand(visibleOptions, options.inputFile, std::nullopt);
+        const std::wstring modeArg = L"--nk2-mode " + nk2ModeCliValue(visibleOptions.nk2Mode);
+        for (const auto* command : {&single, &batch}) {
+            const bool phrase = command->find(L"--nk2-search phrase") != std::wstring::npos;
+            const bool taps = command->find(L"--nk2-e-tap-boost") != std::wstring::npos;
+            if (command->find(modeArg) == std::wstring::npos || phrase != (index < 2) || taps != (index == 1)) {
+                std::cerr << "GUI smoke preset/CLI mapping mismatch\n";
+                return 1;
+            }
+        }
     }
 
     // Explicit preset flags must remain identical for single and fast batch.
@@ -3304,6 +3363,84 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
         return 1;
     }
 
+    ToolOptions eFullFieldOptions = phraseSourceLnOptions;
+    eFullFieldOptions.nk2Mode = kNk2EFullFieldModeLabel;
+    eFullFieldOptions.targetKeys = L"10";
+    OutputPaths eFullFieldPaths;
+    const auto eFullFieldCommand = buildSingleCommand(eFullFieldOptions, eFullFieldPaths);
+    const auto eFullFieldBatchCommand = buildBatchCommand(eFullFieldOptions, options.inputFile, std::nullopt);
+    for (const auto* command : {&eFullFieldCommand, &eFullFieldBatchCommand}) {
+        if (command->find(L"--target 10") == std::wstring::npos ||
+            command->find(L"--nk2-mode faithful") == std::wstring::npos ||
+            command->find(L"--nk2-search phrase") == std::wstring::npos ||
+            command->find(L"--nk2-audit") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-support") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-dense-ln") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-source-ln ") == std::wstring::npos ||
+            command->find(L"--nk2-e-fullfield") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-source-ln-boost") != std::wstring::npos) {
+            std::cerr << "GUI smoke expected E+ Full-field with E prerequisites\n";
+            return 1;
+        }
+    }
+    if (eFullFieldPaths.outputChart.filename().wstring().find(L"-source-ln-fullfield-v2") == std::wstring::npos ||
+        eFullFieldPaths.outputChart == phraseSourceLnPaths.outputChart ||
+        !nk2EFullFieldTargetSupported(eFullFieldOptions)) {
+        std::cerr << "GUI smoke expected a separate E+ 10K output filename\n";
+        return 1;
+    }
+    for (const auto* target : {L"", L"auto", L"1", L"7", L"18"}) {
+        auto unsupportedOptions = eFullFieldOptions;
+        unsupportedOptions.targetKeys = target;
+        if (nk2EFullFieldTargetSupported(unsupportedOptions)) {
+            std::cerr << "GUI smoke expected E+ to reject targets other than 8K/10K\n";
+            return 1;
+        }
+    }
+    for (const auto* command : {&nk2Command, &phraseCommand, &phraseBatchCommand,
+                                &phraseSupportCommand, &phraseSupportBatchCommand,
+                                &phraseDenseLnCommand, &phraseDenseLnBatchCommand,
+                                &phraseSourceLnCommand, &phraseSourceLnBatchCommand}) {
+        if (command->find(L"--nk2-e-fullfield") != std::wstring::npos) {
+            std::cerr << "GUI smoke expected E+ to stay disabled for previous selections\n";
+            return 1;
+        }
+    }
+
+    auto tapsOptions = eFullFieldOptions;
+    tapsOptions.nk2Mode = kNk2EFullFieldTapsModeLabel;
+    OutputPaths tapsPaths;
+    const auto tapsCommand = buildSingleCommand(tapsOptions, tapsPaths);
+    const auto tapsBatchCommand = buildBatchCommand(tapsOptions, options.inputFile, std::nullopt);
+    for (const auto* command : {&tapsCommand, &tapsBatchCommand}) {
+        if (command->find(L"--nk2-e-fullfield") == std::wstring::npos ||
+            command->find(L"--nk2-e-tap-boost") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-source-ln ") == std::wstring::npos ||
+            command->find(L"--nk2-phrase-source-ln-boost") != std::wstring::npos) {
+            std::cerr << "GUI smoke expected E+ taps prerequisites without F boost\n";
+            return 1;
+        }
+    }
+    if (tapsPaths.outputChart.filename().wstring().find(L"-fullfield-v2-taps-v2") == std::wstring::npos ||
+        tapsPaths.outputChart == eFullFieldPaths.outputChart || !nk2EFullFieldTargetSupported(tapsOptions) ||
+        eFullFieldCommand.find(L"--nk2-e-tap-boost") != std::wstring::npos) {
+        std::cerr << "GUI smoke expected separate opt-in E+ taps output\n";
+        return 1;
+    }
+    tapsOptions.targetKeys = L"8";
+    OutputPaths eightTapPaths;
+    const auto eightTapCommand = buildSingleCommand(tapsOptions, eightTapPaths);
+    const auto eightTapBatchCommand = buildBatchCommand(tapsOptions, options.inputFile, std::nullopt);
+    if (!nk2EFullFieldTargetSupported(tapsOptions) || eightTapPaths.outputChart == tapsPaths.outputChart ||
+        eightTapPaths.outputChart.filename().wstring().find(L"KeyWeaver8K") == std::wstring::npos ||
+        eightTapCommand.find(L"--target 8") == std::wstring::npos ||
+        eightTapBatchCommand.find(L"--target 8") == std::wstring::npos ||
+        eightTapCommand.find(L"--nk2-e-tap-boost") == std::wstring::npos ||
+        eightTapBatchCommand.find(L"--nk2-e-tap-boost") == std::wstring::npos) {
+        std::cerr << "GUI smoke expected E+ taps to support distinct 8K output in single and batch routes\n";
+        return 1;
+    }
+
     for (const auto* target : {L"1", L"3", L"8", L"10", L"18"}) {
         ToolOptions phraseSourceLnBoostOptions = phraseOptions;
         phraseSourceLnBoostOptions.nk2Mode = kNk2BoostModeLabel;
@@ -3321,6 +3458,11 @@ int runSmoke(const std::filesystem::path& input, const std::filesystem::path& ou
                 command->find(L"--nk2-phrase-source-ln ") == std::wstring::npos ||
                 command->find(L"--nk2-phrase-source-ln-boost") == std::wstring::npos) {
                 std::cerr << "GUI smoke expected Source LN+ prerequisites for any target\n";
+                return 1;
+            }
+            if (command->find(L"--nk2-e-fullfield") != std::wstring::npos ||
+                !nk2EFullFieldTargetSupported(phraseSourceLnBoostOptions)) {
+                std::cerr << "GUI smoke expected F targets and behavior to stay unchanged\n";
                 return 1;
             }
         }

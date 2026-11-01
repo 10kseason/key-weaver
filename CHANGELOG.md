@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+- Simplified the NK2 GUI to exactly five presets: E Source LN (default),
+  E+ Full-field + taps, native, transform and harder. Historical CLI recipes
+  and conversion behavior remain available; no remaster mode was added.
+- Extended **E+ - Full-field** and **E+ - Full-field + taps** to Target 8K as
+  well as 10K. Redistribution, tap candidates, metadata, safety and lane reports
+  use the requested output count; the optional hotspot report supports both.
+  GUI/single/batch/BMS routes are covered. Existing 10K chart/report/diagnostic
+  bytes and plain E behavior remain compatible. See `docs/nk2-e-tap-boost.md`.
+- Added optional **E+ - Full-field + taps** / `--nk2-e-tap-boost`. After E+ v2,
+  append safe chord taps at retained source head times while keeping every E+
+  placement and LN. Bounds include existing generated notes: 75% of retained
+  originals globally, local 2s caps, three new taps/onset and eight-head chords.
+  Tap boost v2 allows only its new taps a half-beat repeat guard (180–500ms);
+  base-note safety and inclusive LN tails remain protected. It balances new-tap
+  lane counts, raises the local cap to 40 and reserves proportional phrase
+  budgets to avoid starving the song ending. Strict 500ms repeats remain visible
+  beside the effective audit; output suffix is `-fullfield-v2-taps-v2`. Added
+  separate report counters/stages, filename suffix, GUI/batch integration and
+  regression checks. Plain E/E+ stay byte-compatible. See `docs/nk2-e-tap-boost.md`.
+- Added opt-in NK2 **E+ - Full-field** / `--nk2-e-fullfield` for 10K. It
+  redistributes completed E notes without changing identities, note population,
+  rhythm or LN tails; short E repeat chains move together. Candidate checks
+  and original-source final audit retain collision/LN/created-jack guards.
+- Added E+ move/distribution diagnostics, distinct filenames, GUI and batch
+  routing, deterministic work limits and fallback, and focused regression tests.
+  Default E output/reports remain unchanged. See `docs/nk2-e-fullfield.md`.
+- E+ algorithm v2 addresses source-lane pinning for all 1K–18K inputs to 10K:
+  long repeat chains can relocate in 2-second segments, source-to-target
+  concentration joins scoring, and safe lane-pair exchanges redistribute
+  originals even when generated notes already balance the field. Short chains,
+  complete LNs and the 500ms created-jack guard remain protected. V2 filenames
+  and metadata distinguish earlier comparison outputs.
+- Added opt-in `--pattern-hotspot-report <new.json>` for single-input NK2 preset E
+  10K conversions. It counts final note heads in disjoint 8-second windows,
+  skips hotspot decisions below 20 notes, and flags lane shares differing from
+  the full chart by at least 15 percentage points.
+- Kept E placement, source-LN containment, Jack Guard, existing report schemas,
+  and default conversion output unchanged. The separate diagnostic reports
+  empty/insufficient/invalid populations explicitly and never overwrites a file.
+- Added focused arithmetic, determinism, E safety, CLI, path-alias, and BMS
+  regression coverage. See `docs/pattern-hotspot-audit.md` for limitations.
+
 ## 1.3.1 - 2026-10-22
 
 - Enabled every manual NK2 preset A-F for all 1K-18K source/target pairs,

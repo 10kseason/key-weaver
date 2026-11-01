@@ -70,7 +70,8 @@ SafetyAudit auditSafety(const Chart& source,
                         const Chart& output,
                         int targetKeyCount,
                         int jackWindowMs,
-                        bool requireSourceLnCoverage) {
+                        bool requireSourceLnCoverage,
+                        const TapRepeatGuards* tapRepeatGuards) {
     SafetyAudit audit;
     audit.sourceLnCoverageRequired = requireSourceLnCoverage;
     std::unordered_map<std::string, const Note*> originals;
@@ -140,6 +141,15 @@ SafetyAudit auditSafety(const Chart& source,
     }
     audit.droppedSourceNotes = static_cast<int>(source.notes.size()) - audit.retainedSourceNotes;
 
+    const auto tapGuard = [&](const AuditedNote& note) {
+        if (!tapRepeatGuards || note.source || originals.count(note.output->id) ||
+            note.output->type != NoteType::Tap ||
+            !std::string_view(note.output->id).starts_with("nk2-beat-fullfield-tap-")) return 0;
+        const auto found = tapRepeatGuards->find(note.output->id);
+        if (found == tapRepeatGuards->end() || found->second < 180 || found->second > 500) return 0;
+        return found->second;
+    };
+
     for (auto& [lane, notes] : lanes) {
         (void)lane;
         std::stable_sort(notes.begin(), notes.end(), [](const AuditedNote& a, const AuditedNote& b) {
@@ -182,7 +192,11 @@ SafetyAudit auditSafety(const Chart& source,
             if (preservesSourceRepeat(first, second, jackWindowMs)) {
                 ++audit.preservedLaneRepeats;
             } else {
-                ++audit.createdLaneRepeats;
+                // Only a pair involving an explicitly authorized new tap may
+                // use a shorter guard. Across tempo changes respect both taps.
+                const int guard = std::max(tapGuard(first), tapGuard(second));
+                if (guard > 0 && gap > guard) ++audit.tempoAllowedTapRepeats;
+                else ++audit.createdLaneRepeats;
             }
         }
     }

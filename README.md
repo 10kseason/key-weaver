@@ -6,6 +6,26 @@ KeyWeaver is a C++20/CMake key-count converter for osu!mania `.osu` charts and B
 
 ## What This Release Is
 
+Source-only, unreleased: CLI `--nk2-e-fullfield` optionally
+redistributes completed E notes across 8K or 10K while preserving its rhythm and LN
+lengths. Existing E and automatic presets stay unchanged. See
+[E+ usage, safety and limits](docs/nk2-e-fullfield.md).
+E+ v2 also reduces persistent source-to-target lane pinning for all 1K–18K
+inputs to 8K/10K, preserving short repeat groups while allowing long chains to
+change lanes at safe 2-second boundaries. Outputs carry `-fullfield-v2`.
+For more simultaneous taps, select **E+ - Full-field + taps** or add
+`--nk2-e-tap-boost`, with Target **8** or **10**. It keeps completed E+ notes/LNs and appends safe taps at
+retained original head times. Tap boost v2 uses a half-beat repeat guard clamped
+to 180–500ms only for its new taps, balances their lane counts and reserves
+budgets across the song. Base notes/LNs stay fixed; strict 500ms repeat counts
+are reported separately. See [tap-boost bounds and validation](docs/nk2-e-tap-boost.md).
+
+Source-only, unreleased: optional `--pattern-hotspot-report <new.json>` diagnoses
+8-second lane-use hotspots in final NK2 E 8K/10K results without changing conversion.
+See [the contract and usage](docs/pattern-hotspot-audit.md) and
+[local verification](docs/pattern-hotspot-audit-validation.md). This option is not
+included in the existing 1.3.1 release binaries.
+
 `v1.3.1` extends every manual NK2 preset A–F to all 1K–18K source/target pairs for expansion and compression, and adds 1K–3K to the GUI Target selector. Automatic 7K presets and existing safety checks remain unchanged. The release includes a Windows package, full project source, and a separate ten-file NK2 source archive.
 
 Main capabilities:
@@ -18,8 +38,8 @@ Main capabilities:
 - Default output beside each input chart when `--out` / `--out-dir` is omitted.
 - Parallel CLI batch conversion with `--batch`, `--input-list`, `--jobs`, progress, and summary output.
 - Classic conversion with collision/LN/distance/jack safety checks.
-- Experimental NK2 conversion modes: `native`, `faithful`, `harder`, `transform`; same-K conversion runs only in `transform`, while `report` remains single-input analysis only.
-- With `--engine nk2` and no explicit mode/search/note options, detected 7K inputs now use B phrase search for 4K/5K and E Source LN for 8K/10K. Other pairs keep the CLI's native fallback. The GUI defaults to `Auto (7K presets)`, sent as `--nk2-mode auto`, whose other-key fallback is faithful. Explicit mode/search/note options and stream transforms bypass automatic adoption. Classic remains the default engine, and the core `Mode` default is unchanged.
+- Experimental NK2 conversion modes: `native`, `faithful`, `harder`, `transform`; same-K conversion runs in `transform` or explicit 10K E+, while `report` remains single-input analysis only.
+- With `--engine nk2` and no explicit mode/search/note options, detected 7K inputs use B phrase search for 4K/5K and E Source LN for 8K/10K. Other pairs keep the CLI's native fallback. The GUI's NK2 default is now `E - Source LN`, using explicit E flags. CLI auto selection and explicit mode/search/note options retain their behavior. Classic remains the default engine, and the core `Mode` default is unchanged.
 - `--nk2-search phrase` compares bounded two-beat placements for faithful conversion between any source and target from 1K through 18K, with stream transforms off. Explicit `--nk2-mode faithful --nk2-search off` selects the legacy faithful path; `--nk2-audit` independently checks its output. See [phrase search and local OSZ comparisons](docs/nk2-phrase-search.md).
 - `--nk2-phrase-support` adds conservative support taps to upward or downward phrase output while preserving every retained source placement. Compare B Phrase and C Phrase Notes at 10K with the packager's `--comparison phrase-notes` option.
 - Add `--nk2-phrase-dense-ln` to preserve C and append more taps plus long notes. The packager's `--comparison phrase-dense-ln` includes B/C/D 10K and the source 7K for comparison.
@@ -72,19 +92,18 @@ NK2 GUI choices:
 
 | Choice | Behavior |
 | --- | --- |
-| `Auto (7K presets)` | Source 7K: B for 4K/5K, E for 8K/10K; other pairs use faithful. |
-| `A - Legacy faithful` | Existing faithful conversion. |
-| `B - Phrase only` | Phrase search with no generated notes. |
-| `C - Phrase + taps` | Preserve B and append safe support taps. |
-| `D - Dense taps + LN` | Preserve C and append more taps and LNs. |
-| `E - Source LN` | Preserve C; generated LNs stay inside source LN intervals. |
-| `F - Source LN+` | Preserve E and append only additional source-covered LNs. |
+| `E - Source LN` | Default NK2 GUI choice; generated LNs stay inside source LN intervals. |
+| `E+ - Full-field + taps` | Redistribute E and append beat-spaced chord taps; Target 8K/10K. |
+| `native` | Existing native conversion. |
+| `transform` | Existing transform conversion, including same-key relaning. |
+| `harder` | Existing higher-density native conversion. |
 
-`native`, `harder`, and `transform` remain available. Auto selection is resolved
-per input, including mixed-source batches. Every manual A–F preset supports
-expansion and compression across 1K–18K. Same-key A–F is a no-op; use `transform`
-for same-key relaning. Phrase presets require faithful mode with stream transforms
-off. BMS output remains limited to its supported layouts.
+Only these five choices appear in the GUI. Auto, A/B/C/D/F and plain E+ remain
+available through their existing CLI recipes for compatibility. CLI automatic
+selection still resolves per input. E supports expansion/compression across
+1K–18K and skips same-key output; E+ taps explicitly remixes same-key 8K/10K.
+Phrase presets require stream transforms off. BMS output remains limited to
+its supported layouts.
 
 ```powershell
 # E expansion: 5K to 12K

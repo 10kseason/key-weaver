@@ -1,6 +1,7 @@
 #include "nk2/nk2_report.hpp"
 
 #include <sstream>
+#include <locale>
 #include <stdexcept>
 
 namespace keyconv::nk2 {
@@ -103,10 +104,54 @@ std::string reportToJson(const NK2Report& report) {
         << ", \"windows\": " << report.phraseSearchWindows
         << ", \"candidates\": " << report.phraseSearchCandidates
         << ", \"peakNotes\": " << report.phraseSearchPeakNotes << "},\n";
+    if (report.fullFieldTransform) {
+        const auto& f = *report.fullFieldTransform;
+        // E+ metrics always use JSON decimal notation, independent of UI locale.
+        std::ostringstream block;
+        block.imbue(std::locale::classic());
+        block << "  \"fullFieldTransform\": {\"algorithmVersion\": 2, \"metricWindowMs\": 2000, \"movedNotes\": " << f.movedNotes
+              << ", \"movedGroups\": " << f.movedGroups << ", \"acceptedMoves\": " << f.acceptedMoves
+              << ", \"splitLongChains\": " << f.splitLongChains << ", \"phraseSwaps\": " << f.phraseSwaps
+              << ", \"safetyWork\": " << f.safetyWork
+              << ", \"budgetLimited\": " << (f.budgetLimited ? "true" : "false")
+              << ", \"reverted\": " << (f.reverted ? "true" : "false")
+              << ", \"activeLanesBefore\": " << f.activeLanesBefore << ", \"activeLanesAfter\": " << f.activeLanesAfter
+              << ", \"concentrationBefore\": " << f.concentrationBefore
+              << ", \"concentrationAfter\": " << f.concentrationAfter
+              << ", \"sourceConcentrationBefore\": " << f.sourceConcentrationBefore
+              << ", \"sourceConcentrationAfter\": " << f.sourceConcentrationAfter;
+        if (report.fullFieldTapBoost) block << ", \"analysisStage\": \"before_tap_boost\"";
+        block << "},\n";
+        if (report.fullFieldTapBoost) {
+            const auto& t = *report.fullFieldTapBoost;
+            block << "  \"fullFieldTapBoost\": {\"algorithmVersion\": 2, \"repeatPolicy\": \"new_taps_half_beat_180_500ms\", \"inputNotes\": " << t.inputNotes
+                  << ", \"retainedSourceNotes\": " << t.retainedSourceNotes
+                  << ", \"totalAddedBudget\": " << t.totalAddedBudget << ", \"addedTaps\": " << t.addedTaps
+                  << ", \"candidates\": " << t.candidates << ", \"rejectedBySafety\": " << t.rejectedBySafety
+                  << ", \"rejectedByBudget\": " << t.rejectedByBudget
+                  << ", \"minTapGuardMs\": " << t.minTapGuardMs << ", \"maxTapGuardMs\": " << t.maxTapGuardMs
+                  << ", \"strict500CreatedRepeats\": " << t.strict500CreatedRepeats
+                  << ", \"tempoAllowedTapRepeats\": " << t.tempoAllowedTapRepeats
+                  << ", \"addedLaneCounts\": [";
+            for (std::size_t lane = 0; lane < t.addedLaneCounts.size() &&
+                 lane < static_cast<std::size_t>(report.options.targetKeyCount); ++lane) {
+                if (lane) block << ", ";
+                block << t.addedLaneCounts[lane];
+            }
+            block << "]"
+                  << ", \"reverted\": " << (t.reverted ? "true" : "false") << "},\n";
+        }
+        out << block.str();
+    }
     out << "  \"independentSafety\": ";
     if (report.independentSafety) {
         const auto& audit = *report.independentSafety;
         out << "{\n    \"passed\": " << (audit.passed() ? "true" : "false") << ",\n";
+        if (report.fullFieldTapBoost) {
+            out << "    \"repeatPolicy\": \"new_taps_half_beat_180_500ms\",\n";
+            out << "    \"strict500CreatedRepeats\": " << audit.createdLaneRepeats + audit.tempoAllowedTapRepeats << ",\n";
+            out << "    \"tempoAllowedTapRepeats\": " << audit.tempoAllowedTapRepeats << ",\n";
+        }
         out << "    \"sourceLnCoverageRequired\": " << (audit.sourceLnCoverageRequired ? "true" : "false") << ",\n";
         out << "    \"generatedHoldsOutsideSourceLn\": " << audit.generatedHoldsOutsideSourceLn << ",\n";
         out << "    \"invalidLanes\": " << audit.invalidLanes << ",\n";
@@ -270,6 +315,26 @@ std::string reportToText(const NK2Report& report) {
         << " sourceLnBoost=" << (report.options.phraseSourceLnBoost ? "on" : "off")
         << " windows=" << report.phraseSearchWindows << " candidates=" << report.phraseSearchCandidates
         << " peakNotes=" << report.phraseSearchPeakNotes << "\n";
+    if (report.fullFieldTransform) {
+        const auto& f = *report.fullFieldTransform;
+        out << "E+ full-field: moved=" << f.movedNotes << " groups=" << f.movedGroups
+            << " activeLanes2s=" << f.activeLanesBefore << " -> " << f.activeLanesAfter
+            << " concentration2s=" << f.concentrationBefore << " -> " << f.concentrationAfter
+            << " sourceConcentration=" << f.sourceConcentrationBefore << " -> " << f.sourceConcentrationAfter
+            << " splitLongChains=" << f.splitLongChains << " phraseSwaps=" << f.phraseSwaps
+            << " reverted=" << (f.reverted ? "yes" : "no")
+            << " budgetLimited=" << (f.budgetLimited ? "yes" : "no") << "\n";
+        if (report.fullFieldTapBoost) {
+            const auto& t = *report.fullFieldTapBoost;
+            out << "E+ tap boost (after redistribution): addedTaps=" << t.addedTaps
+                << " totalGeneratedBudget=" << t.totalAddedBudget
+                << " safetyRejected=" << t.rejectedBySafety
+                << " newTapGuardMs=" << t.minTapGuardMs << ".." << t.maxTapGuardMs
+                << " strict500CreatedRepeats=" << t.strict500CreatedRepeats
+                << " tempoAllowed=" << t.tempoAllowedTapRepeats
+                << " reverted=" << (t.reverted ? "yes" : "no") << "\n";
+        }
+    }
     if (report.independentSafety) {
         const auto& audit = *report.independentSafety;
         out << "Independent safety: " << (audit.passed() ? "PASS" : "FAIL")
@@ -280,6 +345,10 @@ std::string reportToText(const NK2Report& report) {
             << " unknownSourceNotes=" << audit.unknownSourceNotes
             << " retained=" << audit.retainedSourceNotes << " dropped=" << audit.droppedSourceNotes
             << " added=" << audit.addedNotes << " retimed=" << audit.retimedSourceNotes << "\n";
+        if (report.fullFieldTapBoost)
+            out << "Repeat policy: base notes retain 500ms; new taps use half-beat (180-500ms). Strict500CreatedRepeats="
+                << audit.createdLaneRepeats + audit.tempoAllowedTapRepeats
+                << " tempoAllowedTapRepeats=" << audit.tempoAllowedTapRepeats << "\n";
     }
     out << "Chart mutated: " << (report.chartMutated ? "yes" : "no") << "\n";
     if (!report.prototypeName.empty()) {

@@ -7,6 +7,8 @@
 #include "intent_graph.hpp"
 #include "layout_model.hpp"
 #include "safety_audit.hpp"
+#include "e_fullfield.hpp"
+#include "e_tap_boost.hpp"
 
 namespace keyconv::nk2 {
 
@@ -40,6 +42,8 @@ struct NK2Options {
     bool phraseSourceLn = false;
     bool phraseSourceLnBoost = false;
     bool independentSafetyAudit = false;
+    bool eFullField = false;
+    bool eFullFieldTapBoost = false;
 };
 
 struct NK2Report {
@@ -69,6 +73,8 @@ struct NK2Report {
     int phraseSearchCandidates = 0;
     int phraseSearchPeakNotes = 0;
     std::optional<SafetyAudit> independentSafety;
+    std::optional<EFullFieldStats> fullFieldTransform;
+    std::optional<EFullFieldTapBoostStats> fullFieldTapBoost;
     int superSymmetryMirrorAnchors = 0;
     int superSymmetryGaplessStairs = 0;
     int sameTimeCollisions = 0;

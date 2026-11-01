@@ -5,17 +5,17 @@ CLI의 `--engine nk2`에서 모드·탐색·C/D/E/F 옵션을 명시하지 않�
 각 파일의 원본 키를 파싱한 뒤 결정한다. 다른 조합은 기존 CLI native로 처리한다.
 전체 기본 엔진 Classic과 코어 `NK2Options::mode = Mode::Native`는 변경하지 않는다.
 
-GUI 기본은 `Auto (7K presets)`이며 CLI에 `--nk2-mode auto`를 전달한다.
-이 모드는 같은 7K 기본값을 선택하고 그 밖의 키는 기존 GUI처럼 faithful로 처리한다.
+GUI의 NK2 기본 선택은 `E - Source LN`이다. CLI의 `--nk2-mode auto`는
+기존 7K 기본값과 다른 입력의 faithful 처리를 계속 지원한다.
 명시한 모드·탐색·C/D/E/F 옵션 또는 stream 변환이 있으면 자동 채택을 하지 않는다.
 예를 들어 `--nk2-mode faithful --nk2-search phrase`는 B를 유지하며 E로 바뀌지 않는다.
-`--nk2-mode auto --nk2-search off`는 기존 faithful 경로다. 수동 B/C/D/E/F 선택과
+`--nk2-mode auto --nk2-search off`는 기존 faithful 경로다. B/C/D/E/F의 CLI 옵션과
 기존 비교판은 유지한다.
 
-GUI의 수동 선택지는 `A - Legacy faithful`, `B - Phrase only`,
-`C - Phrase + taps`, `D - Dense taps + LN`, `E - Source LN`, `F - Source LN+`다.
-A는 기존 faithful 경로이며 `native`, `harder`, `transform`도 별도로 유지한다.
-A–F 모두 **1K–18K의 모든 원본/목표 조합에서 상향·하향 변환**을 지원한다.
+GUI 선택지는 `E - Source LN`, `E+ - Full-field + taps`, `native`, `transform`,
+`harder` 다섯 가지다. Auto/A/B/C/D/F와 탭 없는 E+는 GUI에서 제거했으며 CLI로
+계속 사용할 수 있다. E+ taps는 **8K/10K 출력**을 지원한다.
+CLI의 A–F 조합은 **1K–18K의 모든 원본/목표 조합에서 상향·하향 변환**을 지원한다.
 같은 키 수의 A–F는 기존처럼 no-op이며, 같은 키 재배치는 `transform`을 사용한다.
 BMS 계열 출력은 기존에 지원하는 키 레이아웃만 허용한다.
 
@@ -34,7 +34,7 @@ BMS 계열 출력은 기존에 지원하는 키 레이아웃만 허용한다.
 ```
 
 수동 phrase는 **1K–18K의 모든 원본/목표 조합, faithful, stream off**를 지원한다.
-source는 자동 감지하거나 `--source 1`부터 `--source 18`까지 지정할 수 있다. GUI에서 B를 직접 고르려면 `B - Phrase only`를 선택한다.
+source는 자동 감지하거나 `--source 1`부터 `--source 18`까지 지정할 수 있다. B는 위 CLI 옵션으로 선택한다.
 수동 탐색판에는 `-phrase`가 붙는다. GUI auto의 파일명은 `NK2-auto`로 구분하며
 차트 내부 난이도 표시는 실제로 선택된 B/E 옵션을 따른다. 혼합 키 배치의 auto는
 파일마다 적용 여부를 결정한다. 수동 phrase도 source를 자동 감지하는 혼합 키 배치를
@@ -47,7 +47,7 @@ source는 자동 감지하거나 `--source 1`부터 `--source 18`까지 지정�
 ```
 
 `--nk2-phrase-support`는 **1K–18K 상향·하향 phrase, faithful, stream off**에서 동작한다.
-GUI의 `C - Phrase + taps`에 해당하며 자동 채택 E에도 포함된다. 출력에는
+이 C 동작은 CLI 자동 채택 E에도 포함된다. 출력에는
 `-phrase-notes` 표시가 붙는다. 기존 B의 원본 노트 레인·시각·종류·LN 길이를
 확정한 뒤 보조 탭만 추가하므로, 이 옵션을 꺼도 B 결과는 변하지 않는다.
 
@@ -71,7 +71,7 @@ GUI의 `C - Phrase + taps`에 해당하며 자동 채택 E에도 포함된다. �
 .\build\KeyWeaver.exe input7k.osu --target 10 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --out dense-ln10.osu --report dense-ln10.json
 ```
 
-GUI에서는 `D - Dense taps + LN`을 선택한다. D는 **C를 먼저 그대로
+D는 위 CLI 옵션으로 선택한다. **C를 먼저 그대로
 만든 뒤** 탭과 LN을 더한다. C의 추가 탭도 이동하거나 LN으로 바꾸지 않는다.
 수동 B와 C 옵션·결과는 유지하며 D 파일명에는 `-phrase-notes-dense-ln`을 붙인다.
 
@@ -131,7 +131,7 @@ D에서 추가된 노트의 위치·길이·개수를 보존하는 모드는 아
 .\build\KeyWeaver.exe input7k.osu --target 10 --engine nk2 --nk2-mode faithful --nk2-search phrase --nk2-phrase-support --nk2-phrase-dense-ln --nk2-phrase-source-ln --nk2-phrase-source-ln-boost --out source-ln-boost10.osu --report source-ln-boost10.json
 ```
 
-GUI에서는 `F - Source LN+`를 선택한다. F는 **E를 먼저 그대로
+F는 위 CLI 옵션으로 선택한다. **E를 먼저 그대로
 완성한 뒤 LN만 더한다**. E의 탭을 LN으로 바꾸거나 노트를 이동·삭제하지 않는다.
 따라서 10K D/E는 기존 결과를 유지하고, F에서도 모든 E 노트를 그대로 비교할 수 있다.
 파일명은 E 접미사 뒤에 `-boost`를 붙인다. 모든 1K–18K 상향·하향 조합에서

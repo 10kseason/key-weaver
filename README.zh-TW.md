@@ -8,8 +8,8 @@ KeyWeaver 是一個以 C++20/CMake 製作的鍵數轉換工具，用於 osu!mani
 
 `v1.3.1` 將手動 NK2 預設 A–F 擴展至 1K–18K 的全部增減鍵數組合，並為 GUI Target 新增 1K–3K。保留 7K 預設選擇、安全檢查與 Classic 預設引擎。提供 Windows 套件、完整專案原始碼，以及包含 10 個檔案的 NK2 專用原始碼包。
 
-- GUI 的 `Auto (7K presets)` 對原始 7K 輸入選擇：4K/5K 使用 B，8K/10K 使用 E，其餘組合使用 faithful。CLI 僅指定 `--engine nk2` 時採用相同的 7K 預設值，其餘組合仍為 native。明確指定的模式、搜尋、加音符選項或 stream 轉換優先於自動選擇。
-- GUI 手動選擇為 `A - Legacy faithful`、`B - Phrase only`、`C - Phrase + taps`、`D - Dense taps + LN`、`E - Source LN`、`F - Source LN+`；保留 `native`、`harder`、`transform`。
+- GUI 的 NK2 選項僅保留 `E - Source LN`（預設）、`E+ - Full-field + taps`、`native`、`transform`、`harder` 五項。E+ taps 支援 8K/10K 輸出。
+- 原有 Auto/A/B/C/D/F 以及不加 tap 的 E+ 仍可透過 CLI 使用。CLI 對 7K 輸入的自動選擇仍為 4K/5K 使用 B、8K/10K 使用 E，其餘輸入使用 native；明確指定的選項優先。
 - 手動 A–F 均支援 1K–18K 的全部組合，可增加或減少鍵數。B 不新增音符或移動時間；C–F 保留基礎配置，只在安全空位新增音符。E/F 的生成 LN 必須完整包含於一個原始 LN 內；沒有安全空位時新增量可以為零。同鍵數 A–F 維持原樣，重新配置軌道請用 `transform`。phrase 需要 faithful、stream off，且通過獨立檢查後才儲存。詳見[搜尋與比較指南](docs/nk2-phrase-search.md)。
 
 主要能力:

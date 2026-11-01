@@ -1,8 +1,14 @@
 #pragma once
 
 #include <keyconv/chart.hpp>
+#include <map>
+#include <string>
 
 namespace keyconv::nk2 {
+
+// Explicit IDs produced by the current tap-boost pass only; never infer
+// authorization from a generated-note prefix or source-lane hint alone.
+using TapRepeatGuards = std::map<std::string, int>;
 
 // Output inspection is independent of the placement solver and its counters.
 // Timing changes and dropped notes are reported, but are not safety failures.
@@ -12,6 +18,7 @@ struct SafetyAudit {
     int sameTimeCollisions = 0;
     int longNoteConflicts = 0;
     int createdLaneRepeats = 0;
+    int tempoAllowedTapRepeats = 0;
     int preservedLaneRepeats = 0;
     int retainedSourceNotes = 0;
     int droppedSourceNotes = 0;
@@ -30,10 +37,15 @@ struct SafetyAudit {
 // output sourceLane hints are never trusted as evidence of source repetition.
 // Generated LN coverage always counts missing containment in a single original
 // valid LN interval, regardless of lane. The flag only makes it a pass condition.
+// Optional tap guards relax only pairs involving explicitly listed new taps;
+// collisions, LN conflicts, provenance and pairs of base notes stay unchanged.
+// At a 500ms window, createdLaneRepeats + tempoAllowedTapRepeats is the strict
+// legacy repeat count. An omitted map preserves the original audit behavior.
 SafetyAudit auditSafety(const Chart& source,
                         const Chart& output,
                         int targetKeyCount,
                         int jackWindowMs = 500,
-                        bool requireSourceLnCoverage = false);
+                        bool requireSourceLnCoverage = false,
+                        const TapRepeatGuards* tapRepeatGuards = nullptr);
 
 }  // namespace keyconv::nk2
